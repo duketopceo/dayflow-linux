@@ -22,9 +22,13 @@ const summarizePrompt = `You are analyzing screen captures from a personal activ
 These images are frames sampled across a %d-minute window of the user's screen.
 
 Respond with ONLY a JSON object (no markdown fences) in this exact shape:
-{"title": "2-5 word activity title", "summary": "1-3 sentences describing what the user was actually doing, in second person past tense, e.g. 'You were editing dayflow-linux's summarize.go in Neovim and reading the OpenRouter docs in Chromium.'", "category": "one of: coding, browsing, communication, writing, design, media, meetings, system, idle, other"}
+{"title": "2-5 word activity title",
+ "summary": "1-3 sentences describing what the user was actually doing, in second person past tense, e.g. 'You were editing dayflow-linux's summarize.go in Neovim and reading the OpenRouter docs in Chromium.'",
+ "category": "one of: coding, browsing, communication, writing, design, media, meetings, system, idle, other",
+ "activities": [{"app": "window class or app name, lowercase, e.g. 'neovim' or 'firefox'", "title": "2-5 word title", "summary": "1-2 sentences, second person past tense", "category": "same enum"}]}
 
-Be concrete: name apps, sites, files, and topics you can see. If the screen was locked, idle, or unchanged the whole time, use category "idle".`
+"activities" breaks the window into per-app segments in chronological order (usually 1-3 entries; 1 if the user stayed in one app).
+Be concrete: name apps, sites, files, and topics you can see. If the screen was locked, idle, or unchanged the whole time, use category "idle" and return activities: [].`
 
 type orContent struct {
 	Type     string `json:"type"`
@@ -60,9 +64,10 @@ type orResponse struct {
 }
 
 type blockResult struct {
-	Title    string `json:"title"`
-	Summary  string `json:"summary"`
-	Category string `json:"category"`
+	Title      string     `json:"title"`
+	Summary    string     `json:"summary"`
+	Category   string     `json:"category"`
+	Activities []Activity `json:"activities"`
 }
 
 func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error) {
@@ -194,9 +199,16 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 	if err != nil {
 		return 0, err
 	}
+	const maxAttempts = 3
 	done := 0
 	for _, start := range blocks {
 		end := start.Add(time.Duration(cfg.BlockMinutes) * time.Minute)
+		attempts := blockAttempts(db, start)
+		if attempts >= maxAttempts {
+			db.Exec(`UPDATE blocks SET status='dead' WHERE start_ts=?`, start.Unix())
+			logEvent(db, "block_dead", start.Format("15:04"))
+			continue
+		}
 		frames, err := framesBetween(db, start, end)
 		if err != nil {
 			return done, err
@@ -212,6 +224,7 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		latency := int(time.Since(t0).Milliseconds())
 		if err != nil {
 			upsertBlock(db, start, end, "", "", "", len(frames), "failed", err.Error())
+			db.Exec(`UPDATE blocks SET attempts=? WHERE start_ts=?`, attempts+1, start.Unix())
 			logAPICall(db, start, cfg.Model, len(paths), 0, 0, latency, "error", err.Error())
 			logEvent(db, "summarize_error", start.Format("15:04")+": "+err.Error())
 			log.Printf("summarize %s: %v", start.Format("15:04"), err)
@@ -219,7 +232,17 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		}
 		logAPICall(db, start, cfg.Model, len(paths), pt, ct, latency, "ok", "")
 		logEvent(db, "summarized", start.Format("15:04")+" "+res.Title)
-		if err := upsertBlock(db, start, end, res.Title, res.Summary, res.Category, len(frames), "done", ""); err != nil {
+		app := dominantApp(db, start, end)
+		actsJSON := ""
+		if len(res.Activities) > 0 {
+			if b, e := json.Marshal(res.Activities); e == nil {
+				actsJSON = string(b)
+			}
+		}
+		if res.Title == "" && len(res.Activities) > 0 {
+			res.Title = res.Activities[0].Title
+		}
+		if err := upsertBlockFull(db, start, end, res.Title, res.Summary, res.Category, app, actsJSON, len(frames), 0, "done", ""); err != nil {
 			return done, err
 		}
 		done++

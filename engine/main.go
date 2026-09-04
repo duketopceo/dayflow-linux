@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,9 @@ Control:
   week | month [--json]   Timeline rollups
   export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
   mcp                     Run the MCP server over stdio (for agents)
+  tui                     Interactive terminal timeline (day/week/month, search)
+  search <query>          Search block titles, summaries, and apps
+  retry                   Reset failed/dead blocks for re-summarization
 
 Setup & health:
   setup                   Interactive OpenRouter onboarding (key + vision model)
@@ -227,8 +231,22 @@ func main() {
 			fmt.Print(markdownTimeline(blocks, "dayflow "+cmd))
 		}
 
+	case "search":
+		if len(args) == 0 || args[0][0] == '-' {
+			usage()
+		}
+		printSearch(args[0], jsonOut)
+
+	case "retry":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		n, err := resetFailedBlocks(db)
+		fatal(err)
+		fmt.Printf("reset %d failed/dead block(s) for re-summarization\n", n)
+
 	case "export":
-		// export [day|YYYY-MM-DD|week|month] — always markdown on stdout
+		// export [day|YYYY-MM-DD|week|month] [--copy]
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
@@ -262,10 +280,20 @@ func main() {
 		}
 		blocks, err := blocksBetween(db, start, end)
 		fatal(err)
-		fmt.Print(markdownTimeline(blocks, label))
+		md := markdownTimeline(blocks, label)
+		if hasFlag(args, "--copy") {
+			c := exec.Command("wl-copy")
+			c.Stdin = strings.NewReader(md)
+			fatal(c.Run())
+			fmt.Println("copied to clipboard")
+		} else {
+			fmt.Print(md)
+		}
 
 	case "mcp":
 		fatal(runMCP(cfg))
+	case "tui":
+		fatal(runTUI(cfg))
 
 	case "setup":
 		fatal(runSetup())
@@ -304,6 +332,7 @@ func printTimeline(cfg Config, day time.Time, asJSON bool) {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"date":   day.Format("2006-01-02"),
 			"blocks": blocks,
+			"cards":  mergeCards(blocks),
 		})
 		return
 	}
@@ -313,7 +342,14 @@ func printTimeline(cfg Config, day time.Time, asJSON bool) {
 		return
 	}
 	for _, b := range blocks {
-		fmt.Printf("\n%s-%s  %s  [%s]\n  %s\n", b.StartStr, b.EndStr, b.Title, b.Category, b.Summary)
+		app := ""
+		if b.App != "" {
+			app = "  @" + b.App
+		}
+		fmt.Printf("\n%s-%s  %s  [%s]%s\n  %s\n", b.StartStr, b.EndStr, b.Title, b.Category, app, b.Summary)
+		for _, a := range b.Activities {
+			fmt.Printf("    • %s: %s [%s]\n", a.App, a.Title, a.Category)
+		}
 	}
 }
 
@@ -416,6 +452,39 @@ func printEvents(cfg Config, args []string, asJSON bool) {
 	}
 	for _, e := range out {
 		fmt.Printf("%s  %-18s  %s\n", e.Time, e.Type, e.Detail)
+	}
+}
+
+func printSearch(query string, asJSON bool) {
+	db, err := openDB()
+	fatal(err)
+	defer db.Close()
+	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,app FROM blocks
+	  WHERE status='done' AND (title LIKE ? OR summary LIKE ? OR app LIKE ?) ORDER BY start_ts DESC LIMIT 50`,
+		"%"+query+"%", "%"+query+"%", "%"+query+"%")
+	fatal(err)
+	defer rows.Close()
+	type M struct {
+		Start, End, Title, Summary, Category, App string
+	}
+	var out []M
+	for rows.Next() {
+		var s, e int64
+		var m M
+		rows.Scan(&s, &e, &m.Title, &m.Summary, &m.Category, &m.App)
+		m.Start = time.Unix(s, 0).Local().Format("2006-01-02 15:04")
+		m.End = time.Unix(e, 0).Local().Format("15:04")
+		out = append(out, m)
+	}
+	if asJSON {
+		json.NewEncoder(os.Stdout).Encode(out)
+		return
+	}
+	for _, m := range out {
+		fmt.Printf("%s–%s  %s  [%s] @%s\n  %s\n", m.Start, m.End, m.Title, m.Category, m.App, m.Summary)
+	}
+	if len(out) == 0 {
+		fmt.Println("no matches")
 	}
 }
 

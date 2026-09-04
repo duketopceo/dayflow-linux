@@ -37,6 +37,8 @@ dayflow status [--json]
 dayflow events [--json] [-n N]
 dayflow usage [--json]
 dayflow blocks [--json]                        # failed summaries
+dayflow search <query>                         # search titles/summaries/apps
+dayflow retry                                  # reset failed blocks
 dayflow pause|resume|toggle
 dayflow ignore <class> | ignore --active | unignore <class>
 dayflow config [set <k> <v>]
@@ -62,6 +64,10 @@ events(id, ts, type, detail)                             -- audit log
 api_calls(id, ts, block_start, model, frames_sent,       -- cost log
           prompt_tokens, completion_tokens, latency_ms, status, error)
 ```
+
+`blocks.activities` is a JSON array of per-app segments `{app,title,summary,category}`;
+`blocks.app` is the dominant window class; `blocks.attempts` counts summarize retries
+(cap 3, then `status='dead'`). `frames.app` records the focused window per frame.
 
 `category` is one of: coding, browsing, communication, writing, design, media,
 meetings, system, idle, other.

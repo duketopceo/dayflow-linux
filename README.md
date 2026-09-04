@@ -8,6 +8,7 @@ It captures a lightweight screenshot every 10 seconds, deduplicates unchanged fr
 - **Cheap**: — ~30 JPEG frames per 15-min block → `google/gemma-4-31b-it` by default. Any OpenRouter vision model works; non-vision models are rejected at config time.
 - **Light**: single static Go binary, ~25MB RAM, sub-1% CPU.
 - **Private controls**: pause toggle, per-app ignore list, automatic frame deletion, retention pruning.
+- **Activity chunking**: each block is split into per-app segments (`activities[]`) and consecutive same-app blocks merge into cards. Failed summaries retry automatically (max 3 attempts, then `dead`; `dayflow retry` resets).
 
 ## Repository layout
 
@@ -81,7 +82,10 @@ dayflow events -n 20           # full audit log: captures, skips, errors
 dayflow usage                  # token totals across all API calls
 dayflow blocks                 # failed summaries (auto-retried)
 dayflow week | month           # multi-day rollups
-dayflow export week            # markdown export to stdout
+dayflow export week [--copy]   # markdown export to stdout (or clipboard)
+dayflow search <query>         # search titles, summaries, apps
+dayflow retry                  # reset failed/dead blocks for re-summarization
+dayflow tui                    # interactive terminal timeline browser
 dayflow mcp                    # MCP server for agents (stdio)
 dayflow config set <k> <v>     # live settings
 dayflow uninstall              # remove systemd units (data stays)

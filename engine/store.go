@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"time"
 
@@ -53,6 +54,20 @@ CREATE TABLE IF NOT EXISTS api_calls (
 CREATE INDEX IF NOT EXISTS api_calls_ts ON api_calls(ts);
 `
 
+// migrations adds columns to existing databases; each is ignored if already applied.
+var migrations = []string{
+	`ALTER TABLE frames ADD COLUMN app TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE blocks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE blocks ADD COLUMN app TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE blocks ADD COLUMN activities TEXT NOT NULL DEFAULT ''`,
+}
+
+func migrate(db *sql.DB) {
+	for _, m := range migrations {
+		db.Exec(m) // duplicate-column errors are expected and ignored
+	}
+}
+
 func openDB() (*sql.DB, error) {
 	if err := os.MkdirAll(dataDir(), 0o700); err != nil {
 		return nil, err
@@ -65,12 +80,26 @@ func openDB() (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	migrate(db)
 	return db, nil
 }
 
 func insertFrame(db *sql.DB, ts time.Time, path string) error {
 	_, err := db.Exec(`INSERT INTO frames(ts, path) VALUES(?, ?)`, ts.Unix(), path)
 	return err
+}
+
+func insertFrameApp(db *sql.DB, ts time.Time, path, app string) error {
+	_, err := db.Exec(`INSERT INTO frames(ts, path, app) VALUES(?, ?, ?)`, ts.Unix(), path, app)
+	return err
+}
+
+// dominantApp returns the most common non-empty app among frames in [start,end).
+func dominantApp(db *sql.DB, start, end time.Time) string {
+	var app string
+	db.QueryRow(`SELECT app FROM frames WHERE ts >= ? AND ts < ? AND app != ''
+	  GROUP BY app ORDER BY COUNT(1) DESC LIMIT 1`, start.Unix(), end.Unix()).Scan(&app)
+	return app
 }
 
 // framesBetween returns frame rows in [start, end).
@@ -116,27 +145,63 @@ func upsertBlock(db *sql.DB, start, end time.Time, title, summary, category stri
 	return err
 }
 
+// upsertBlockFull additionally stores the dominant app and per-app activities JSON.
+func upsertBlockFull(db *sql.DB, start, end time.Time, title, summary, category, app, activities string, frameCount, attempts int, status, errStr string) error {
+	_, err := db.Exec(`INSERT INTO blocks(start_ts,end_ts,title,summary,category,app,activities,frame_count,attempts,status,error,created_at)
+	  VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+	  ON CONFLICT(start_ts) DO UPDATE SET end_ts=excluded.end_ts, title=excluded.title,
+	    summary=excluded.summary, category=excluded.category, app=excluded.app,
+	    activities=excluded.activities, frame_count=excluded.frame_count, attempts=excluded.attempts,
+	    status=excluded.status, error=excluded.error`,
+		start.Unix(), end.Unix(), title, summary, category, app, activities, frameCount, attempts, status, errStr, time.Now().Unix())
+	return err
+}
+
 func blockExists(db *sql.DB, start time.Time) (bool, error) {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE start_ts = ? AND status='done'`, start.Unix()).Scan(&n)
 	return n > 0, err
 }
 
+// blockAttempts returns the retry count for a (usually failed) block.
+func blockAttempts(db *sql.DB, start time.Time) int {
+	var n int
+	db.QueryRow(`SELECT attempts FROM blocks WHERE start_ts = ?`, start.Unix()).Scan(&n)
+	return n
+}
+
+func resetFailedBlocks(db *sql.DB) (int64, error) {
+	res, err := db.Exec(`DELETE FROM blocks WHERE status IN ('failed','dead')`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+type Activity struct {
+	App      string `json:"app"`
+	Title    string `json:"title"`
+	Summary  string `json:"summary"`
+	Category string `json:"category"`
+}
+
 type Block struct {
-	Start      time.Time `json:"-"`
-	End        time.Time `json:"-"`
-	StartStr   string    `json:"start"`
-	EndStr     string    `json:"end"`
-	Title      string    `json:"title"`
-	Summary    string    `json:"summary"`
-	Category   string    `json:"category"`
-	FrameCount int       `json:"frame_count"`
+	Start      time.Time  `json:"-"`
+	End        time.Time  `json:"-"`
+	StartStr   string     `json:"start"`
+	EndStr     string     `json:"end"`
+	Title      string     `json:"title"`
+	Summary    string     `json:"summary"`
+	Category   string     `json:"category"`
+	App        string     `json:"app"`
+	Activities []Activity `json:"activities,omitempty"`
+	FrameCount int        `json:"frame_count"`
 }
 
 func blocksForDay(db *sql.DB, day time.Time) ([]Block, error) {
 	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
 	end := start.Add(24 * time.Hour)
-	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count FROM blocks
+	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities FROM blocks
 	  WHERE start_ts >= ? AND start_ts < ? AND status='done' ORDER BY start_ts`,
 		start.Unix(), end.Unix())
 	if err != nil {
@@ -147,8 +212,12 @@ func blocksForDay(db *sql.DB, day time.Time) ([]Block, error) {
 	for rows.Next() {
 		var b Block
 		var s, e int64
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount); err != nil {
+		var acts string
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts); err != nil {
 			return nil, err
+		}
+		if acts != "" {
+			json.Unmarshal([]byte(acts), &b.Activities)
 		}
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()

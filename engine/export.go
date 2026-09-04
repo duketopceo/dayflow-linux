@@ -2,13 +2,14 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 )
 
 func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
-	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count FROM blocks
+	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities FROM blocks
 	  WHERE start_ts >= ? AND start_ts < ? AND status='done' ORDER BY start_ts`,
 		start.Unix(), end.Unix())
 	if err != nil {
@@ -19,8 +20,12 @@ func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
 	for rows.Next() {
 		var b Block
 		var s, e int64
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount); err != nil {
+		var acts string
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts); err != nil {
 			return nil, err
+		}
+		if acts != "" {
+			json.Unmarshal([]byte(acts), &b.Activities)
 		}
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
@@ -51,6 +56,40 @@ func monthBounds(t time.Time) (time.Time, time.Time) {
 	t = t.Local()
 	s := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
 	return s, s.AddDate(0, 1, 0)
+}
+
+// Card is a merged activity card: consecutive blocks dominated by the same app.
+type Card struct {
+	Start    time.Time `json:"-"`
+	End      time.Time `json:"-"`
+	StartStr string    `json:"start"`
+	EndStr   string    `json:"end"`
+	App      string    `json:"app"`
+	Title    string    `json:"title"`
+	Summary  string    `json:"summary"`
+	Category string    `json:"category"`
+	Blocks   int       `json:"blocks"`
+}
+
+// mergeCards folds adjacent blocks with the same dominant app into cards.
+func mergeCards(blocks []Block) []Card {
+	var out []Card
+	for _, b := range blocks {
+		if n := len(out); n > 0 && b.App != "" && out[n-1].App == b.App && b.Category == out[n-1].Category {
+			out[n-1].End = b.End
+			out[n-1].EndStr = b.EndStr
+			out[n-1].Blocks++
+			if !strings.Contains(out[n-1].Summary, b.Summary) {
+				out[n-1].Summary += " " + b.Summary
+			}
+			continue
+		}
+		out = append(out, Card{
+			Start: b.Start, End: b.End, StartStr: b.StartStr, EndStr: b.EndStr,
+			App: b.App, Title: b.Title, Summary: b.Summary, Category: b.Category, Blocks: 1,
+		})
+	}
+	return out
 }
 
 // markdownTimeline renders blocks grouped by day as a markdown document.

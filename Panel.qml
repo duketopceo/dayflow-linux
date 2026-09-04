@@ -140,6 +140,19 @@ Panel {
     }
   }
 
+  function appIconSource(cls) {
+    if (!cls || cls === "") return Quickshell.iconPath("application-x-executable", true)
+    var direct = Quickshell.iconPath(cls, true)
+    if (direct.length > 0) return direct
+    // reverse-domain classes: try the last segment
+    var seg = cls.split(".").pop()
+    if (seg !== cls) {
+      var t = Quickshell.iconPath(seg, true)
+      if (t.length > 0) return t
+    }
+    return Quickshell.iconPath("application-x-executable", true)
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -292,6 +305,14 @@ Panel {
                   width: parent.width
                   spacing: Style.space(6)
 
+                  Image {
+                    width: Style.font.body
+                    height: Style.font.body
+                    source: root.appIconSource(modelData.app)
+                    fillMode: Image.PreserveAspectFit
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
                   Text {
                     text: modelData.start + "–" + modelData.end
                     color: Qt.darker(root.barForeground, 1.4)
@@ -338,6 +359,33 @@ Panel {
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.body
                   wrapMode: Text.WordWrap
+                }
+
+                Repeater {
+                  model: modelData.activities || []
+
+                  delegate: Row {
+                    width: parent ? parent.width : 0
+                    spacing: Style.space(6)
+                    leftPadding: Style.space(10)
+
+                    Image {
+                      width: Style.font.caption
+                      height: Style.font.caption
+                      source: root.appIconSource(modelData.app)
+                      fillMode: Image.PreserveAspectFit
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                      width: parent.width - Style.space(24)
+                      text: modelData.app + "  ·  " + modelData.title
+                      color: Qt.darker(root.barForeground, 1.3)
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
+                  }
                 }
               }
             }

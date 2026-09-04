@@ -68,13 +68,6 @@ func isIgnored(cfg Config, class string) bool {
 	return false
 }
 
-func activeWindowClassIfNeeded(cfg Config) string {
-	if len(cfg.IgnoreApps) == 0 {
-		return ""
-	}
-	return activeWindowClass()
-}
-
 // ahash computes a 16x16 grayscale average-hash of the image.
 func ahash(img image.Image) uint64 {
 	const size = 16
@@ -146,8 +139,8 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *uint64) err
 	if paused() {
 		return nil
 	}
-	// skip the hyprctl subprocess entirely when nothing is ignored
-	if cls := activeWindowClassIfNeeded(cfg); isIgnored(cfg, cls) {
+	cls := activeWindowClass()
+	if isIgnored(cfg, cls) {
 		logEvent(db, "capture_ignored", cls)
 		return nil
 	}
@@ -178,7 +171,7 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *uint64) err
 		return err
 	}
 	logEvent(db, "capture_saved", path)
-	return insertFrame(db, now, path)
+	return insertFrameApp(db, now, path, cls)
 }
 
 // runRetention deletes frames and old log rows past the retention window.
