@@ -15,6 +15,13 @@ import (
 	"time"
 )
 
+func configMtime() time.Time {
+	if fi, err := os.Stat(configPath()); err == nil {
+		return fi.ModTime()
+	}
+	return time.Time{}
+}
+
 func paused() bool {
 	_, err := os.Stat(pausePath())
 	return err == nil
@@ -59,6 +66,13 @@ func isIgnored(cfg Config, class string) bool {
 		}
 	}
 	return false
+}
+
+func activeWindowClassIfNeeded(cfg Config) string {
+	if len(cfg.IgnoreApps) == 0 {
+		return ""
+	}
+	return activeWindowClass()
 }
 
 // ahash computes a 16x16 grayscale average-hash of the image.
@@ -132,7 +146,8 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *uint64) err
 	if paused() {
 		return nil
 	}
-	if cls := activeWindowClass(); isIgnored(cfg, cls) {
+	// skip the hyprctl subprocess entirely when nothing is ignored
+	if cls := activeWindowClassIfNeeded(cfg); isIgnored(cfg, cls) {
 		logEvent(db, "capture_ignored", cls)
 		return nil
 	}
@@ -249,6 +264,24 @@ func runDaemon(cfg Config) error {
 		return err
 	}
 	logEvent(db, "daemon_start", strings.Join(cmdArgs, " "))
+	cfgMtime := configMtime()
+
+	// hot-reload config when the file changes so `dayflow config set` and
+	// `ignore` apply without a restart
+	reloadIfChanged := func() {
+		m := configMtime()
+		if m.Equal(cfgMtime) {
+			return
+		}
+		if nc, err := loadConfig(); err == nil {
+			cfg = nc
+			cfgMtime = m
+			if na, err := resolveCaptureCommand(cfg); err == nil {
+				cmdArgs = na
+			}
+			logEvent(db, "config_reloaded", "")
+		}
+	}
 
 	var lastHash uint64
 	var haveHash bool
@@ -259,6 +292,7 @@ func runDaemon(cfg Config) error {
 	log.Printf("dayflow daemon: capturing every %ds -> %s", cfg.CaptureIntervalSec, framesDir())
 
 	capture := func() {
+		reloadIfChanged()
 		var h *uint64
 		if haveHash {
 			h = &lastHash

@@ -340,6 +340,8 @@ func printStatus(cfg Config, asJSON bool) {
 			"model":          cfg.Model,
 			"ignored_apps":   cfg.IgnoreApps,
 			"active_app":     activeWindowClass(),
+			"configured":     cfg.OpenRouterAPIKey != "",
+			"version":        version,
 		})
 		return
 	}

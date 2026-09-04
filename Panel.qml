@@ -16,6 +16,7 @@ Panel {
   property var blocks: []
   property string dateLabel: ""
   property bool paused: false
+  property bool configured: true
   property string errorText: ""
   property string modelName: ""
   property string activeApp: ""
@@ -60,6 +61,7 @@ Panel {
     try {
       var s = JSON.parse(raw)
       root.paused = s.paused === true
+      root.configured = s.configured !== false
       root.modelName = s.model || ""
       root.activeApp = s.active_app || ""
       root.ignoredApps = s.ignored_apps || []
@@ -121,6 +123,23 @@ Panel {
     onExited: Qt.callLater(root.refreshAll)
   }
 
+  Process {
+    id: copyProc
+    command: ["bash", "-c", "dayflow export | wl-copy"]
+    onExited: function(exitCode) {
+      root.notice = exitCode === 0 ? "copied today's journal as markdown" : "copy failed"
+    }
+  }
+
+  function categoryColor(cat) {
+    switch (cat) {
+      case "coding":        return Color.accent
+      case "communication": return root.barForeground
+      case "idle":          return Qt.darker(root.barForeground, 1.8)
+      default:              return root.barForeground
+    }
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -128,7 +147,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(360))
+    contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(flick.implicitHeight)
 
     PanelKeyCatcher {
@@ -142,37 +161,101 @@ Panel {
         width: parent.width
         spacing: Style.space(8)
 
+        // ---- header ----
         Row {
           width: parent.width
           spacing: Style.space(8)
 
           Text {
-            width: parent.width - pauseBtn.implicitWidth
-            text: root.paused ? "Dayflow — paused" : "Dayflow — " + root.dateLabel
-            color: root.barForeground
+            id: sunIcon
+            text: "󰖨"
+            color: root.paused ? Qt.darker(Color.accent, 1.6) : Color.accent
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.subtitle
-            font.bold: true
-            elide: Text.ElideRight
+            font.pixelSize: Style.font.title
+            anchors.verticalCenter: parent.verticalCenter
           }
 
-          WidgetButton {
-            id: pauseBtn
-            bar: root.bar
-            text: root.paused ? "resume" : "pause"
-            tooltipText: root.paused ? "Resume screen capture" : "Pause screen capture"
-            onPressed: toggleProc.running = true
+          Column {
+            width: parent.width - sunIcon.width - actions.implicitWidth - Style.space(16)
+            spacing: 0
+
+            Text {
+              text: "Dayflow"
+              color: root.barForeground
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+            Text {
+              text: (root.paused ? "paused" : "recording") + "  ·  " + root.modelName
+              color: Qt.darker(root.barForeground, 1.5)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              width: parent.width
+            }
+          }
+
+          Row {
+            id: actions
+            spacing: Style.space(4)
+            anchors.verticalCenter: parent.verticalCenter
+
+            PanelActionButton {
+              iconText: root.paused ? "󰐊" : "󰏤"
+              tooltipText: root.paused ? "Resume capture" : "Pause capture"
+              foreground: root.barForeground
+              onClicked: toggleProc.running = true
+            }
+            PanelActionButton {
+              iconText: "󰆏"
+              tooltipText: "Copy today as markdown"
+              foreground: root.barForeground
+              onClicked: { if (!copyProc.running) copyProc.running = true }
+            }
+            PanelActionButton {
+              iconText: "󰑓"
+              tooltipText: "Refresh"
+              foreground: root.barForeground
+              onClicked: root.refreshAll()
+            }
           }
         }
 
-        Text {
-          visible: root.errorText !== ""
+        PanelSeparator { foreground: root.barForeground }
+
+        // ---- error / not-configured states ----
+        Column {
+          visible: root.errorText !== "" || !root.configured
           width: parent.width
-          text: root.errorText
-          color: root.barForeground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.body
-          wrapMode: Text.WordWrap
+          spacing: Style.space(6)
+
+          Text {
+            visible: root.errorText !== ""
+            width: parent.width
+            text: "⚠ " + root.errorText
+            color: Color.urgent !== undefined ? Color.urgent : root.barForeground
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+            wrapMode: Text.WordWrap
+          }
+
+          Text {
+            visible: !root.configured
+            width: parent.width
+            text: "Not configured yet. Run `dayflow setup` in a terminal to connect OpenRouter."
+            color: root.barForeground
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+            wrapMode: Text.WordWrap
+          }
+        }
+
+        // ---- timeline ----
+        PanelSectionHeader {
+          text: "Today  ·  " + root.dateLabel
+          foreground: root.barForeground
+          visible: root.blocks.length > 0
         }
 
         Flickable {
@@ -186,14 +269,13 @@ Panel {
           Column {
             id: col
             width: flick.width
-            spacing: Style.space(10)
+            spacing: Style.space(12)
 
             Text {
-              visible: root.blocks.length === 0 && root.errorText === ""
+              visible: root.blocks.length === 0 && root.errorText === "" && root.configured
               width: parent.width
-              text: "No summarized blocks yet — they land every 15 minutes."
-              color: root.barForeground
-              opacity: 0.7
+              text: "Nothing summarized yet — blocks land every 15 minutes."
+              color: Qt.darker(root.barForeground, 1.5)
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.body
               wrapMode: Text.WordWrap
@@ -206,9 +288,41 @@ Panel {
                 width: col.width
                 spacing: Style.space(2)
 
+                Row {
+                  width: parent.width
+                  spacing: Style.space(6)
+
+                  Text {
+                    text: modelData.start + "–" + modelData.end
+                    color: Qt.darker(root.barForeground, 1.4)
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Rectangle {
+                    height: catText.implicitHeight + 2
+                    width: catText.implicitWidth + Style.space(8)
+                    radius: height / 2
+                    color: "transparent"
+                    border.color: root.categoryColor(modelData.category)
+                    border.width: 1
+                    opacity: 0.8
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Text {
+                      id: catText
+                      anchors.centerIn: parent
+                      text: modelData.category
+                      color: root.categoryColor(modelData.category)
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+
                 Text {
                   width: parent.width
-                  text: modelData.start + "–" + modelData.end + "  " + modelData.title
+                  text: modelData.title
                   color: root.barForeground
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.body
@@ -220,7 +334,7 @@ Panel {
                   width: parent.width
                   text: modelData.summary
                   color: root.barForeground
-                  opacity: 0.85
+                  opacity: 0.8
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.body
                   wrapMode: Text.WordWrap
@@ -230,72 +344,48 @@ Panel {
           }
         }
 
-        // Settings / status footer
-        Rectangle {
+        PanelSeparator { foreground: root.barForeground }
+
+        // ---- controls ----
+        Row {
           width: parent.width
-          height: settingsCol.implicitHeight + Style.space(12)
-          color: "transparent"
-          border.color: root.barForeground
-          border.width: 1
-          radius: Style.space(4)
-          opacity: 0.6
+          spacing: Style.space(6)
 
-          Column {
-            id: settingsCol
-            x: Style.space(6)
-            y: Style.space(6)
-            width: parent.width - Style.space(12)
-            spacing: Style.space(4)
-
-            Text {
-              width: parent.width
-              text: root.framesToday + " frames today · " + root.blocksPending + " pending · " + root.modelName
-              color: root.barForeground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
-
-            Text {
-              width: parent.width
-              text: "Ignored apps: " + (root.ignoredApps.length ? root.ignoredApps.join(", ") : "none")
-              color: root.barForeground
-              opacity: 0.8
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
-
-            Row {
-              spacing: Style.space(8)
-
-              WidgetButton {
-                bar: root.bar
-                text: "ignore " + (root.activeApp || "app")
-                tooltipText: "Add the focused window's app to the ignore list"
-                visible: root.activeApp !== ""
-                onPressed: ignoreProc.running = true
-              }
-
-              WidgetButton {
-                bar: root.bar
-                text: "summarize now"
-                tooltipText: "Summarize pending blocks immediately"
-                onPressed: summarizeProc.running = true
-              }
-            }
-
-            Text {
-              visible: root.notice !== ""
-              width: parent.width
-              text: root.notice
-              color: root.barForeground
-              opacity: 0.8
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
+          PanelActionButton {
+            iconText: "󰈈"
+            tooltipText: "Ignore focused app" + (root.activeApp !== "" ? " (" + root.activeApp + ")" : "")
+            foreground: root.barForeground
+            enabled: root.activeApp !== ""
+            onClicked: { if (!ignoreProc.running) ignoreProc.running = true }
           }
+
+          PanelActionButton {
+            iconText: "󰓨"
+            tooltipText: "Summarize pending blocks now"
+            foreground: root.barForeground
+            onClicked: { if (!summarizeProc.running) summarizeProc.running = true }
+          }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - Style.space(96)
+            elide: Text.ElideRight
+            text: root.framesToday + " frames · " + root.blocksPending + " pending" +
+                  (root.ignoredApps.length ? "  ·  ignoring " + root.ignoredApps.join(", ") : "")
+            color: Qt.darker(root.barForeground, 1.5)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        Text {
+          visible: root.notice !== ""
+          width: parent.width
+          text: root.notice
+          color: Color.accent
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
         }
       }
     }

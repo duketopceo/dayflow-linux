@@ -19,6 +19,7 @@ BarWidget.qml      # bar indicator: recording state, click for panel
 Panel.qml          # timeline panel + settings footer
 engine/            # Go CLI/daemon (the tracking engine)
 scripts/stress.sh  # live stress test
+preview.png        # marketplace preview
 ```
 
 ## Requirements
