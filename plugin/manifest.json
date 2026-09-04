@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.lukedaduke.dayflow",
+  "name": "Dayflow",
+  "version": "0.1.0",
+  "author": "lukedaduke",
+  "license": "MIT",
+  "description": "Automatic work journal: shows recording status and today's AI-summarized timeline. Requires the dayflow CLI on PATH.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Dayflow",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
