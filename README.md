@@ -53,7 +53,7 @@ Or set the key manually: `dayflow config set openrouter_api_key sk-or-...`, `OPE
 ## Install the plugin
 
 ```sh
-omarchy plugin add https://github.com/lukedaduke/dayflow-linux.git --enable
+omarchy plugin add https://github.com/duketopceo/dayflow-linux.git --enable
 ```
 
 or for local development:

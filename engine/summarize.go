@@ -95,7 +95,7 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.OpenRouterAPIKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("HTTP-Referer", "https://github.com/lukedaduke/dayflow-linux")
+	req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
 	req.Header.Set("X-Title", cfg.SiteName)
 
 	client := &http.Client{Timeout: 120 * time.Second}

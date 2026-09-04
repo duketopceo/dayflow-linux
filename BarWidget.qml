@@ -5,7 +5,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "io.github.lukedaduke.dayflow"
+  moduleName: "io.github.duketopceo.dayflow"
 
   property bool paused: false
   property int blocksDone: 0

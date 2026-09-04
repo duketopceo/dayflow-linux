@@ -6,7 +6,7 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "io.github.lukedaduke.dayflow"
+  moduleName: "io.github.duketopceo.dayflow"
   manageIpc: false
 
   signal statusChanged()
