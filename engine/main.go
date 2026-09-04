@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -29,6 +31,13 @@ Query:
 Control:
   pause | resume | toggle   Control screen capture
   config                  Print config path and current config
+  config set <key> <val>  Update config (model, capture_interval_sec, block_minutes,
+                          frames_per_block, jpeg_quality, keep_frames, retention_days,
+                          ignore_apps, output, capture_command, openrouter_api_key)
+  ignore [--active|class] Add an app to the ignore list (--active = focused window)
+  unignore <class>        Remove an app from the ignore list
+  events [--json] [-n N]  Recent event log (captures, skips, errors, summaries)
+  usage [--json]          Token usage totals from the api_calls log
 
 Config: %s
 Data:   %s
@@ -110,12 +119,22 @@ func main() {
 
 	case "pause":
 		setPaused(true)
+		db, _ := openDB()
+		logEvent(db, "paused", "")
 		fmt.Println("paused")
 	case "resume":
 		setPaused(false)
+		db, _ := openDB()
+		logEvent(db, "resumed", "")
 		fmt.Println("resumed")
 	case "toggle":
 		setPaused(!paused())
+		db, _ := openDB()
+		if paused() {
+			logEvent(db, "paused", "")
+		} else {
+			logEvent(db, "resumed", "")
+		}
 		if paused() {
 			fmt.Println("paused")
 		} else {
@@ -123,8 +142,58 @@ func main() {
 		}
 
 	case "config":
+		if len(args) >= 3 && args[0] == "set" {
+			fatal(setConfigValue(args[1], args[2]))
+			fmt.Println("set", args[1])
+			break
+		}
 		b, _ := json.MarshalIndent(cfg, "", "  ")
 		fmt.Printf("%s\n%s\n", configPath(), b)
+
+	case "ignore":
+		var cls string
+		for _, a := range args {
+			if a == "--active" {
+				cls = activeWindowClass()
+			} else if a[0] != '-' {
+				cls = a
+			}
+		}
+		if cls == "" {
+			fatal(fmt.Errorf("no app class given — use --active on Hyprland or pass a class"))
+		}
+		for _, ig := range cfg.IgnoreApps {
+			if strings.EqualFold(ig, cls) {
+				fmt.Println("already ignored:", cls)
+				return
+			}
+		}
+		fatal(setConfigValue("ignore_apps", strings.Join(append(cfg.IgnoreApps, cls), ",")))
+		db, _ := openDB()
+		logEvent(db, "app_ignored", cls)
+		fmt.Println("ignoring:", cls)
+
+	case "unignore":
+		if len(args) == 0 {
+			usage()
+		}
+		cls := args[0]
+		var kept []string
+		for _, ig := range cfg.IgnoreApps {
+			if !strings.EqualFold(ig, cls) {
+				kept = append(kept, ig)
+			}
+		}
+		fatal(setConfigValue("ignore_apps", strings.Join(kept, ",")))
+		db, _ := openDB()
+		logEvent(db, "app_unignored", cls)
+		fmt.Println("unignored:", cls)
+
+	case "events":
+		printEvents(cfg, args, jsonOut)
+
+	case "usage":
+		printUsage(jsonOut)
 
 	case "install":
 		fatal(installUnits())
@@ -190,6 +259,8 @@ func printStatus(cfg Config, asJSON bool) {
 			"blocks_pending": len(pending),
 			"last_frame":     last,
 			"model":          cfg.Model,
+			"ignored_apps":   cfg.IgnoreApps,
+			"active_app":     activeWindowClass(),
 		})
 		return
 	}
@@ -229,4 +300,59 @@ func printFailed(cfg Config, asJSON bool) {
 	if len(out) == 0 {
 		fmt.Println("no failed blocks")
 	}
+}
+
+func printEvents(cfg Config, args []string, asJSON bool) {
+	limit := 50
+	for i, a := range args {
+		if a == "-n" && i+1 < len(args) {
+			if n, err := strconv.Atoi(args[i+1]); err == nil {
+				limit = n
+			}
+		}
+	}
+	db, err := openDB()
+	fatal(err)
+	defer db.Close()
+	rows, err := db.Query(`SELECT ts, type, detail FROM events ORDER BY ts DESC LIMIT ?`, limit)
+	fatal(err)
+	defer rows.Close()
+	type E struct {
+		Time   string `json:"time"`
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	var out []E
+	for rows.Next() {
+		var ts int64
+		var t, d string
+		rows.Scan(&ts, &t, &d)
+		out = append(out, E{time.Unix(ts, 0).Local().Format("2006-01-02 15:04:05"), t, d})
+	}
+	if asJSON {
+		json.NewEncoder(os.Stdout).Encode(out)
+		return
+	}
+	for _, e := range out {
+		fmt.Printf("%s  %-18s  %s\n", e.Time, e.Type, e.Detail)
+	}
+}
+
+func printUsage(asJSON bool) {
+	db, err := openDB()
+	fatal(err)
+	defer db.Close()
+	var calls, prompt, completion, ok, failed int
+	fatal(db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
+	  FROM api_calls`).Scan(&calls, &prompt, &completion, &ok, &failed))
+	if asJSON {
+		json.NewEncoder(os.Stdout).Encode(map[string]int{
+			"api_calls": calls, "ok": ok, "failed": failed,
+			"prompt_tokens": prompt, "completion_tokens": completion,
+		})
+		return
+	}
+	fmt.Printf("api calls: %d (%d ok, %d failed)\nprompt tokens: %d\ncompletion tokens: %d\n",
+		calls, ok, failed, prompt, completion)
 }

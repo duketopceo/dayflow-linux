@@ -1,4 +1,4 @@
-module github.com/lukedaduke/dayflow-linux
+module github.com/lukedaduke/dayflow-linux/engine
 
 go 1.27.1
 

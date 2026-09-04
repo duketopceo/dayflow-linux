@@ -15,7 +15,8 @@ import (
 	"time"
 )
 
-const openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
+// var so tests can point at a stub server.
+var openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
 
 const summarizePrompt = `You are analyzing screen captures from a personal activity tracker.
 These images are frames sampled across a %d-minute window of the user's screen.
@@ -49,6 +50,10 @@ type orResponse struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
@@ -60,9 +65,9 @@ type blockResult struct {
 	Category string `json:"category"`
 }
 
-func callOpenRouter(cfg Config, frames []string) (*blockResult, error) {
+func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error) {
 	if cfg.OpenRouterAPIKey == "" {
-		return nil, fmt.Errorf("no API key: set openrouter_api_key in %s or OPENROUTER_API_KEY", configPath())
+		return nil, 0, 0, fmt.Errorf("no API key: set openrouter_api_key in %s or OPENROUTER_API_KEY", configPath())
 	}
 	content := []orContent{{Type: "text", Text: fmt.Sprintf(summarizePrompt, cfg.BlockMinutes)}}
 	for _, f := range frames {
@@ -77,7 +82,7 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, error) {
 		content = append(content, c)
 	}
 	if len(content) == 1 {
-		return nil, fmt.Errorf("no readable frames")
+		return nil, 0, 0, fmt.Errorf("no readable frames")
 	}
 
 	reqBody, _ := json.Marshal(orRequest{
@@ -86,7 +91,7 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, error) {
 	})
 	req, err := http.NewRequest("POST", openRouterURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.OpenRouterAPIKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -96,29 +101,33 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, error) {
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("openrouter %d: %s", resp.StatusCode, truncate(string(body), 300))
+		return nil, 0, 0, fmt.Errorf("openrouter %d: %s", resp.StatusCode, truncate(string(body), 300))
 	}
 	var or orResponse
 	if err := json.Unmarshal(body, &or); err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	if or.Error != nil {
-		return nil, fmt.Errorf("openrouter: %s", or.Error.Message)
+		return nil, 0, 0, fmt.Errorf("openrouter: %s", or.Error.Message)
 	}
 	if len(or.Choices) == 0 {
-		return nil, fmt.Errorf("openrouter: no choices")
+		return nil, 0, 0, fmt.Errorf("openrouter: no choices")
 	}
 	text := stripFences(or.Choices[0].Message.Content)
 	var res blockResult
 	if err := json.Unmarshal([]byte(text), &res); err != nil {
-		return nil, fmt.Errorf("bad model JSON: %w (raw: %s)", err, truncate(text, 200))
+		return nil, 0, 0, fmt.Errorf("bad model JSON: %w (raw: %s)", err, truncate(text, 200))
 	}
-	return &res, nil
+	pt, ct := 0, 0
+	if or.Usage != nil {
+		pt, ct = or.Usage.PromptTokens, or.Usage.CompletionTokens
+	}
+	return &res, pt, ct, nil
 }
 
 func stripFences(s string) string {
@@ -198,12 +207,18 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 			continue
 		}
 		paths := sampleFrames(frames, cfg.FramesPerBlock)
-		res, err := callOpenRouter(cfg, paths)
+		t0 := time.Now()
+		res, pt, ct, err := callOpenRouter(cfg, paths)
+		latency := int(time.Since(t0).Milliseconds())
 		if err != nil {
 			upsertBlock(db, start, end, "", "", "", len(frames), "failed", err.Error())
+			logAPICall(db, start, cfg.Model, len(paths), 0, 0, latency, "error", err.Error())
+			logEvent(db, "summarize_error", start.Format("15:04")+": "+err.Error())
 			log.Printf("summarize %s: %v", start.Format("15:04"), err)
 			continue
 		}
+		logAPICall(db, start, cfg.Model, len(paths), pt, ct, latency, "ok", "")
+		logEvent(db, "summarized", start.Format("15:04")+" "+res.Title)
 		if err := upsertBlock(db, start, end, res.Title, res.Summary, res.Category, len(frames), "done", ""); err != nil {
 			return done, err
 		}

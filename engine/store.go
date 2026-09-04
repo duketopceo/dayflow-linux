@@ -27,6 +27,30 @@ CREATE TABLE IF NOT EXISTS blocks (
   error       TEXT NOT NULL DEFAULT '',
   created_at  INTEGER NOT NULL
 );
+
+-- Full audit log: every capture decision, pause change, summarizer run, error.
+CREATE TABLE IF NOT EXISTS events (
+  id     INTEGER PRIMARY KEY,
+  ts     INTEGER NOT NULL,
+  type   TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
+
+-- One row per OpenRouter call: cost accounting + failure forensics.
+CREATE TABLE IF NOT EXISTS api_calls (
+  id                INTEGER PRIMARY KEY,
+  ts                INTEGER NOT NULL,
+  block_start       INTEGER NOT NULL,
+  model             TEXT NOT NULL,
+  frames_sent       INTEGER NOT NULL,
+  prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  latency_ms        INTEGER NOT NULL DEFAULT 0,
+  status            TEXT NOT NULL DEFAULT 'ok',
+  error             TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS api_calls_ts ON api_calls(ts);
 `
 
 func openDB() (*sql.DB, error) {
@@ -153,4 +177,42 @@ func lastFrameTS(db *sql.DB) (int64, error) {
 	var ts int64
 	err := db.QueryRow(`SELECT COALESCE(MAX(ts),0) FROM frames`).Scan(&ts)
 	return ts, err
+}
+
+func logEvent(db *sql.DB, typ, detail string) {
+	if db == nil {
+		return
+	}
+	db.Exec(`INSERT INTO events(ts, type, detail) VALUES(?,?,?)`, time.Now().Unix(), typ, detail)
+}
+
+func logAPICall(db *sql.DB, blockStart time.Time, model string, framesSent, promptTok, completionTok, latencyMs int, status, errStr string) {
+	if db == nil {
+		return
+	}
+	db.Exec(`INSERT INTO api_calls(ts, block_start, model, frames_sent, prompt_tokens, completion_tokens, latency_ms, status, error)
+	  VALUES(?,?,?,?,?,?,?,?,?)`,
+		time.Now().Unix(), blockStart.Unix(), model, framesSent, promptTok, completionTok, latencyMs, status, errStr)
+}
+
+// framesBefore deletes frame rows (and optionally files) older than cutoff.
+func framesBefore(db *sql.DB, cutoff time.Time) ([]string, error) {
+	rows, err := db.Query(`SELECT path FROM frames WHERE ts < ?`, cutoff.Unix())
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		paths = append(paths, p)
+	}
+	rows.Close()
+	_, err = db.Exec(`DELETE FROM frames WHERE ts < ?`, cutoff.Unix())
+	return paths, err
+}
+
+func pruneOldEvents(db *sql.DB, cutoff time.Time) {
+	db.Exec(`DELETE FROM events WHERE ts < ?`, cutoff.Unix())
+	db.Exec(`DELETE FROM api_calls WHERE ts < ?`, cutoff.Unix())
 }
