@@ -2,12 +2,16 @@
   "schemaVersion": 1,
   "id": "io.github.lukedaduke.dayflow",
   "name": "Dayflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "lukedaduke",
   "license": "MIT",
-  "description": "Automatic work journal: shows recording status and today's AI-summarized timeline. Requires the dayflow CLI on PATH.",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "description": "Automatic work journal: AI-summarized timeline of your day via OpenRouter vision models. Bar widget + panel; requires the dayflow engine (Go, in engine/).",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
   "barWidget": {
     "displayName": "Dayflow",
     "category": "Productivity",

@@ -99,7 +99,7 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.paused ? "󰏥" : "󰑋"
+    text: root.paused ? "󰖙" : "󰖨"
     tooltipText: root.paused
       ? "Dayflow paused — click for timeline, right-click to resume"
       : "Dayflow recording — click for timeline, right-click to pause"

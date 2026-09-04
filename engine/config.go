@@ -22,6 +22,7 @@ type Config struct {
 	CaptureCommand     string   `json:"capture_command"` // override; default auto-detect grim
 	Output             string   `json:"output"`          // grim -o <output>; empty = all outputs
 	SiteName           string   `json:"site_name"`       // OpenRouter X-Title
+	MaxStorageMB       int      `json:"max_storage_mb"`  // 0 = unlimited frame storage
 }
 
 func configDir() string {
@@ -55,7 +56,7 @@ func configPath() string {
 
 func defaultConfig() Config {
 	return Config{
-		Model:              "google/gemini-2.5-flash",
+		Model:              "google/gemma-4-31b-it",
 		CaptureIntervalSec: 10,
 		BlockMinutes:       15,
 		FramesPerBlock:     30,
@@ -96,7 +97,7 @@ func loadConfig() (Config, error) {
 		cfg.JPEGQuality = 55
 	}
 	if cfg.Model == "" {
-		cfg.Model = "google/gemini-2.5-flash"
+		cfg.Model = "google/gemma-4-31b-it"
 	}
 	return cfg, nil
 }
@@ -171,6 +172,12 @@ func setConfigValue(key, value string) error {
 				cfg.IgnoreApps[i] = strings.TrimSpace(cfg.IgnoreApps[i])
 			}
 		}
+	case "max_storage_mb":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("max_storage_mb must be an integer")
+		}
+		cfg.MaxStorageMB = n
 	case "output":
 		cfg.Output = value
 	case "capture_command":

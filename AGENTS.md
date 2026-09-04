@@ -1,0 +1,85 @@
+# dayflow — agent access guide
+
+This file is the contract for agents (Claude, Codex, kurultai workers, MCP clients)
+that read or operate the dayflow work journal on this machine.
+
+## What this is
+
+A local-first activity journal. A daemon (`dayflow-capture.service`) captures
+screen frames, and a summarizer turns each 15-minute block into a
+`{title, summary, category}` record via an OpenRouter vision model.
+
+**Data lives only on this machine** at `~/.local/share/dayflow/`:
+
+```
+~/.local/share/dayflow/
+├── dayflow.db     # SQLite (WAL). The journal.
+├── frames/        # raw JPEG frames awaiting summarization (usually empty)
+└── PAUSED         # flag file; its existence means "do not capture"
+```
+
+## Read access rules
+
+1. **Prefer the CLI or MCP over raw SQL.** The CLI is stable interface; the schema may change.
+2. Raw SQLite reads are allowed: open `dayflow.db` **read-only** (`mode=ro`, WAL is safe for concurrent readers). Never write to it — writes go through the daemon/CLI.
+3. Do not read files under `frames/` unless the task explicitly needs raw screenshots — they are the most sensitive data here.
+4. Respect the pause flag: if `~/.local/share/dayflow/PAUSED` exists, do not attempt to summarize or inspect frames.
+
+## Interfaces
+
+### CLI (preferred)
+
+```sh
+dayflow today|day <date>|timeline [--json] [date]
+dayflow week|month [--json]
+dayflow export [today|week|month|YYYY-MM-DD]   # markdown
+dayflow status [--json]
+dayflow events [--json] [-n N]
+dayflow usage [--json]
+dayflow blocks [--json]                        # failed summaries
+dayflow pause|resume|toggle
+dayflow ignore <class> | ignore --active | unignore <class>
+dayflow config [set <k> <v>]
+dayflow doctor
+```
+
+### MCP (stdio)
+
+`dayflow mcp` exposes tools: `get_timeline(date)`, `get_status`,
+`search_journal(query)`, `get_events(limit)`, `get_usage`.
+
+```sh
+claude mcp add dayflow -- ~/.local/bin/dayflow mcp
+```
+
+### Schema (for reference / read-only SQL)
+
+```sql
+frames(id, ts, path)                                     -- pending raw frames
+blocks(start_ts PK, end_ts, title, summary, category,    -- the journal
+       frame_count, status, error, created_at)
+events(id, ts, type, detail)                             -- audit log
+api_calls(id, ts, block_start, model, frames_sent,       -- cost log
+          prompt_tokens, completion_tokens, latency_ms, status, error)
+```
+
+`category` is one of: coding, browsing, communication, writing, design, media,
+meetings, system, idle, other.
+
+## Behavior rules for agents
+
+- **Do not** call `dayflow pause`/`resume`/`ignore`/`config set` without the
+  user asking — those change capture state.
+- `dayflow summarize` costs API tokens; batch calls, don't loop it.
+- Treat summaries as ground truth about *what was on screen*, not intent.
+  Cross-check with git/file evidence before attributing work.
+- When reporting "what did I do", cite block times so the user can verify.
+- Frames older than `retention_days` and blocks are pruned automatically —
+  don't rely on old raw frames existing.
+
+## Config reference
+
+`~/.config/dayflow/config.json` — keys: `model`, `capture_interval_sec`,
+`block_minutes`, `frames_per_block`, `jpeg_quality`, `keep_frames`,
+`retention_days`, `max_storage_mb`, `ignore_apps`, `output`,
+`capture_command`, `openrouter_api_key`.

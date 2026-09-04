@@ -184,12 +184,56 @@ func runRetention(db *sql.DB, cfg Config) {
 		logEvent(db, "retention_pruned", fmt.Sprintf("%d frames", len(paths)))
 	}
 	pruneOldEvents(db, cutoff)
+	enforceStorageCap(db, cfg)
 	// drop empty day directories
 	days, _ := filepath.Glob(filepath.Join(framesDir(), "*"))
 	for _, d := range days {
 		if entries, _ := os.ReadDir(d); len(entries) == 0 {
 			os.Remove(d)
 		}
+	}
+}
+
+// enforceStorageCap deletes oldest frames until the frames dir is under the cap.
+func enforceStorageCap(db *sql.DB, cfg Config) {
+	if cfg.MaxStorageMB <= 0 {
+		return
+	}
+	limit := int64(cfg.MaxStorageMB) << 20
+	var total int64
+	filepath.Walk(framesDir(), func(_ string, fi os.FileInfo, _ error) error {
+		if fi != nil && fi.Mode().IsRegular() {
+			total += fi.Size()
+		}
+		return nil
+	})
+	if total <= limit {
+		return
+	}
+	rows, err := db.Query(`SELECT ts, path FROM frames ORDER BY ts ASC`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var removed int
+	for rows.Next() && total > limit {
+		var ts int64
+		var p string
+		rows.Scan(&ts, &p)
+		// never delete frames whose block hasn't been summarized yet
+		done, err := blockExists(db, blockStart(time.Unix(ts, 0), cfg.BlockMinutes))
+		if err != nil || !done {
+			continue
+		}
+		if fi, err := os.Stat(p); err == nil {
+			total -= fi.Size()
+			os.Remove(p)
+		}
+		db.Exec(`DELETE FROM frames WHERE ts=? AND path=?`, ts, p)
+		removed++
+	}
+	if removed > 0 {
+		logEvent(db, "storage_cap_pruned", fmt.Sprintf("%d frames", removed))
 	}
 }
 

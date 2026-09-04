@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `dayflow %s — private, automatic work journal for Wayland/Omarchy
@@ -38,6 +38,14 @@ Control:
   unignore <class>        Remove an app from the ignore list
   events [--json] [-n N]  Recent event log (captures, skips, errors, summaries)
   usage [--json]          Token usage totals from the api_calls log
+  week | month [--json]   Timeline rollups
+  export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
+  mcp                     Run the MCP server over stdio (for agents)
+
+Setup & health:
+  setup                   Interactive OpenRouter onboarding (key + vision model)
+  models                  List vision-capable models on your OpenRouter account
+  doctor                  Check session, grim, key, and model support
 
 Config: %s
 Data:   %s
@@ -143,6 +151,11 @@ func main() {
 
 	case "config":
 		if len(args) >= 3 && args[0] == "set" {
+			if args[1] == "model" {
+				if vis, ok := isVisionModel(cfg.OpenRouterAPIKey, args[2]); ok && !vis {
+					fatal(fmt.Errorf("model %q cannot read images — dayflow needs a vision model (see 'dayflow models')", args[2]))
+				}
+			}
 			fatal(setConfigValue(args[1], args[2]))
 			fmt.Println("set", args[1])
 			break
@@ -194,6 +207,72 @@ func main() {
 
 	case "usage":
 		printUsage(jsonOut)
+
+	case "week", "month":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		var start, end time.Time
+		if cmd == "week" {
+			start, end = weekBounds(time.Now())
+		} else {
+			start, end = monthBounds(time.Now())
+		}
+		blocks, err := blocksBetween(db, start, end)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(map[string]any{
+				"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"), "blocks": blocks})
+		} else {
+			fmt.Print(markdownTimeline(blocks, "dayflow "+cmd))
+		}
+
+	case "export":
+		// export [day|YYYY-MM-DD|week|month] — always markdown on stdout
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		var start, end time.Time
+		label := "dayflow"
+		now := time.Now()
+		sel := "today"
+		for _, a := range args {
+			if a[0] != '-' {
+				sel = a
+			}
+		}
+		switch sel {
+		case "today", "day":
+			start, end = dayBounds(now)
+			label = "dayflow — " + now.Format("2006-01-02")
+		case "yesterday":
+			start, end = dayBounds(now.AddDate(0, 0, -1))
+			label = "dayflow — " + now.AddDate(0, 0, -1).Format("2006-01-02")
+		case "week":
+			start, end = weekBounds(now)
+			label = "dayflow — week of " + start.Format("2006-01-02")
+		case "month":
+			start, end = monthBounds(now)
+			label = "dayflow — " + now.Format("January 2006")
+		default:
+			t, err := time.ParseInLocation("2006-01-02", sel, time.Local)
+			fatal(err)
+			start, end = dayBounds(t)
+			label = "dayflow — " + sel
+		}
+		blocks, err := blocksBetween(db, start, end)
+		fatal(err)
+		fmt.Print(markdownTimeline(blocks, label))
+
+	case "mcp":
+		fatal(runMCP(cfg))
+
+	case "setup":
+		fatal(runSetup())
+	case "doctor":
+		runDoctor(cfg)
+	case "models":
+		listModels(cfg)
 
 	case "install":
 		fatal(installUnits())

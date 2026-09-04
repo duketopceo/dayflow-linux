@@ -2,10 +2,10 @@
 
 A private, automatic work journal for Linux — a port of [Dayflow](https://www.dayflow.so/) (macOS) built for [Omarchy](https://omarchy.org)/Hyprland and other wlroots compositors.
 
-It captures a lightweight screenshot every 10 seconds, deduplicates unchanged frames, and every 15 minutes asks a vision model (Gemini via [OpenRouter](https://openrouter.ai) by default) to write a plain-language summary of what you were actually doing. The result is a readable timeline of your day — shown in a bar panel or from the CLI.
+It captures a lightweight screenshot every 10 seconds, deduplicates unchanged frames, and every 15 minutes asks a vision model (Gemma 4 via [OpenRouter](https://openrouter.ai) by default — $0.09/M tokens) to write a plain-language summary of what you were actually doing. The result is a readable timeline of your day — shown in a bar panel or from the CLI.
 
 - **Local-first**: frames and the SQLite database live in `~/.local/share/dayflow/`. Nothing leaves your machine except the sampled frames sent for summarization.
-- **Cheap**: ~30 JPEG frames per 15-min block → `google/gemini-2.5-flash` by default. Any OpenRouter vision model works.
+- **Cheap**: — ~30 JPEG frames per 15-min block → `google/gemma-4-31b-it` by default. Any OpenRouter vision model works; non-vision models are rejected at config time.
 - **Light**: single static Go binary, ~25MB RAM, sub-1% CPU.
 - **Private controls**: pause toggle, per-app ignore list, automatic frame deletion, retention pruning.
 
@@ -39,13 +39,15 @@ dayflow install    # writes + enables systemd user units
 systemctl --user enable --now dayflow-capture.service
 ```
 
-Set your key — any one of:
+Onboarding:
 
 ```sh
-dayflow config set openrouter_api_key sk-or-...
-# or export OPENROUTER_API_KEY=sk-or-...
-# or ~/.config/openrouter/keys.json with an "api_key" field (auto-detected)
+dayflow setup      # interactive: paste key, it validates + picks a vision model
+dayflow doctor     # sanity-check session, grim, key, model
+dayflow models     # list vision-capable models for your key
 ```
+
+Or set the key manually: `dayflow config set openrouter_api_key sk-or-...`, `OPENROUTER_API_KEY` env, or `~/.config/openrouter/keys.json` (auto-detected). Use a dedicated OpenRouter key if you want separate spend tracking.
 
 ## Install the plugin
 
@@ -77,6 +79,9 @@ dayflow unignore <class>
 dayflow events -n 20           # full audit log: captures, skips, errors
 dayflow usage                  # token totals across all API calls
 dayflow blocks                 # failed summaries (auto-retried)
+dayflow week | month           # multi-day rollups
+dayflow export week            # markdown export to stdout
+dayflow mcp                    # MCP server for agents (stdio)
 dayflow config set <k> <v>     # live settings
 dayflow uninstall              # remove systemd units (data stays)
 ```
@@ -96,6 +101,7 @@ All query commands accept `--json`.
 | `jpeg_quality` | 55 | grim JPEG quality |
 | `keep_frames` | false | keep raw frames after summarizing |
 | `retention_days` | 7 | prunes frames, events, and api logs |
+| `max_storage_mb` | 0 | cap on frames dir size; 0 = unlimited. Only already-summarized frames are pruned. |
 | `ignore_apps` | `[]` | window classes never captured (Hyprland) |
 | `output` | `""` | restrict capture to one monitor (`grim -o`) |
 | `capture_command` | `""` | custom screenshot command (writes image to stdout) |
@@ -111,6 +117,16 @@ All query commands accept `--json`.
 ## Cross-hardware / portability
 
 Capture goes through `grim` → the compositor's screencopy protocol, which is hardware-agnostic (Intel, AMD, NVIDIA, ARM). The Go binary is pure-Go + `modernc.org/sqlite` (no cgo) and builds for `amd64`, `arm64`, etc. AI runs on OpenRouter, so no local GPU/NPU is required. On non-wlroots compositors (KDE, GNOME), set `capture_command` — e.g. `"gnome-screenshot -f /dev/stdout"` or a small wrapper.
+
+## MCP / agent access
+
+`dayflow mcp` is a stdio MCP server exposing `get_timeline`, `get_status`,
+`search_journal`, `get_events`, `get_usage`. See [AGENTS.md](AGENTS.md) for the
+agent contract (read rules, schema, behavior).
+
+```sh
+claude mcp add dayflow -- ~/.local/bin/dayflow mcp
+```
 
 ## Testing
 
