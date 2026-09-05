@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -73,8 +74,11 @@ type Card struct {
 
 // mergeCards folds adjacent blocks with the same dominant app into cards.
 func mergeCards(blocks []Block) []Card {
+	sorted := make([]Block, len(blocks))
+	copy(sorted, blocks)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start.Before(sorted[j].Start) })
 	var out []Card
-	for _, b := range blocks {
+	for _, b := range sorted {
 		if n := len(out); n > 0 && b.App != "" && out[n-1].App == b.App && b.Category == out[n-1].Category {
 			out[n-1].End = b.End
 			out[n-1].EndStr = b.EndStr

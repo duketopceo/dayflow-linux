@@ -170,7 +170,7 @@ func TestSummarizePendingEndToEnd(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("summarized %d blocks, want 1", n)
 	}
-	blocks, err := blocksForDay(db, start)
+	blocks, err := blocksForDay(db, start, false)
 	if err != nil || len(blocks) != 1 {
 		t.Fatalf("blocks=%v err=%v", blocks, err)
 	}

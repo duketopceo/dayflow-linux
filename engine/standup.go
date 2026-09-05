@@ -14,11 +14,11 @@ func generateStandup(db *sql.DB, cfg Config, asJSON bool) (string, map[string]an
 	yesterday := time.Now().AddDate(0, 0, -1)
 	today := time.Now()
 
-	yBlocks, err := blocksForDay(db, yesterday)
+	yBlocks, err := blocksForDay(db, yesterday, false)
 	if err != nil {
 		return "", nil, err
 	}
-	tBlocks, err := blocksForDay(db, today)
+	tBlocks, err := blocksForDay(db, today, false)
 	if err != nil {
 		return "", nil, err
 	}

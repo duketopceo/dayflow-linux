@@ -198,12 +198,16 @@ type Block struct {
 	FrameCount int        `json:"frame_count"`
 }
 
-func blocksForDay(db *sql.DB, day time.Time) ([]Block, error) {
+func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
 	end := start.Add(24 * time.Hour)
-	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities FROM blocks
-	  WHERE start_ts >= ? AND start_ts < ? AND status='done' ORDER BY start_ts`,
-		start.Unix(), end.Unix())
+	order := "ASC"
+	if desc {
+		order = "DESC"
+	}
+	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities FROM blocks
+	  WHERE start_ts >= ? AND start_ts < ? AND status='done' ORDER BY start_ts ` + order
+	rows, err := db.Query(q, start.Unix(), end.Unix())
 	if err != nil {
 		return nil, err
 	}

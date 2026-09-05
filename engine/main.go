@@ -389,7 +389,7 @@ func printTimeline(cfg Config, day time.Time, asJSON bool) {
 	db, err := openDB()
 	fatal(err)
 	defer db.Close()
-	blocks, err := blocksForDay(db, day)
+	blocks, err := blocksForDay(db, day, true)
 	fatal(err)
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
