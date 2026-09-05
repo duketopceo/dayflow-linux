@@ -26,10 +26,13 @@ Engine:
 
 Query:
   today [--json]      Print today's timeline
-  day <YYYY-MM-DD> [--json]
+  day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
   blocks [--json]     List blocks that failed summarization
   standup [--json]    Generate a standup update from yesterday/today
+  standup draft [--date YYYY-MM-DD]   Print the saved standup draft as JSON
+  standup save [--date D] [--highlights S] [--tasks S] [--blockers S]
+               [--priorities S]       Save the editable standup draft
   insights [day|week|month] [--json]  Focus, category, app, and distraction analytics
   review [day|week|month] [--json]  AI-generated weekly review with corrections and advice
 
@@ -82,6 +85,19 @@ func hasFlag(args []string, f string) bool {
 		}
 	}
 	return false
+}
+
+// flagValue returns the value following a `--name value` or `--name=value` flag.
+func flagValue(args []string, name string) string {
+	for i, a := range args {
+		if a == name && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(a, name+"=") {
+			return a[len(name)+1:]
+		}
+	}
+	return ""
 }
 
 func main() {
@@ -137,7 +153,15 @@ func main() {
 			}
 		}
 		if d.IsZero() {
-			usage()
+			if hasFlag(args, "--grid") {
+				d = time.Now()
+			} else {
+				usage()
+			}
+		}
+		if hasFlag(args, "--grid") {
+			printDailyGrid(cfg, d, jsonOut)
+			break
 		}
 		printTimeline(cfg, d, jsonOut)
 
@@ -284,6 +308,49 @@ func main() {
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
+		// standup draft|save — subcommand is the first positional arg.
+		var sub string
+		var rest []string
+		for i, a := range args {
+			if i == 0 && a[0] != '-' {
+				sub = a
+			} else {
+				rest = append(rest, a)
+			}
+		}
+		today := time.Now().Format("2006-01-02")
+		switch sub {
+		case "draft", "load":
+			date := flagValue(rest, "--date")
+			if date == "" {
+				date = today
+			}
+			d, err := loadStandupDraft(db, date)
+			fatal(err)
+			json.NewEncoder(os.Stdout).Encode(d)
+			return
+		case "save":
+			date := flagValue(rest, "--date")
+			if date == "" {
+				date = today
+			}
+			fatal(saveStandupDraft(db, date,
+				flagValue(rest, "--highlights"),
+				flagValue(rest, "--tasks"),
+				flagValue(rest, "--blockers"),
+				flagValue(rest, "--priorities")))
+			if jsonOut {
+				d, _ := loadStandupDraft(db, date)
+				json.NewEncoder(os.Stdout).Encode(d)
+			} else {
+				fmt.Println("saved standup draft for", date)
+			}
+			return
+		case "":
+			// normal standup generation below
+		default:
+			usage()
+		}
 		md, j, err := generateStandup(db, cfg, jsonOut)
 		fatal(err)
 		if jsonOut {
@@ -514,6 +581,38 @@ func printTimeline(cfg Config, day time.Time, asJSON bool) {
 			fmt.Printf("    • %s: %s [%s]\n", appDisplayName(a.App), a.Title, catDisplay(a.Category))
 		}
 	}
+}
+
+// printDailyGrid renders the daily workflow grid (day --grid): JSON for the
+// panel, or a compact text grid for the terminal.
+func printDailyGrid(cfg Config, day time.Time, asJSON bool) {
+	db, err := openDB()
+	fatal(err)
+	defer db.Close()
+	wf, err := generateDailyWorkflow(db, cfg, day)
+	fatal(err)
+	if asJSON {
+		json.NewEncoder(os.Stdout).Encode(wf)
+		return
+	}
+	fmt.Printf("== %s — daily workflow (%d min slots) ==\n",
+		day.Format("Monday, 2 January 2006"), wf.SlotMinutes)
+	if len(wf.Slots) == 0 {
+		fmt.Println("(no summarized blocks)")
+		return
+	}
+	for _, s := range wf.Slots {
+		if s.Category == "" {
+			fmt.Printf("%s  ·\n", s.Time)
+		} else {
+			fmt.Printf("%s  %-14s %s\n", s.Time, s.Category, s.Title)
+		}
+	}
+	fmt.Println()
+	for _, c := range wf.Categories {
+		fmt.Printf("%-14s %s\n", c.Display, fmtDur(c.Minutes))
+	}
+	fmt.Printf("total tracked: %s\n", fmtDur(wf.TotalMinutes))
 }
 
 func printStatus(cfg Config, asJSON bool) {

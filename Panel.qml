@@ -30,6 +30,9 @@ Panel {
   property var configDraft: ({})
   property bool configLoaded: false
   property var standup: ({ yesterday: { date: "", total_minutes: 0, entries: [] }, today: { date: "", total_minutes: 0, entries: [] } })
+  property var draft: ({ date: "", highlights: "", tasks: "", blockers: "", priorities: "" })
+  property bool draftDirty: false
+  property var workflow: ({ date: "", slot_minutes: 15, total_minutes: 0, slots: [], categories: [] })
   property var insights: ({ total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, categories: [], apps: [], top_distractions: [], focus_blocks: [], days: 0 })
   property var weekBlocks: []
   property string weekStart: ""
@@ -140,6 +143,7 @@ Panel {
   function loadTimeline() {
     timelineProc.command = ["dayflow", "timeline", "--json", dayflow.viewDateStr()]
     if (!timelineProc.running) timelineProc.running = true
+    dayflow.loadWorkflow()
   }
 
   // Merge consecutive blocks about the same thing (same title, or same
@@ -231,7 +235,42 @@ Panel {
     try {
       var d = JSON.parse(raw)
       dayflow.standup = d
+      if (d.draft && !dayflow.draftDirty) {
+        dayflow.draft = d.draft
+      }
     } catch (e) {}
+  }
+
+  function applyWorkflow(raw) {
+    try {
+      var d = JSON.parse(raw)
+      dayflow.workflow = d
+    } catch (e) {
+      dayflow.workflow = ({ date: "", slot_minutes: 15, total_minutes: 0, slots: [], categories: [] })
+    }
+  }
+
+  function todayStr() {
+    var d = new Date()
+    var m = ("0" + (d.getMonth() + 1)).slice(-2)
+    var dd = ("0" + d.getDate()).slice(-2)
+    return d.getFullYear() + "-" + m + "-" + dd
+  }
+
+  function saveDraft() {
+    var d = dayflow.draft || {}
+    draftSaveProc.command = ["dayflow", "standup", "save",
+      "--date", d.date || dayflow.todayStr(),
+      "--highlights", String(d.highlights || ""),
+      "--tasks", String(d.tasks || ""),
+      "--blockers", String(d.blockers || ""),
+      "--priorities", String(d.priorities || "")]
+    if (!draftSaveProc.running) draftSaveProc.running = true
+  }
+
+  function loadWorkflow() {
+    gridProc.command = ["dayflow", "day", dayflow.viewDateStr(), "--grid", "--json"]
+    if (!gridProc.running) gridProc.running = true
   }
 
   function applyInsights(raw) {
@@ -474,6 +513,33 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyStandup(text)
+    }
+  }
+
+  Process {
+    id: gridProc
+    command: ["dayflow", "day", "--grid", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyWorkflow(text)
+    }
+  }
+
+  Process {
+    id: draftSaveProc
+    command: ["dayflow", "standup", "save"]
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: { if (text.trim() !== "") dayflow.notice = text.trim() }
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        dayflow.draftDirty = false
+        dayflow.notice = "draft saved"
+        if (!standupFetchProc.running) standupFetchProc.running = true
+      } else {
+        dayflow.notice = "draft save failed"
+      }
     }
   }
 
@@ -810,9 +876,162 @@ Panel {
 
   Component {
     id: standupTab
-    Column {
+    Flickable {
       width: parent.width
-      spacing: Style.space(10)
+      implicitHeight: Math.min(suCol.implicitHeight, Style.space(420))
+      height: implicitHeight
+      contentHeight: suCol.implicitHeight
+      clip: true
+
+      Column {
+        id: suCol
+        width: parent.width
+        spacing: Style.space(10)
+
+      // ---- editable standup draft ----
+      Component {
+        id: draftField
+        Column {
+          property string label: ""
+          property string field: ""
+          width: parent ? parent.width : 0
+          spacing: Style.space(2)
+
+          Text {
+            text: label
+            color: dayflow.dim
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Rectangle {
+            width: parent.width
+            height: Math.min(fEdit.implicitHeight + Style.space(8), Style.space(72))
+            radius: Style.cornerRadius
+            color: dayflow.fgFill(0.04)
+            border.color: dayflow.fgFill(0.12)
+            clip: true
+
+            TextEdit {
+              id: fEdit
+              anchors.fill: parent
+              anchors.margins: Style.space(4)
+              text: dayflow.draft[field] || ""
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: TextEdit.Wrap
+              // Only user edits (focused field) mark the draft dirty — this
+              // keeps applyStandup() refreshes from clobbering in-progress text.
+              onTextChanged: {
+                if (fEdit.activeFocus) {
+                  dayflow.draft[field] = text
+                  dayflow.draftDirty = true
+                }
+              }
+            }
+          }
+        }
+      }
+
+      Rectangle {
+        width: parent.width
+        height: draftCol.implicitHeight + Style.space(16)
+        radius: Style.cornerRadius
+        color: dayflow.fgFill(0.04)
+        border.color: dayflow.fgFill(0.08)
+
+        Column {
+          id: draftCol
+          width: parent.width - Style.space(16)
+          anchors.centerIn: parent
+          spacing: Style.space(6)
+
+          Row {
+            width: parent.width
+
+            Text {
+              text: "Standup draft" + (dayflow.draft.date ? " · " + dayflow.draft.date : "")
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Text {
+              anchors.right: parent.right
+              visible: dayflow.draftDirty
+              text: "unsaved changes"
+              color: dayflow.dim
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Loader {
+            width: parent.width
+            height: item ? item.implicitHeight : 0
+            sourceComponent: draftField
+            onLoaded: { item.label = "Highlights"; item.field = "highlights" }
+          }
+
+          Loader {
+            width: parent.width
+            height: item ? item.implicitHeight : 0
+            sourceComponent: draftField
+            onLoaded: { item.label = "Tasks"; item.field = "tasks" }
+          }
+
+          Loader {
+            width: parent.width
+            height: item ? item.implicitHeight : 0
+            sourceComponent: draftField
+            onLoaded: { item.label = "Blockers"; item.field = "blockers" }
+          }
+
+          Loader {
+            width: parent.width
+            height: item ? item.implicitHeight : 0
+            sourceComponent: draftField
+            onLoaded: { item.label = "Priorities"; item.field = "priorities" }
+          }
+
+          Rectangle {
+            height: Style.space(28)
+            width: saveDraftText.implicitWidth + Style.space(16)
+            radius: Style.cornerRadius
+            color: mSaveDraft.containsMouse
+              ? dayflow.accentFill(0.12)
+              : "transparent"
+            border.color: dayflow.accentFill(0.5)
+
+            Text {
+              id: saveDraftText
+              anchors.centerIn: parent
+              text: draftSaveProc.running ? "Saving..." : "Save draft"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              id: mSaveDraft
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: dayflow.saveDraft()
+            }
+          }
+        }
+      }
+
+      // ---- daily workflow grid ----
+      Loader {
+        width: parent.width
+        height: item ? item.implicitHeight : 0
+        source: "DailyWorkflowGrid.qml"
+        property var panel: dayflow
+      }
 
       Text {
         visible: dayflow.standup.yesterday.entries.length === 0 && dayflow.standup.today.entries.length === 0
@@ -962,8 +1181,20 @@ Panel {
 
           Text {
             width: parent.width
-            text: "Nothing flagged — fill this in when you write your update."
-            color: dayflow.dim
+            text: dayflow.draft.blockers !== ""
+              ? dayflow.draft.blockers
+              : "Nothing flagged — fill this in when you write your update."
+            color: dayflow.draft.blockers !== "" ? dayflow.foreground : dayflow.dim
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.body
+            wrapMode: Text.WordWrap
+          }
+
+          Text {
+            visible: dayflow.draft.priorities !== ""
+            width: parent.width
+            text: "Priorities: " + dayflow.draft.priorities
+            color: dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
             wrapMode: Text.WordWrap
@@ -997,6 +1228,7 @@ Panel {
           }
         }
       }
+    }
     }
   }
 
