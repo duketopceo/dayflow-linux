@@ -46,7 +46,7 @@ dayflow retry                                  # reset failed blocks
 dayflow scrub <query>                          # delete blocks matching <query>
 dayflow pause|resume|toggle
 dayflow ignore <class> | ignore --active | unignore <class>
-dayflow config [set <k> <v>]
+dayflow config [--json] [set <k> <v>] [patch <json>]
 dayflow doctor
 ```
 
@@ -65,7 +65,8 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 ```sql
 frames(id, ts, path)                                     -- pending raw frames
 blocks(start_ts PK, end_ts, title, summary, category,    -- the journal
-       frame_count, status, error, created_at)
+       frame_count, status, error, created_at,
+       productive, activities)
 events(id, ts, type, detail)                             -- audit log
 api_calls(id, ts, block_start, model, frames_sent,       -- cost log
           prompt_tokens, completion_tokens, latency_ms, status, error)
@@ -75,8 +76,10 @@ api_calls(id, ts, block_start, model, frames_sent,       -- cost log
 `blocks.app` is the dominant window class; `blocks.attempts` counts summarize retries
 (cap 3, then `status='dead'`). `frames.app` records the focused window per frame.
 
-`category` is one of: coding, browsing, communication, writing, design, media,
-meetings, system, idle, other.
+`category` is one of the user-defined `categories` in config (defaults: coding,
+browsing, communication, writing, design, media, meetings, system, idle, personal, other).
+`productive` is an LLM-judged boolean for focus/distraction analytics; older rows fall
+back to the category/app heuristic.
 
 ## Behavior rules for agents
 
@@ -95,12 +98,17 @@ meetings, system, idle, other.
 `model`, `api_base_url`, `capture_interval_sec`, `block_minutes`, `frames_per_block`,
 `jpeg_quality`, `keep_frames`, `retention_days`, `max_storage_mb`,
 `auto_pause_locked`, `filter_inappropriate`, `ignore_apps`, `output`,
-`capture_command`, `openrouter_api_key`, `site_name`, `debug`.
+`capture_command`, `openrouter_api_key`, `site_name`, `debug`,
+`categories` (array of `{name, description, color?}`), and `classification_prompt`
+(extra free-form instructions prepended to every summarization prompt).
 
 `dayflow config` prints the config with the API key masked; `dayflow config set`
-still writes the real key. `provider` is a hint for which endpoint style is in
-use; the summarizer only sends `openrouter_api_key` to OpenRouter or `custom`
-endpoints, never to `local`/`mcp` endpoints.
+still writes the real key. `dayflow config --json` prints machine-readable JSON
+(with the key redacted). `dayflow config patch '<json-object>'` merges multiple
+keys atomically and is used by the Settings tab.
+`provider` is a hint for which endpoint style is in use; the summarizer only sends
+`openrouter_api_key` to OpenRouter or `custom` endpoints, never to `local`/`mcp`
+endpoints.
 
 `debug true` writes a verbose engine log to `~/.local/share/dayflow/debug.log`
 (captures, dedup skips, summarize calls with tokens/latency, retention runs,
