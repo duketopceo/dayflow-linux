@@ -53,6 +53,80 @@ CREATE TABLE IF NOT EXISTS api_calls (
   error             TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS api_calls_ts ON api_calls(ts);
+
+-- Conversations for the chat-with-your-journal feature.
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id         INTEGER PRIMARY KEY,
+  title      TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_conversations_updated ON chat_conversations(updated_at);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id              INTEGER PRIMARY KEY,
+  conversation_id INTEGER NOT NULL,
+  role            TEXT NOT NULL,
+  content         TEXT NOT NULL,
+  tool_calls      TEXT NOT NULL DEFAULT '',
+  created_at      INTEGER NOT NULL,
+  FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS chat_messages_conversation ON chat_messages(conversation_id);
+
+-- Editable standup drafts keyed by date (YYYY-MM-DD).
+CREATE TABLE IF NOT EXISTS standup_drafts (
+  date       TEXT PRIMARY KEY,
+  highlights TEXT NOT NULL DEFAULT '',
+  tasks      TEXT NOT NULL DEFAULT '',
+  blockers   TEXT NOT NULL DEFAULT '',
+  priorities TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);
+
+-- Journal beta: morning/evening notes and AI summary.
+CREATE TABLE IF NOT EXISTS journal_entries (
+  date       TEXT PRIMARY KEY,
+  morning    TEXT NOT NULL DEFAULT '',
+  evening    TEXT NOT NULL DEFAULT '',
+  summary    TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS day_goals (
+  id         INTEGER PRIMARY KEY,
+  date       TEXT NOT NULL,
+  goal       TEXT NOT NULL,
+  completed  INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS day_goals_date ON day_goals(date);
+
+-- Generic log for all LLM calls (chat, review, standup, etc.).
+CREATE TABLE IF NOT EXISTS llm_calls (
+  id                INTEGER PRIMARY KEY,
+  ts                INTEGER NOT NULL,
+  task              TEXT NOT NULL DEFAULT '',
+  provider          TEXT NOT NULL DEFAULT '',
+  model             TEXT NOT NULL DEFAULT '',
+  prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  latency_ms        INTEGER NOT NULL DEFAULT 0,
+  status            TEXT NOT NULL DEFAULT 'ok',
+  error             TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS llm_calls_ts ON llm_calls(ts);
+
+-- User edits to timeline blocks.
+CREATE TABLE IF NOT EXISTS block_edits (
+  id         INTEGER PRIMARY KEY,
+  start_ts   INTEGER NOT NULL,
+  field      TEXT NOT NULL,
+  old_value  TEXT NOT NULL DEFAULT '',
+  new_value  TEXT NOT NULL DEFAULT '',
+  edited_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS block_edits_start_ts ON block_edits(start_ts);
 `
 
 // migrations adds columns to existing databases; each is ignored if already applied.
