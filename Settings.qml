@@ -327,6 +327,15 @@ Flickable {
 
       Text {
         width: parent.width
+        text: "Currently using " + (dayflow ? dayflow.storageText : "—") + " of data."
+        color: dayflow.dim
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+
+      Text {
+        width: parent.width
         text: "Category buckets"
         color: dayflow.foreground
         font.family: dayflow.fontFamily
