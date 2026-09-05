@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -78,7 +79,7 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 		FocusBlocks:     []Block{},
 		TopDistractions: []insightDist{},
 	}
-	in.Days = int(end.Sub(start).Hours()/24) + 1
+	in.Days = int(math.Max(1, end.Sub(start).Hours()/24))
 	catMins := map[string]float64{}
 	catCount := map[string]int{}
 	appMins := map[string]float64{}

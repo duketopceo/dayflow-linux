@@ -1,6 +1,6 @@
 import QtQuick
 import Quickshell
-import qs.Ui
+import qs.Commons
 
 Column {
   id: root
@@ -9,7 +9,8 @@ Column {
   property string value: ""
   property string hint: ""
   property bool numeric: false
-  property var onEdited: function(text) {}
+
+  signal edited(string text)
 
   spacing: Style.space(2)
 
@@ -17,7 +18,7 @@ Column {
     visible: root.label !== ""
     width: parent.width
     text: root.label
-    color: root.dayflow ? root.dayflow.dim : Color.dim
+    color: root.dayflow ? root.dayflow.dim : Color.muted
     font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
     font.pixelSize: Style.font.caption
   }
@@ -26,15 +27,21 @@ Column {
     width: parent.width
     height: input.implicitHeight + Style.space(10)
     radius: Style.cornerRadius
-    color: root.dayflow ? root.dayflow.fgFill(0.04) : Color.fgFill(0.04)
-    border.color: root.dayflow ? root.dayflow.fgFill(0.12) : Color.fgFill(0.12)
+    color: root.dayflow
+      ? root.dayflow.fgFill(0.04)
+      : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.04)
+    border.color: root.dayflow
+      ? root.dayflow.fgFill(0.12)
+      : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
 
     Text {
       id: placeholder
       anchors.fill: parent
       anchors.margins: Style.space(5)
       text: root.hint
-      color: root.dayflow ? Qt.rgba(root.dayflow.foreground.r, root.dayflow.foreground.g, root.dayflow.foreground.b, 0.35) : Color.dim
+      color: root.dayflow
+        ? Qt.rgba(root.dayflow.foreground.r, root.dayflow.foreground.g, root.dayflow.foreground.b, 0.35)
+        : Color.muted
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.body
       visible: input.text === "" && !input.activeFocus
@@ -50,7 +57,7 @@ Column {
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.body
       inputMethodHints: root.numeric ? Qt.ImhDigitsOnly : Qt.ImhNone
-      onTextChanged: root.onEdited(text)
+      onTextChanged: root.edited(text)
     }
   }
 }

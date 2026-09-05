@@ -2118,11 +2118,16 @@ Panel {
             radius: Style.cornerRadius
             color: dayflow.btnBg(m3.containsMouse)
             border.color: dayflow.accentFill(0.5)
+            opacity: (dayflow.blocksPending > 0 || summarizeProc.running) ? 1 : 0.45
             Text {
               id: a3
               anchors.centerIn: parent
-              text: "Summarize"
-              color: dayflow.foreground
+              text: summarizeProc.running
+                ? "Summarizing..."
+                : (dayflow.blocksPending > 0
+                    ? "Summarize now (" + dayflow.blocksPending + " pending)"
+                    : "Summarize now")
+              color: (dayflow.blocksPending > 0 || summarizeProc.running) ? dayflow.foreground : dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
             }
@@ -2130,6 +2135,7 @@ Panel {
               id: m3
               anchors.fill: parent
               hoverEnabled: true
+              enabled: dayflow.blocksPending > 0 && !summarizeProc.running
               onClicked: { if (!summarizeProc.running) summarizeProc.running = true }
             }
           }
