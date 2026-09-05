@@ -309,7 +309,7 @@ func TestStandupAndInsights(t *testing.T) {
 	yesterday := time.Now().AddDate(0, 0, -1)
 	yStart := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 10, 0, 0, 0, yesterday.Location())
 	yEnd := yStart.Add(15 * time.Minute)
-	upsertBlockFull(db, yStart, yEnd, "Auth refactor", "Extracted token logic", "coding", "neovim", "", 3, 0, "done", "")
+	upsertBlockFull(db, yStart, yEnd, "Auth refactor", "Extracted token logic", "coding", "neovim", "", 3, 0, "done", "", nil)
 
 	md, _, err := generateStandup(db, cfg, false)
 	if err != nil {

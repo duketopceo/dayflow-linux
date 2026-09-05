@@ -11,11 +11,12 @@ import (
 // StandupEntry is one aggregated line of a standup: all the day's merged
 // cards for the same app + category folded into a single duration-ranked row.
 type StandupEntry struct {
-	Title    string `json:"title"`
-	Minutes  int    `json:"minutes"`
-	Category string `json:"category"`
-	App      string `json:"app"`
-	Span     string `json:"span"`
+	Title      string `json:"title"`
+	Minutes    int    `json:"minutes"`
+	Category   string `json:"category"`
+	App        string `json:"app"`
+	Span       string `json:"span"`
+	Productive bool   `json:"productive"`
 }
 
 // generateStandup returns a markdown standup update using yesterday's and
@@ -120,6 +121,9 @@ func standupEntries(blocks []Block) ([]StandupEntry, int) {
 			groups[key] = g
 		}
 		g.entry.Minutes += c.Minutes
+		if c.Productive {
+			g.entry.Productive = true
+		}
 		if c.Minutes >= g.bestMins {
 			g.bestMins = c.Minutes
 			g.entry.Title = c.Title

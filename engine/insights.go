@@ -93,15 +93,15 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 			appMins[b.App] += dur
 			appCount[b.App]++
 		}
-		if isDistractionCategory(b.Category) || isDistractionApp(b.App) {
-			in.DistractionMins += dur
-		} else {
+		if b.IsProductive() {
 			in.FocusMins += dur
+		} else {
+			in.DistractionMins += dur
 		}
 		if b.Category == "idle" {
 			in.IdleMins += dur
 		}
-		if dur >= 45 && !isDistractionCategory(b.Category) && !isDistractionApp(b.App) {
+		if dur >= 45 && b.IsProductive() {
 			in.FocusBlocks = append(in.FocusBlocks, b)
 		}
 	}
@@ -119,7 +119,7 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 	distApp := map[string]float64{}
 	distCount := map[string]int{}
 	for _, b := range blocks {
-		if isDistractionCategory(b.Category) || isDistractionApp(b.App) {
+		if !b.IsProductive() {
 			k := b.App
 			if k == "" {
 				k = b.Category

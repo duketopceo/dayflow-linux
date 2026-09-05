@@ -787,13 +787,15 @@ Panel {
                   width: durText.implicitWidth + Style.space(10)
                   height: durText.implicitHeight + Style.space(4)
                   radius: Style.cornerRadius
-                  color: dayflow.accentFill(0.12)
+                  color: (modelData.productive === true)
+                    ? dayflow.accentFill(0.12)
+                    : dayflow.fgFill(0.05)
 
                   Text {
                     id: durText
                     anchors.centerIn: parent
                     text: dayflow.fmtDur(modelData.minutes)
-                    color: dayflow.foreground
+                    color: (modelData.productive === true) ? dayflow.foreground : dayflow.dim
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
                     font.bold: true
@@ -807,7 +809,7 @@ Panel {
                   Text {
                     width: parent.width
                     text: modelData.title
-                    color: dayflow.foreground
+                    color: (modelData.productive === true) ? dayflow.foreground : dayflow.dim
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.body
                     wrapMode: Text.WordWrap

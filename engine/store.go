@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS blocks (
   frame_count INTEGER NOT NULL DEFAULT 0,
   status      TEXT NOT NULL DEFAULT 'done',
   error       TEXT NOT NULL DEFAULT '',
-  created_at  INTEGER NOT NULL
+  created_at  INTEGER NOT NULL,
+  productive  INTEGER DEFAULT NULL
 );
 
 -- Full audit log: every capture decision, pause change, summarizer run, error.
@@ -60,6 +61,7 @@ var migrations = []string{
 	`ALTER TABLE blocks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE blocks ADD COLUMN app TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE blocks ADD COLUMN activities TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE blocks ADD COLUMN productive INTEGER DEFAULT NULL`,
 }
 
 func migrate(db *sql.DB) {
@@ -146,14 +148,18 @@ func upsertBlock(db *sql.DB, start, end time.Time, title, summary, category stri
 }
 
 // upsertBlockFull additionally stores the dominant app and per-app activities JSON.
-func upsertBlockFull(db *sql.DB, start, end time.Time, title, summary, category, app, activities string, frameCount, attempts int, status, errStr string) error {
-	_, err := db.Exec(`INSERT INTO blocks(start_ts,end_ts,title,summary,category,app,activities,frame_count,attempts,status,error,created_at)
-	  VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+func upsertBlockFull(db *sql.DB, start, end time.Time, title, summary, category, app, activities string, frameCount, attempts int, status, errStr string, productive *bool) error {
+	prodArg := sql.NullBool{Valid: productive != nil}
+	if productive != nil {
+		prodArg.Bool = *productive
+	}
+	_, err := db.Exec(`INSERT INTO blocks(start_ts,end_ts,title,summary,category,app,activities,frame_count,attempts,status,error,created_at,productive)
+	  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 	  ON CONFLICT(start_ts) DO UPDATE SET end_ts=excluded.end_ts, title=excluded.title,
 	    summary=excluded.summary, category=excluded.category, app=excluded.app,
 	    activities=excluded.activities, frame_count=excluded.frame_count, attempts=excluded.attempts,
-	    status=excluded.status, error=excluded.error`,
-		start.Unix(), end.Unix(), title, summary, category, app, activities, frameCount, attempts, status, errStr, time.Now().Unix())
+	    status=excluded.status, error=excluded.error, productive=excluded.productive`,
+		start.Unix(), end.Unix(), title, summary, category, app, activities, frameCount, attempts, status, errStr, time.Now().Unix(), prodArg)
 	return err
 }
 
@@ -179,10 +185,11 @@ func resetFailedBlocks(db *sql.DB) (int64, error) {
 }
 
 type Activity struct {
-	App      string `json:"app"`
-	Title    string `json:"title"`
-	Summary  string `json:"summary"`
-	Category string `json:"category"`
+	App        string `json:"app"`
+	Title      string `json:"title"`
+	Summary    string `json:"summary"`
+	Category   string `json:"category"`
+	Productive *bool  `json:"productive,omitempty"`
 }
 
 type Block struct {
@@ -197,8 +204,18 @@ type Block struct {
 	Category   string     `json:"category"`
 	App        string     `json:"app"`
 	AppName    string     `json:"app_name"`
+	Productive *bool      `json:"productive,omitempty"`
 	Activities []Activity `json:"activities,omitempty"`
 	FrameCount int        `json:"frame_count"`
+}
+
+// IsProductive returns true for blocks the LLM flagged as productive, or
+// falls back to the legacy category/app heuristic for older blocks.
+func (b Block) IsProductive() bool {
+	if b.Productive != nil {
+		return *b.Productive
+	}
+	return !isDistractionCategory(b.Category) && !isDistractionApp(b.App)
 }
 
 func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
@@ -208,7 +225,7 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 	if desc {
 		order = "DESC"
 	}
-	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities FROM blocks
+	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive FROM blocks
 	  WHERE start_ts >= ? AND start_ts < ? AND status='done' ORDER BY start_ts ` + order
 	rows, err := db.Query(q, start.Unix(), end.Unix())
 	if err != nil {
@@ -220,8 +237,12 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 		var b Block
 		var s, e int64
 		var acts string
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts); err != nil {
+		var prod sql.NullBool
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod); err != nil {
 			return nil, err
+		}
+		if prod.Valid {
+			b.Productive = &prod.Bool
 		}
 		if acts != "" {
 			json.Unmarshal([]byte(acts), &b.Activities)

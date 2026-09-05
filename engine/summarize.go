@@ -26,7 +26,8 @@ Respond with ONLY a JSON object (no markdown fences) in this exact shape:
 {"title": "a descriptive 4-8 word title naming the concrete task, project, or topic — e.g. 'Debugging Hyprland audio routing in Omarchy', 'Reviewing PR feedback on dayflow panel', 'Reading OpenRouter docs for vision API'",
  "summary": "2-4 sentences describing what the user was actually doing, in second person past tense. Be specific and descriptive — name the project, files, apps, sites, and the goal or problem being worked on, e.g. 'You were debugging why the Dayflow panel buttons rendered white in Quickshell, editing Panel.qml and restarting the shell to verify the accent color fix.' — not generic like 'Coding and testing'.",
  "category": "one of: coding, browsing, communication, writing, design, media, meetings, system, idle, personal, other",
- "activities": [{"app": "window class or app name, lowercase, e.g. 'neovim' or 'firefox'", "title": "3-6 word descriptive title naming the specific thing done in that app", "summary": "1-2 sentences, second person past tense, concrete details", "category": "same enum"}]}
+ "productive": true or false — true if the user was actively making progress on work (coding, writing, debugging, configuring, planning a project, applying for a job, etc.), false if they were passively consuming, social browsing, idle, or in entertainment. For example: Ghostty with a terminal build is productive=true; YouTube/Reddit/music is productive=false; managing OpenRouter keys in a browser is productive=true because it is task work.",
+ "activities": [{"app": "window class or app name, lowercase, e.g. 'neovim' or 'firefox'", "title": "3-6 word descriptive title naming the specific thing done in that app", "summary": "1-2 sentences, second person past tense, concrete details", "category": "same enum", "productive": true or false}]}
 
 "activities" breaks the window into per-app segments in chronological order (usually 1-3 entries; 1 if the user stayed in one app).
 Be concrete and descriptive: name apps, sites, files, repos, doc pages, and the actual topic or task visible on screen. Avoid generic labels like "Software Development" or "Coding and Testing" — say WHAT was being developed or tested. If the screen was locked, idle, or unchanged the whole time, use category "idle" and return activities: [].
@@ -70,6 +71,7 @@ type blockResult struct {
 	Title      string     `json:"title"`
 	Summary    string     `json:"summary"`
 	Category   string     `json:"category"`
+	Productive *bool      `json:"productive,omitempty"`
 	Activities []Activity `json:"activities"`
 }
 
@@ -213,11 +215,25 @@ func containsSensitive(text string) bool {
 	return false
 }
 
+func fallbackProductive(res *blockResult) bool {
+	return !isDistractionCategory(res.Category)
+}
+
 func sanitizeResult(cfg Config, res *blockResult) {
-	if !cfg.FilterInappropriate {
+	if res == nil {
 		return
 	}
-	if res == nil {
+	if res.Productive == nil {
+		p := fallbackProductive(res)
+		res.Productive = &p
+	}
+	for i := range res.Activities {
+		if res.Activities[i].Productive == nil {
+			p := !isDistractionCategory(res.Activities[i].Category)
+			res.Activities[i].Productive = &p
+		}
+	}
+	if !cfg.FilterInappropriate {
 		return
 	}
 	dirty := containsSensitive(res.Title) ||
@@ -338,7 +354,7 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		if res.Title == "" && len(res.Activities) > 0 {
 			res.Title = res.Activities[0].Title
 		}
-		if err := upsertBlockFull(db, start, end, res.Title, res.Summary, res.Category, app, actsJSON, len(frames), 0, "done", ""); err != nil {
+		if err := upsertBlockFull(db, start, end, res.Title, res.Summary, res.Category, app, actsJSON, len(frames), 0, "done", "", res.Productive); err != nil {
 			return done, err
 		}
 		done++

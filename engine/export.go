@@ -10,7 +10,7 @@ import (
 )
 
 func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
-	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities FROM blocks
+	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive FROM blocks
 	  WHERE start_ts >= ? AND start_ts < ? AND status='done' ORDER BY start_ts`,
 		start.Unix(), end.Unix())
 	if err != nil {
@@ -22,8 +22,12 @@ func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
 		var b Block
 		var s, e int64
 		var acts string
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts); err != nil {
+		var prod sql.NullBool
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod); err != nil {
 			return nil, err
+		}
+		if prod.Valid {
+			b.Productive = &prod.Bool
 		}
 		if acts != "" {
 			json.Unmarshal([]byte(acts), &b.Activities)
@@ -65,18 +69,19 @@ func monthBounds(t time.Time) (time.Time, time.Time) {
 // Card is a merged activity card: consecutive blocks about the same thing
 // (same title, or same dominant app + category) folded into one span.
 type Card struct {
-	Start    time.Time `json:"-"`
-	End      time.Time `json:"-"`
-	StartStr string    `json:"start"`
-	EndStr   string    `json:"end"`
-	App      string    `json:"app"`
-	AppName  string    `json:"app_name"`
-	Title    string    `json:"title"`
-	Summary  string    `json:"summary"`
-	Category string    `json:"category"`
-	Blocks   int       `json:"blocks"`
-	Minutes  int       `json:"minutes"`
-	Children []Block   `json:"children"`
+	Start      time.Time `json:"-"`
+	End        time.Time `json:"-"`
+	StartStr   string    `json:"start"`
+	EndStr     string    `json:"end"`
+	App        string    `json:"app"`
+	AppName    string    `json:"app_name"`
+	Title      string    `json:"title"`
+	Summary    string    `json:"summary"`
+	Category   string    `json:"category"`
+	Productive bool      `json:"productive"`
+	Blocks     int       `json:"blocks"`
+	Minutes    int       `json:"minutes"`
+	Children   []Block   `json:"children"`
 }
 
 // mergeCards folds adjacent blocks with the same title or the same dominant
@@ -96,6 +101,7 @@ func mergeCards(blocks []Block) []Card {
 			out[n-1].EndStr = b.EndStr
 			out[n-1].Blocks++
 			out[n-1].Minutes += mins
+			out[n-1].Productive = out[n-1].Productive || b.IsProductive()
 			out[n-1].Title = b.Title
 			out[n-1].Summary = b.Summary
 			out[n-1].Children = append(out[n-1].Children, b)
@@ -104,7 +110,7 @@ func mergeCards(blocks []Block) []Card {
 		out = append(out, Card{
 			Start: b.Start, End: b.End, StartStr: b.StartStr, EndStr: b.EndStr,
 			App: b.App, AppName: b.AppName, Title: b.Title, Summary: b.Summary,
-			Category: b.Category, Blocks: 1, Minutes: mins, Children: []Block{b},
+			Category: b.Category, Productive: b.IsProductive(), Blocks: 1, Minutes: mins, Children: []Block{b},
 		})
 	}
 	return out
@@ -128,15 +134,19 @@ func markdownTimeline(blocks []Block, title string) string {
 		if c.AppName != "" {
 			app = " · " + c.AppName
 		}
+		focus := ""
+		if c.Productive {
+			focus = " ⚡"
+		}
 		if c.Blocks > 1 {
-			fmt.Fprintf(&b, "- **%s–%s — %s** `[%s]`%s _(%s, %d blocks)_\n  %s\n",
-				c.StartStr, c.EndStr, c.Title, catDisplay(c.Category), app, fmtDur(c.Minutes), c.Blocks, c.Summary)
+			fmt.Fprintf(&b, "- **%s–%s — %s** `[%s]`%s%s _(%s, %d blocks)_\n  %s\n",
+				c.StartStr, c.EndStr, c.Title, catDisplay(c.Category), app, focus, fmtDur(c.Minutes), c.Blocks, c.Summary)
 			for _, ch := range c.Children {
 				fmt.Fprintf(&b, "  - %s — %s\n", ch.StartStr, ch.Title)
 			}
 		} else {
-			fmt.Fprintf(&b, "- **%s–%s — %s** `[%s]`%s\n  %s\n",
-				c.StartStr, c.EndStr, c.Title, catDisplay(c.Category), app, c.Summary)
+			fmt.Fprintf(&b, "- **%s–%s — %s** `[%s]`%s%s\n  %s\n",
+				c.StartStr, c.EndStr, c.Title, catDisplay(c.Category), app, focus, c.Summary)
 		}
 	}
 	if len(blocks) == 0 {
