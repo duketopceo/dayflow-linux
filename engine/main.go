@@ -455,7 +455,9 @@ func printFailed(cfg Config, asJSON bool) {
 	for rows.Next() {
 		var ts int64
 		var e string
-		rows.Scan(&ts, &e)
+		if err := rows.Scan(&ts, &e); err != nil {
+			continue
+		}
 		out = append(out, F{time.Unix(ts, 0).Local().Format("2006-01-02 15:04"), e})
 	}
 	if asJSON {
@@ -494,7 +496,9 @@ func printEvents(cfg Config, args []string, asJSON bool) {
 	for rows.Next() {
 		var ts int64
 		var t, d string
-		rows.Scan(&ts, &t, &d)
+		if err := rows.Scan(&ts, &t, &d); err != nil {
+			continue
+		}
 		out = append(out, E{time.Unix(ts, 0).Local().Format("2006-01-02 15:04:05"), t, d})
 	}
 	if asJSON {
@@ -522,7 +526,9 @@ func printSearch(query string, asJSON bool) {
 	for rows.Next() {
 		var s, e int64
 		var m M
-		rows.Scan(&s, &e, &m.Title, &m.Summary, &m.Category, &m.App)
+		if err := rows.Scan(&s, &e, &m.Title, &m.Summary, &m.Category, &m.App); err != nil {
+			continue
+		}
 		m.Start = time.Unix(s, 0).Local().Format("2006-01-02 15:04")
 		m.End = time.Unix(e, 0).Local().Format("15:04")
 		out = append(out, m)

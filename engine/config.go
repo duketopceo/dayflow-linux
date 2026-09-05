@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,7 +13,7 @@ import (
 type Config struct {
 	OpenRouterAPIKey   string   `json:"openrouter_api_key"`
 	Model              string   `json:"model"`
-	APIBaseURL         string   `json:"api_base_url"`    // OpenAI-compatible endpoint; empty = OpenRouter
+	APIBaseURL         string   `json:"api_base_url"` // OpenAI-compatible endpoint; empty = OpenRouter
 	CaptureIntervalSec int      `json:"capture_interval_sec"`
 	BlockMinutes       int      `json:"block_minutes"`
 	FramesPerBlock     int      `json:"frames_per_block"`
@@ -25,6 +26,24 @@ type Config struct {
 	SiteName           string   `json:"site_name"`       // OpenRouter X-Title
 	MaxStorageMB       int      `json:"max_storage_mb"`  // 0 = unlimited frame storage
 	AutoPauseLocked    bool     `json:"auto_pause_locked"`
+}
+
+// normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1
+// when the URL has no path so that Ollama/LM Studio endpoints work out of the box.
+func normalizeAPIBaseURL(u string) string {
+	u = strings.TrimSpace(u)
+	if u == "" {
+		return ""
+	}
+	u = strings.TrimSuffix(u, "/")
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return u
+	}
+	if parsed.Path == "" || parsed.Path == "/" {
+		parsed.Path = "/v1"
+	}
+	return parsed.String()
 }
 
 func configDir() string {
@@ -103,6 +122,7 @@ func loadConfig() (Config, error) {
 	if cfg.Model == "" {
 		cfg.Model = "google/gemma-4-31b-it"
 	}
+	cfg.APIBaseURL = normalizeAPIBaseURL(cfg.APIBaseURL)
 	if cfg.SiteName == "" {
 		cfg.SiteName = "dayflow-linux"
 	}
@@ -150,7 +170,7 @@ func setConfigValue(key, value string) error {
 	case "model":
 		cfg.Model = value
 	case "api_base_url":
-		cfg.APIBaseURL = strings.TrimSpace(value)
+		cfg.APIBaseURL = normalizeAPIBaseURL(value)
 	case "openrouter_api_key":
 		cfg.OpenRouterAPIKey = value
 	case "capture_interval_sec", "block_minutes", "frames_per_block", "jpeg_quality", "retention_days":

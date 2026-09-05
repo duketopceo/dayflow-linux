@@ -273,8 +273,13 @@ func framesBefore(db *sql.DB, cutoff time.Time) ([]string, error) {
 	var paths []string
 	for rows.Next() {
 		var p string
-		rows.Scan(&p)
+		if err := rows.Scan(&p); err != nil {
+			continue
+		}
 		paths = append(paths, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	rows.Close()
 	_, err = db.Exec(`DELETE FROM frames WHERE ts < ?`, cutoff.Unix())

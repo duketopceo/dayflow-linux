@@ -68,15 +68,46 @@ func isIgnored(cfg Config, class string) bool {
 	return false
 }
 
-// screenLocked uses loginctl to detect whether the current session is locked.
-// It is best-effort: if loginctl is unavailable it returns false.
+// screenLocked uses loginctl to detect whether the current graphical session is locked.
+// It is best-effort: if loginctl is unavailable or the session cannot be identified,
+// it returns false so capture continues.
 func screenLocked() bool {
-	// prefer loginctl; it works under systemd user sessions regardless of compositor.
-	out, err := exec.Command("loginctl", "show-session", os.Getenv("XDG_SESSION_ID"), "--property=LockedHint").Output()
-	if err != nil || len(out) == 0 {
-		return false
+	sessions := []string{os.Getenv("XDG_SESSION_ID")}
+	if sessions[0] == "" {
+		// Fall back to the active graphical session for the current user.
+		out, err := exec.Command("loginctl", "list-sessions", "--no-legend").Output()
+		if err != nil {
+			return false
+		}
+		user := os.Getenv("USER")
+		for _, line := range strings.Split(string(out), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 4 {
+				continue
+			}
+			// fields: ID UID USER SEAT [TTY ...]
+			if fields[2] == user && fields[3] != "-" {
+				sessions = append(sessions, fields[0])
+			}
+		}
+		if len(sessions) == 1 {
+			return false
+		}
+		sessions = sessions[1:]
 	}
-	return strings.Contains(string(out), "yes")
+	for _, sid := range sessions {
+		if sid == "" {
+			continue
+		}
+		out, err := exec.Command("loginctl", "show-session", sid, "--property=LockedHint").Output()
+		if err != nil || len(out) == 0 {
+			continue
+		}
+		if strings.Contains(string(out), "yes") {
+			return true
+		}
+	}
+	return false
 }
 
 // ahash computes a 16x16 grayscale average-hash of the image.
@@ -181,8 +212,12 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *uint64) err
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		return err
 	}
+	if err := insertFrameApp(db, now, path, cls); err != nil {
+		os.Remove(path)
+		return err
+	}
 	logEvent(db, "capture_saved", path)
-	return insertFrameApp(db, now, path, cls)
+	return nil
 }
 
 // runRetention deletes frames and old log rows past the retention window.
@@ -234,7 +269,9 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 		for rows.Next() && total > limit {
 			var ts int64
 			var p string
-			rows.Scan(&ts, &p)
+			if err := rows.Scan(&ts, &p); err != nil {
+				continue
+			}
 			done, err := blockExists(db, blockStart(time.Unix(ts, 0), cfg.BlockMinutes))
 			if err != nil || !done {
 				continue

@@ -16,15 +16,15 @@ type insightDist struct {
 }
 
 type insights struct {
-	TotalMins      float64
-	FocusMins      float64
+	TotalMins       float64
+	FocusMins       float64
 	DistractionMins float64
-	IdleMins       float64
-	Categories     []insightDist
-	Apps           []insightDist
-	FocusBlocks    []Block
+	IdleMins        float64
+	Categories      []insightDist
+	Apps            []insightDist
+	FocusBlocks     []Block
 	TopDistractions []insightDist
-	Days           int
+	Days            int
 }
 
 func (i insights) JSON() map[string]any {

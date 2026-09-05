@@ -115,7 +115,9 @@ func mcpCall(db *sql.DB, cfg Config, name string, args map[string]any) (any, err
 		for rows.Next() {
 			var s, e int64
 			var t, su, c string
-			rows.Scan(&s, &e, &t, &su, &c)
+			if err := rows.Scan(&s, &e, &t, &su, &c); err != nil {
+				continue
+			}
 			out = append(out, map[string]string{
 				"start": time.Unix(s, 0).Local().Format("2006-01-02 15:04"),
 				"title": t, "summary": su, "category": c,
@@ -137,7 +139,9 @@ func mcpCall(db *sql.DB, cfg Config, name string, args map[string]any) (any, err
 		for rows.Next() {
 			var ts int64
 			var t, d string
-			rows.Scan(&ts, &t, &d)
+			if err := rows.Scan(&ts, &t, &d); err != nil {
+				continue
+			}
 			out = append(out, map[string]string{
 				"time": time.Unix(ts, 0).Local().Format("2006-01-02 15:04:05"), "type": t, "detail": d,
 			})
@@ -146,9 +150,11 @@ func mcpCall(db *sql.DB, cfg Config, name string, args map[string]any) (any, err
 
 	case "get_usage":
 		var calls, pt, ct, okn, failed int
-		db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+		if err := db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
 		  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
-		  FROM api_calls`).Scan(&calls, &pt, &ct, &okn, &failed)
+		  FROM api_calls`).Scan(&calls, &pt, &ct, &okn, &failed); err != nil {
+			return nil, err
+		}
 		return map[string]any{"api_calls": calls, "ok": okn, "failed": failed,
 			"prompt_tokens": pt, "completion_tokens": ct}, nil
 

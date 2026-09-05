@@ -51,6 +51,16 @@ dayflow models     # list vision-capable models for your key
 
 Or set the key manually: `dayflow config set openrouter_api_key sk-or-...`, `OPENROUTER_API_KEY` env, or `~/.config/openrouter/keys.json` (auto-detected). Use a dedicated OpenRouter key if you want separate spend tracking.
 
+### Using a local model (Ollama / LM Studio)
+
+```sh
+dayflow config set api_base_url http://localhost:11434/v1
+dayflow config set model llama3.2-vision   # or any vision model served by your endpoint
+dayflow config set openrouter_api_key ""     # local endpoints usually need no key
+```
+
+Dayflow uses the OpenAI-compatible `/chat/completions` endpoint. Any local server that accepts base64 `image_url` payloads works.
+
 ## Install the plugin
 
 ```sh
@@ -66,6 +76,19 @@ omarchy plugin enable io.github.duketopceo.dayflow
 ```
 
 Bar widget: recording indicator; left-click opens the timeline panel, right-click pauses/resumes. The panel shows today's blocks, engine stats, the ignore list, and pause / ignore-focused-app / summarize-now / standup / insights controls.
+
+## Uninstall
+
+```sh
+omarchy plugin disable io.github.duketopceo.dayflow
+omarchy plugin remove io.github.duketopceo.dayflow   # or rm -rf ~/.config/omarchy/plugins/io.github.duketopceo.dayflow
+dayflow uninstall                                       # removes systemd user units
+dayflow pause
+rm -rf ~/.local/share/dayflow                         # wipes all captured frames and the journal
+rm -rf ~/.config/dayflow                              # wipes config
+```
+
+Uninstalling leaves your data in place until you `rm -rf` it, so you can back out or migrate first.
 
 ## CLI
 

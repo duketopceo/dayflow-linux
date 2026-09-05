@@ -27,11 +27,11 @@ type tuiModel struct {
 }
 
 var (
-	tuiAccent  = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
-	tuiDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	tuiBold    = lipgloss.NewStyle().Bold(true)
-	tuiSel     = lipgloss.NewStyle().Background(lipgloss.Color("8")).Foreground(lipgloss.Color("15"))
-	tuiCat     = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	tuiAccent = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
+	tuiDim    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	tuiBold   = lipgloss.NewStyle().Bold(true)
+	tuiSel    = lipgloss.NewStyle().Background(lipgloss.Color("8")).Foreground(lipgloss.Color("15"))
+	tuiCat    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 )
 
 func (m tuiModel) loadRange() (tuiModel, tea.Cmd) {

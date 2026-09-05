@@ -82,6 +82,10 @@ func apiKey(cfg Config) string {
 	return cfg.OpenRouterAPIKey
 }
 
+func useOpenRouterHeaders(cfg Config) bool {
+	return cfg.APIBaseURL == "" || strings.Contains(cfg.APIBaseURL, "openrouter.ai")
+}
+
 func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error) {
 	if cfg.APIBaseURL == "" && apiKey(cfg) == "" {
 		return nil, 0, 0, fmt.Errorf("no API key: set openrouter_api_key in %s or OPENROUTER_API_KEY", configPath())
@@ -114,7 +118,7 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 		req.Header.Set("Authorization", "Bearer "+apiKey(cfg))
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if cfg.APIBaseURL == "" {
+	if useOpenRouterHeaders(cfg) {
 		req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
 		req.Header.Set("X-Title", cfg.SiteName)
 	}
@@ -122,22 +126,22 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, fmt.Errorf("api request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != 200 {
-		return nil, 0, 0, fmt.Errorf("openrouter %d: %s", resp.StatusCode, truncate(string(body), 300))
+		return nil, 0, 0, fmt.Errorf("api %d: %s", resp.StatusCode, truncate(string(body), 300))
 	}
 	var or orResponse
 	if err := json.Unmarshal(body, &or); err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, fmt.Errorf("api response was not valid JSON: %w", err)
 	}
 	if or.Error != nil {
-		return nil, 0, 0, fmt.Errorf("openrouter: %s", or.Error.Message)
+		return nil, 0, 0, fmt.Errorf("api error: %s", or.Error.Message)
 	}
 	if len(or.Choices) == 0 {
-		return nil, 0, 0, fmt.Errorf("openrouter: no choices")
+		return nil, 0, 0, fmt.Errorf("api returned no choices")
 	}
 	text := stripFences(or.Choices[0].Message.Content)
 	var res blockResult
