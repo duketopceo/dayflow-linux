@@ -517,10 +517,10 @@ Panel {
           spacing: Style.space(6)
 
           Rectangle {
-            height: Style.space(24)
-            width: Style.space(24)
+            height: Style.space(28)
+            width: Style.space(28)
             radius: Style.cornerRadius
-            color: dPrev.containsMouse ? dayflow.accentFill(0.12) : "transparent"
+            color: dPrev.containsMouse ? dayflow.accentFill(0.12) : dayflow.fgFill(0.04)
             border.color: dayflow.accentFill(0.4)
             Text {
               anchors.centerIn: parent
@@ -533,6 +533,7 @@ Panel {
               id: dPrev
               anchors.fill: parent
               hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
               onClicked: dayflow.goDay(-1)
             }
           }
@@ -547,10 +548,10 @@ Panel {
           }
 
           Rectangle {
-            height: Style.space(24)
-            width: Style.space(24)
+            height: Style.space(28)
+            width: Style.space(28)
             radius: Style.cornerRadius
-            color: dNext.containsMouse ? dayflow.accentFill(0.12) : "transparent"
+            color: dNext.containsMouse ? dayflow.accentFill(0.12) : dayflow.fgFill(0.04)
             border.color: dayflow.accentFill(0.4)
             opacity: dayflow.dayOffset < 0 ? 1 : 0.4
             Text {
@@ -564,6 +565,7 @@ Panel {
               id: dNext
               anchors.fill: parent
               hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
               enabled: dayflow.dayOffset < 0
               onClicked: dayflow.goDay(1)
             }
@@ -572,13 +574,16 @@ Panel {
           Text {
             visible: dayflow.dayOffset !== 0
             text: "back to today"
-            color: dayflow.dim
+            color: backToday.containsMouse ? dayflow.foreground : dayflow.dim
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.caption
+            font.underline: backToday.containsMouse
             anchors.verticalCenter: parent.verticalCenter
             MouseArea {
+              id: backToday
               anchors.fill: parent
               hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
               onClicked: { dayflow.dayOffset = 0; dayflow.loadTimeline() }
             }
           }
@@ -603,11 +608,22 @@ Panel {
             radius: Style.cornerRadius
             color: dayflow.fgFill(0.04)
             border.color: dayflow.fgFill(0.08)
+            clip: true
+
+            // Category-colored edge so spans scan by activity type.
+            Rectangle {
+              anchors.left: parent.left
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              width: Style.space(3)
+              color: dayflow.categoryColor(modelData.category)
+            }
 
             Column {
               id: cardCol
-              width: parent.width - Style.space(16)
+              width: parent.width - Style.space(22)
               anchors.centerIn: parent
+              anchors.horizontalCenterOffset: Style.space(3)
               spacing: Style.space(4)
 
               Row {
@@ -942,25 +958,51 @@ Panel {
               font.bold: true
             }
 
-            Text {
-              text: "Tracked: " + dayflow.fmtHours(dayflow.insights.total_minutes) + " hr"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-            }
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
 
-            Text {
-              text: "Focus: " + dayflow.fmtHours(dayflow.insights.focus_minutes) + " hr"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-            }
+              Repeater {
+                model: [
+                  { label: "Tracked", value: dayflow.fmtHours(dayflow.insights.total_minutes) + " hr", dimmed: false },
+                  { label: "Focus", value: dayflow.fmtHours(dayflow.insights.focus_minutes) + " hr", dimmed: false },
+                  { label: "Distracted / idle", value: dayflow.fmtHours(dayflow.insights.distraction_minutes + dayflow.insights.idle_minutes) + " hr", dimmed: true }
+                ]
 
-            Text {
-              text: "Distraction / idle: " + dayflow.fmtHours(dayflow.insights.distraction_minutes + dayflow.insights.idle_minutes) + " hr"
-              color: dayflow.dim
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
+                delegate: Rectangle {
+                  width: (parent.width - 2 * parent.spacing) / 3
+                  height: tileCol.implicitHeight + Style.space(10)
+                  radius: Style.cornerRadius
+                  color: dayflow.fgFill(0.04)
+                  border.color: dayflow.fgFill(0.08)
+
+                  Column {
+                    id: tileCol
+                    anchors.centerIn: parent
+                    width: parent.width - Style.space(12)
+                    spacing: Style.space(1)
+
+                    Text {
+                      width: parent.width
+                      text: modelData.label
+                      color: dayflow.dim
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
+
+                    Text {
+                      width: parent.width
+                      text: modelData.value
+                      color: modelData.dimmed ? dayflow.dim : dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                      elide: Text.ElideRight
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -1022,6 +1064,30 @@ Panel {
                       radius: 2
                       color: dayflow.cellColor(dayflow.categoryForHour(index, modelData))
                     }
+                  }
+                }
+              }
+            }
+
+            // Hour tick labels under the grid (aligned to cell boundaries).
+            Row {
+              width: parent.width
+              spacing: Style.space(2)
+
+              Item { width: Style.space(28); height: 1 }
+
+              Item {
+                width: parent.width - Style.space(28) - Style.space(2)
+                height: Style.space(11)
+
+                Repeater {
+                  model: [0, 6, 12, 18]
+                  delegate: Text {
+                    x: (parent.width / 24) * modelData
+                    text: modelData + "h"
+                    color: dayflow.dim
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
                   }
                 }
               }
@@ -1269,14 +1335,26 @@ Panel {
 
           Column {
             width: parent.width - toggleBtn.width - expandBtn.width - Style.space(6) - parent.spacing
-            spacing: 0
+            spacing: Style.space(2)
 
-            Text {
-              text: "Dayflow"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.subtitle
-              font.bold: true
+            Row {
+              spacing: Style.space(6)
+
+              Rectangle {
+                width: Style.space(7)
+                height: Style.space(7)
+                radius: width / 2
+                anchors.verticalCenter: parent.verticalCenter
+                color: dayflow.paused ? Color.urgent : Color.accent
+              }
+
+              Text {
+                text: "Dayflow"
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+              }
             }
 
             Text {
@@ -1319,15 +1397,15 @@ Panel {
             height: Style.space(28)
             width: tgl.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
-            color: mtgl.containsMouse
-              ? dayflow.accentFill(0.12)
-              : "transparent"
+            color: dayflow.paused
+              ? dayflow.accentFill(0.15)
+              : (mtgl.containsMouse ? dayflow.accentFill(0.12) : "transparent")
             border.color: dayflow.accentFill(0.5)
 
             Text {
               id: tgl
               anchors.centerIn: parent
-              text: dayflow.paused ? "Resume" : "Pause"
+              text: dayflow.paused ? "Resume capture" : "Pause"
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -1359,12 +1437,15 @@ Panel {
                 : (tabMouse.containsMouse
                     ? dayflow.accentFill(0.06)
                     : "transparent")
+              border.color: dayflow.currentTab === modelData
+                ? dayflow.accentFill(0.45)
+                : "transparent"
 
               Text {
                 id: tabLabel
                 anchors.centerIn: parent
                 text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
-                color: dayflow.foreground
+                color: dayflow.currentTab === modelData ? dayflow.foreground : dayflow.dim
                 font.bold: dayflow.currentTab === modelData
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1374,6 +1455,7 @@ Panel {
                 id: tabMouse
                 anchors.fill: parent
                 hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
                 onClicked: dayflow.currentTab = modelData
               }
             }
@@ -1421,33 +1503,11 @@ Panel {
 
         PanelSeparator { foreground: dayflow.foreground }
 
-        // ---- quick actions ----
+        // ---- quick actions (pause/resume lives in the header) ----
         Flow {
           width: parent.width - content.leftPadding - content.rightPadding
           height: implicitHeight
           spacing: Style.space(6)
-
-          Rectangle {
-            height: Style.space(26)
-            width: a1.implicitWidth + Style.space(16)
-            radius: Style.cornerRadius
-            color: dayflow.btnBg(m1.containsMouse)
-            border.color: dayflow.accentFill(0.5)
-            Text {
-              id: a1
-              anchors.centerIn: parent
-              text: dayflow.paused ? "Resume" : "Pause"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            MouseArea {
-              id: m1
-              anchors.fill: parent
-              hoverEnabled: true
-              onClicked: toggleProc.running = true
-            }
-          }
 
           Rectangle {
             height: Style.space(26)
@@ -1459,7 +1519,9 @@ Panel {
             Text {
               id: a2
               anchors.centerIn: parent
-              text: "Ignore"
+              text: dayflow.activeApp !== ""
+                ? "Ignore " + dayflow.appDisplayName(dayflow.activeApp)
+                : "Ignore app"
               color: dayflow.activeApp !== "" ? dayflow.foreground : dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
