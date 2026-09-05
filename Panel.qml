@@ -2225,7 +2225,9 @@ Panel {
             Text {
               id: a2
               anchors.centerIn: parent
-              text: "Ignore current app"
+              text: dayflow.activeApp !== ""
+                ? "Ignore " + dayflow.appDisplayName(dayflow.activeApp)
+                : "Ignore app"
               color: dayflow.activeApp !== "" ? dayflow.foreground : dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
