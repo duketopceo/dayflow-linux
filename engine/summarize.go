@@ -70,8 +70,20 @@ type blockResult struct {
 	Activities []Activity `json:"activities"`
 }
 
+func chatURL(cfg Config) string {
+	if cfg.APIBaseURL != "" {
+		u := strings.TrimSuffix(cfg.APIBaseURL, "/")
+		return u + "/chat/completions"
+	}
+	return openRouterURL
+}
+
+func apiKey(cfg Config) string {
+	return cfg.OpenRouterAPIKey
+}
+
 func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error) {
-	if cfg.OpenRouterAPIKey == "" {
+	if cfg.APIBaseURL == "" && apiKey(cfg) == "" {
 		return nil, 0, 0, fmt.Errorf("no API key: set openrouter_api_key in %s or OPENROUTER_API_KEY", configPath())
 	}
 	content := []orContent{{Type: "text", Text: fmt.Sprintf(summarizePrompt, cfg.BlockMinutes)}}
@@ -94,14 +106,18 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 		Model:    cfg.Model,
 		Messages: []orMessage{{Role: "user", Content: content}},
 	})
-	req, err := http.NewRequest("POST", openRouterURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequest("POST", chatURL(cfg), bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	req.Header.Set("Authorization", "Bearer "+cfg.OpenRouterAPIKey)
+	if apiKey(cfg) != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey(cfg))
+	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
-	req.Header.Set("X-Title", cfg.SiteName)
+	if cfg.APIBaseURL == "" {
+		req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
+		req.Header.Set("X-Title", cfg.SiteName)
+	}
 
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)

@@ -51,8 +51,16 @@ func fetchModels(apiKey string) ([]struct {
 
 // isVisionModel reports whether the model accepts image input on OpenRouter.
 // Returns (vision, reachable): reachable=false when the API couldn't be asked.
-func isVisionModel(apiKey, model string) (bool, bool) {
-	models, err := fetchModels(apiKey)
+// When a custom api_base_url is set, we cannot query OpenRouter's catalog, so
+// we trust the user's choice and return (true, false).
+func isVisionModel(cfg Config, model string) (bool, bool) {
+	if cfg.APIBaseURL != "" {
+		return true, false
+	}
+	if cfg.OpenRouterAPIKey == "" {
+		return false, false
+	}
+	models, err := fetchModels(cfg.OpenRouterAPIKey)
 	if err != nil {
 		return false, false
 	}
@@ -74,45 +82,62 @@ func runSetup() error {
 
 	fmt.Println("dayflow setup")
 	fmt.Println("=============")
-	fmt.Println("Get an API key at https://openrouter.ai/keys")
-	fmt.Print("OpenRouter API key (sk-or-...): ")
+	fmt.Println("Get an API key at https://openrouter.ai/keys (or use a local endpoint like http://localhost:11434/v1 for Ollama)")
+	fmt.Print("API endpoint [https://openrouter.ai/api/v1]: ")
+	baseURL, _ := r.ReadString('\n')
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" || baseURL == "https://openrouter.ai/api/v1" {
+		baseURL = ""
+	}
+
+	fmt.Print("API key (sk-or-... or blank for local endpoint): ")
 	key, _ := r.ReadString('\n')
 	key = strings.TrimSpace(key)
-	if key == "" {
-		return fmt.Errorf("no key entered")
-	}
-	if !strings.HasPrefix(key, "sk-or-") {
-		fmt.Println("warning: key doesn't look like an OpenRouter key (expected sk-or-...)")
-	}
 
-	fmt.Println("validating key...")
-	models, err := fetchModels(key)
-	if err != nil {
-		return fmt.Errorf("could not reach OpenRouter: %w", err)
+	if baseURL == "" {
+		if key == "" {
+			return fmt.Errorf("no key entered")
+		}
+		if !strings.HasPrefix(key, "sk-or-") {
+			fmt.Println("warning: key doesn't look like an OpenRouter key (expected sk-or-...)")
+		}
+
+		fmt.Println("validating key...")
+		models, err := fetchModels(key)
+		if err != nil {
+			return fmt.Errorf("could not reach OpenRouter: %w", err)
+		}
+		if len(models) == 0 {
+			return fmt.Errorf("key rejected or no models returned")
+		}
+		fmt.Printf("key OK (%d models available)\n\n", len(models))
+	} else {
+		fmt.Println("using custom endpoint; skipping OpenRouter validation")
 	}
-	if len(models) == 0 {
-		return fmt.Errorf("key rejected or no models returned")
-	}
-	fmt.Printf("key OK (%d models available)\n\n", len(models))
 
 	// pick a vision model
-	type mv struct{ id, price string }
-	var vision []mv
-	for _, m := range models {
-		for _, mod := range m.Architecture.InputModalities {
-			if mod == "image" {
-				vision = append(vision, mv{m.ID, m.Pricing.Prompt})
-				break
+	var vision []string
+	if baseURL == "" {
+		models, _ := fetchModels(key)
+		for _, m := range models {
+			for _, mod := range m.Architecture.InputModalities {
+				if mod == "image" {
+					vision = append(vision, m.ID)
+					break
+				}
 			}
 		}
+		sort.Strings(vision)
 	}
-	sort.Slice(vision, func(i, j int) bool { return vision[i].id < vision[j].id })
 	suggested := "google/gemma-4-31b-it"
+	if baseURL != "" {
+		suggested = "llama3.2-vision"
+	}
 	fmt.Println("Recommended vision models:")
 	for _, id := range []string{"google/gemma-4-31b-it", "google/gemma-4-26b-a4b-it", "google/gemini-3.5-flash-lite", "google/gemini-3.1-flash-lite"} {
 		mark := " "
 		for _, v := range vision {
-			if v.id == id {
+			if v == id {
 				mark = "✓"
 			}
 		}
@@ -124,14 +149,10 @@ func runSetup() error {
 	if choice == "" {
 		choice = suggested
 	}
-	vis, ok := isVisionModel(key, choice)
-	if ok && !vis {
-		return fmt.Errorf("model %q cannot read images — pick a vision model (see 'dayflow models')", choice)
-	}
-	if !ok {
-		fmt.Println("warning: could not verify model capabilities; keeping it anyway")
-	}
 
+	if err := setConfigValue("api_base_url", baseURL); err != nil {
+		return err
+	}
 	if err := setConfigValue("openrouter_api_key", key); err != nil {
 		return err
 	}
@@ -144,6 +165,10 @@ func runSetup() error {
 }
 
 func listModels(cfg Config) {
+	if cfg.APIBaseURL != "" {
+		fmt.Println("custom api_base_url set; list local models with your endpoint's /models route")
+		return
+	}
 	models, err := fetchModels(cfg.OpenRouterAPIKey)
 	if err != nil {
 		fmt.Println("could not fetch models:", err)
@@ -174,14 +199,14 @@ func runDoctor(cfg Config) {
 	_, grimErr := exec.LookPath("grim")
 	check("grim installed", grimErr == nil || cfg.CaptureCommand != "", "install grim or set capture_command")
 	check("config file", fileExists(configPath()), "run: dayflow setup")
-	check("api key set", cfg.OpenRouterAPIKey != "", "run: dayflow setup")
-	if cfg.OpenRouterAPIKey != "" {
-		vis, reachable := isVisionModel(cfg.OpenRouterAPIKey, cfg.Model)
-		if !reachable {
-			fmt.Printf("  warn model %s — couldn't verify vision support (offline?)\n", cfg.Model)
-		} else {
-			check("model is vision-capable", vis, cfg.Model+" cannot read images: dayflow config set model google/gemma-4-31b-it")
-		}
+	check("api reachable", cfg.OpenRouterAPIKey != "" || cfg.APIBaseURL != "", "run: dayflow setup")
+	vis, reachable := isVisionModel(cfg, cfg.Model)
+	if !reachable && cfg.APIBaseURL == "" {
+		fmt.Printf("  warn model %s — couldn't verify vision support (offline?)\n", cfg.Model)
+	} else if cfg.APIBaseURL != "" {
+		fmt.Printf("  ok   using custom endpoint %s — vision support not verified\n", cfg.APIBaseURL)
+	} else {
+		check("model is vision-capable", vis, cfg.Model+" cannot read images: dayflow config set model google/gemma-4-31b-it")
 	}
 	_, hyErr := exec.LookPath("hyprctl")
 	if hyErr != nil && len(cfg.IgnoreApps) > 0 {

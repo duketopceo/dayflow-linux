@@ -60,12 +60,12 @@ omarchy plugin add https://github.com/duketopceo/dayflow-linux.git --enable
 or for local development:
 
 ```sh
-cp -r . ~/.config/omarchy/plugins/io.github.lukedaduke.dayflow   # excludes .git
+cp -r . ~/.config/omarchy/plugins/io.github.duketopceo.dayflow   # excludes .git
 omarchy-shell shell rescanPlugins
-omarchy plugin enable io.github.lukedaduke.dayflow
+omarchy plugin enable io.github.duketopceo.dayflow
 ```
 
-Bar widget: recording indicator; left-click opens the timeline panel, right-click pauses/resumes. The panel shows today's blocks, engine stats, the ignore list, and pause / ignore-focused-app / summarize-now controls.
+Bar widget: recording indicator; left-click opens the timeline panel, right-click pauses/resumes. The panel shows today's blocks, engine stats, the ignore list, and pause / ignore-focused-app / summarize-now / standup / insights controls.
 
 ## CLI
 
@@ -73,6 +73,8 @@ Bar widget: recording indicator; left-click opens the timeline panel, right-clic
 dayflow today                  # today's timeline
 dayflow day 2026-09-03         # any day
 dayflow status                 # state, counts, model
+dayflow standup                # yesterday/today standup update
+dayflow insights [day|week|month] # focus, categories, apps, distractions
 dayflow summarize --now        # force summarization including the current block
 dayflow pause | resume | toggle
 dayflow ignore <class>         # never capture while this app is focused
@@ -85,7 +87,7 @@ dayflow week | month           # multi-day rollups
 dayflow export week [--copy]   # markdown export to stdout (or clipboard)
 dayflow search <query>         # search titles, summaries, apps
 dayflow retry                  # reset failed/dead blocks for re-summarization
-dayflow tui                    # interactive terminal timeline browser
+dayflow tui                    # interactive terminal timeline, standup, insights
 dayflow mcp                    # MCP server for agents (stdio)
 dayflow config set <k> <v>     # live settings
 dayflow uninstall              # remove systemd units (data stays)
@@ -99,35 +101,40 @@ All query commands accept `--json`.
 
 | key | default | notes |
 |---|---|---|
-| `model` | `google/gemini-2.5-flash` | any OpenRouter vision model |
+| `model` | `google/gemma-4-31b-it` | any vision model |
+| `api_base_url` | `""` | OpenAI-compatible endpoint; empty = OpenRouter. Set to `http://localhost:11434/v1` for Ollama. |
 | `capture_interval_sec` | 10 | frame interval |
 | `block_minutes` | 15 | summary granularity |
 | `frames_per_block` | 30 | frames sampled per API call |
 | `jpeg_quality` | 55 | grim JPEG quality |
 | `keep_frames` | false | keep raw frames after summarizing |
 | `retention_days` | 7 | prunes frames, events, and api logs |
-| `max_storage_mb` | 0 | cap on frames dir size; 0 = unlimited. Only already-summarized frames are pruned. |
+| `max_storage_mb` | 10240 | cap on the whole data dir (frames + db + wal); 0 = unlimited |
+| `auto_pause_locked` | true | pause capture while the session is locked (via loginctl) |
 | `ignore_apps` | `[]` | window classes never captured (Hyprland) |
 | `output` | `""` | restrict capture to one monitor (`grim -o`) |
 | `capture_command` | `""` | custom screenshot command (writes image to stdout) |
 | `openrouter_api_key` | `""` | API key |
+| `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
 
 ## Privacy
 
 - `dayflow pause` (or right-click the bar widget) drops a flag file the daemon checks before every capture.
+- Capture automatically pauses while your session is locked when `auto_pause_locked` is true (via `loginctl`).
 - Ignored apps are skipped at capture time — their frames are never written to disk.
 - All frames are deleted after summarization unless `keep_frames` is on; retention pruning removes anything older than `retention_days`.
+- `max_storage_mb` caps the entire data directory; oldest summarized frames and then oldest journal rows are pruned and vacuumed.
 - Everything lives in `~/.local/share/dayflow/` — `rm -rf` it to wipe all data.
 
 ## Cross-hardware / portability
 
-Capture goes through `grim` → the compositor's screencopy protocol, which is hardware-agnostic (Intel, AMD, NVIDIA, ARM). The Go binary is pure-Go + `modernc.org/sqlite` (no cgo) and builds for `amd64`, `arm64`, etc. AI runs on OpenRouter, so no local GPU/NPU is required. On non-wlroots compositors (KDE, GNOME), set `capture_command` — e.g. `"gnome-screenshot -f /dev/stdout"` or a small wrapper.
+Capture goes through `grim` → the compositor's screencopy protocol, which is hardware-agnostic (Intel, AMD, NVIDIA, ARM). The Go binary is pure-Go + `modernc.org/sqlite` (no cgo) and builds for `amd64`, `arm64`, etc. AI can run on OpenRouter or any OpenAI-compatible local endpoint (`api_base_url` = `http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM Studio, etc.). On non-wlroots compositors (KDE, GNOME), set `capture_command` — e.g. `"gnome-screenshot -f /dev/stdout"` or a small wrapper.
 
 ## MCP / agent access
 
 `dayflow mcp` is a stdio MCP server exposing `get_timeline`, `get_status`,
-`search_journal`, `get_events`, `get_usage`. See [AGENTS.md](AGENTS.md) for the
-agent contract (read rules, schema, behavior).
+`search_journal`, `get_events`, `get_usage`, `get_standup`, and `get_insights`.
+See [AGENTS.md](AGENTS.md) for the agent contract (read rules, schema, behavior).
 
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp

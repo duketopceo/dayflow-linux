@@ -47,6 +47,11 @@ var mcpTools = []map[string]any{
 			"limit": map[string]any{"type": "integer"}}}},
 	{"name": "get_usage", "description": "OpenRouter token usage totals.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "get_standup", "description": "Generate a standup update from yesterday and today's blocks.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "get_insights", "description": "Focus, category, app, and distraction analytics for a range (day, week, month).",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"range": map[string]any{"type": "string", "description": "day, week, or month"}}}},
 }
 
 func mcpText(v any) map[string]any {
@@ -146,6 +151,36 @@ func mcpCall(db *sql.DB, cfg Config, name string, args map[string]any) (any, err
 		  FROM api_calls`).Scan(&calls, &pt, &ct, &okn, &failed)
 		return map[string]any{"api_calls": calls, "ok": okn, "failed": failed,
 			"prompt_tokens": pt, "completion_tokens": ct}, nil
+
+	case "get_standup":
+		_, j, err := generateStandup(db, cfg, true)
+		if err != nil {
+			return nil, err
+		}
+		return j, nil
+
+	case "get_insights":
+		r := "week"
+		if v, ok := args["range"].(string); ok && v != "" {
+			r = v
+		}
+		now := time.Now()
+		var start, end time.Time
+		switch r {
+		case "day", "today":
+			start, end = dayBounds(now)
+		case "week":
+			start, end = weekBounds(now)
+		case "month":
+			start, end = monthBounds(now)
+		default:
+			return nil, fmt.Errorf("range must be day, week, or month")
+		}
+		in, err := generateInsights(db, cfg, start, end)
+		if err != nil {
+			return nil, err
+		}
+		return in.JSON(), nil
 	}
 	return nil, fmt.Errorf("unknown tool %q", name)
 }

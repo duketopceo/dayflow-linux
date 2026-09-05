@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -282,5 +283,53 @@ func TestRetention(t *testing.T) {
 	}
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
 		t.Fatal("old frame file not deleted")
+	}
+}
+
+func TestChatURL(t *testing.T) {
+	cfg := defaultConfig()
+	if chatURL(cfg) != openRouterURL {
+		t.Fatalf("default chatURL=%q", chatURL(cfg))
+	}
+	cfg.APIBaseURL = "http://localhost:11434/v1"
+	if chatURL(cfg) != "http://localhost:11434/v1/chat/completions" {
+		t.Fatalf("ollama chatURL=%q", chatURL(cfg))
+	}
+	cfg.APIBaseURL = "http://localhost:11434/v1/"
+	if chatURL(cfg) != "http://localhost:11434/v1/chat/completions" {
+		t.Fatalf("trailing slash chatURL=%q", chatURL(cfg))
+	}
+}
+
+func TestStandupAndInsights(t *testing.T) {
+	cfg := testEnv(t)
+	db, _ := openDB()
+	defer db.Close()
+
+	yesterday := time.Now().AddDate(0, 0, -1)
+	yStart := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 10, 0, 0, 0, yesterday.Location())
+	yEnd := yStart.Add(15 * time.Minute)
+	upsertBlockFull(db, yStart, yEnd, "Auth refactor", "Extracted token logic", "coding", "neovim", "", 3, 0, "done", "")
+
+	md, _, err := generateStandup(db, cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(md, "Auth refactor") {
+		t.Fatalf("standup missing block: %s", md)
+	}
+
+	in, err := generateInsights(db, cfg, yStart, yEnd.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.TotalMins != 15 {
+		t.Fatalf("insights total=%f", in.TotalMins)
+	}
+	if len(in.Categories) != 1 || in.Categories[0].Name != "coding" {
+		t.Fatalf("insights categories=%v", in.Categories)
+	}
+	if len(in.Apps) != 1 || in.Apps[0].Name != "neovim" {
+		t.Fatalf("insights apps=%v", in.Apps)
 	}
 }

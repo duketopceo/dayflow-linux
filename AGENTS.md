@@ -32,6 +32,8 @@ screen frames, and a summarizer turns each 15-minute block into a
 ```sh
 dayflow today|day <date>|timeline [--json] [date]
 dayflow week|month [--json]
+dayflow standup [--json]                         # yesterday/today standup update
+dayflow insights [day|week|month] [--json]      # focus, category, app analytics
 dayflow export [today|week|month|YYYY-MM-DD]   # markdown
 dayflow status [--json]
 dayflow events [--json] [-n N]
@@ -48,7 +50,8 @@ dayflow doctor
 ### MCP (stdio)
 
 `dayflow mcp` exposes tools: `get_timeline(date)`, `get_status`,
-`search_journal(query)`, `get_events(limit)`, `get_usage`.
+`search_journal(query)`, `get_events(limit)`, `get_usage`, `get_standup()`,
+`get_insights(range)`.
 
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp
@@ -85,7 +88,7 @@ meetings, system, idle, other.
 
 ## Config reference
 
-`~/.config/dayflow/config.json` — keys: `model`, `capture_interval_sec`,
-`block_minutes`, `frames_per_block`, `jpeg_quality`, `keep_frames`,
-`retention_days`, `max_storage_mb`, `ignore_apps`, `output`,
-`capture_command`, `openrouter_api_key`.
+`~/.config/dayflow/config.json` — keys: `model`, `api_base_url`,
+`capture_interval_sec`, `block_minutes`, `frames_per_block`, `jpeg_quality`,
+`keep_frames`, `retention_days`, `max_storage_mb`, `auto_pause_locked`,
+`ignore_apps`, `output`, `capture_command`, `openrouter_api_key`, `site_name`.

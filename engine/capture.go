@@ -68,6 +68,17 @@ func isIgnored(cfg Config, class string) bool {
 	return false
 }
 
+// screenLocked uses loginctl to detect whether the current session is locked.
+// It is best-effort: if loginctl is unavailable it returns false.
+func screenLocked() bool {
+	// prefer loginctl; it works under systemd user sessions regardless of compositor.
+	out, err := exec.Command("loginctl", "show-session", os.Getenv("XDG_SESSION_ID"), "--property=LockedHint").Output()
+	if err != nil || len(out) == 0 {
+		return false
+	}
+	return strings.Contains(string(out), "yes")
+}
+
 // ahash computes a 16x16 grayscale average-hash of the image.
 func ahash(img image.Image) uint64 {
 	const size = 16
@@ -202,47 +213,75 @@ func runRetention(db *sql.DB, cfg Config) {
 	}
 }
 
-// enforceStorageCap deletes oldest frames until the frames dir is under the cap.
+// enforceStorageCap keeps the whole data dir (frames + db + wal) under
+// max_storage_mb. Oldest data goes first: already-summarized frames, then the
+// oldest blocks/events/api_calls rows, then a VACUUM to reclaim pages.
 func enforceStorageCap(db *sql.DB, cfg Config) {
 	if cfg.MaxStorageMB <= 0 {
 		return
 	}
 	limit := int64(cfg.MaxStorageMB) << 20
+	total := dataDirSize()
+	if total <= limit {
+		return
+	}
+
+	// phase 1: oldest already-summarized frames
+	rows, err := db.Query(`SELECT ts, path FROM frames ORDER BY ts ASC`)
+	if err == nil {
+		var toDelete [][2]any
+		var freed int64
+		for rows.Next() && total > limit {
+			var ts int64
+			var p string
+			rows.Scan(&ts, &p)
+			done, err := blockExists(db, blockStart(time.Unix(ts, 0), cfg.BlockMinutes))
+			if err != nil || !done {
+				continue
+			}
+			if fi, err := os.Stat(p); err == nil {
+				freed += fi.Size()
+			}
+			toDelete = append(toDelete, [2]any{ts, p})
+		}
+		rows.Close()
+		for _, d := range toDelete {
+			os.Remove(d[1].(string))
+			db.Exec(`DELETE FROM frames WHERE ts=? AND path=?`, d[0], d[1])
+		}
+		total -= freed
+		if len(toDelete) > 0 {
+			logEvent(db, "storage_cap_frames", fmt.Sprintf("%d frames", len(toDelete)))
+		}
+	}
+	if total <= limit {
+		return
+	}
+
+	// phase 2: drop the oldest journal data, one chunk at a time (the cap
+	// run is hourly, so oversized dirs converge over a few passes)
+	pruned, _ := db.Exec(`DELETE FROM blocks WHERE start_ts IN (
+		SELECT start_ts FROM blocks ORDER BY start_ts ASC LIMIT 100)`)
+	pb, _ := pruned.RowsAffected()
+	db.Exec(`DELETE FROM events WHERE ts < (
+		SELECT ts FROM events ORDER BY ts DESC LIMIT 1 OFFSET 2000)`)
+	db.Exec(`DELETE FROM api_calls WHERE ts < (
+		SELECT ts FROM api_calls ORDER BY ts DESC LIMIT 1 OFFSET 2000)`)
+	// reclaim disk pages now that rows are gone
+	db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	db.Exec(`VACUUM`)
+	logEvent(db, "storage_cap_db", fmt.Sprintf("%d oldest blocks pruned, vacuumed", pb))
+}
+
+func dataDirSize() int64 {
 	var total int64
-	filepath.Walk(framesDir(), func(_ string, fi os.FileInfo, _ error) error {
+	filepath.Walk(dataDir(), func(_ string, fi os.FileInfo, _ error) error {
 		if fi != nil && fi.Mode().IsRegular() {
 			total += fi.Size()
 		}
 		return nil
 	})
-	if total <= limit {
-		return
-	}
-	rows, err := db.Query(`SELECT ts, path FROM frames ORDER BY ts ASC`)
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-	var removed int
-	for rows.Next() && total > limit {
-		var ts int64
-		var p string
-		rows.Scan(&ts, &p)
-		// never delete frames whose block hasn't been summarized yet
-		done, err := blockExists(db, blockStart(time.Unix(ts, 0), cfg.BlockMinutes))
-		if err != nil || !done {
-			continue
-		}
-		if fi, err := os.Stat(p); err == nil {
-			total -= fi.Size()
-			os.Remove(p)
-		}
-		db.Exec(`DELETE FROM frames WHERE ts=? AND path=?`, ts, p)
-		removed++
-	}
-	if removed > 0 {
-		logEvent(db, "storage_cap_pruned", fmt.Sprintf("%d frames", removed))
-	}
+	return total
 }
 
 func runDaemon(cfg Config) error {
@@ -278,10 +317,13 @@ func runDaemon(cfg Config) error {
 
 	var lastHash uint64
 	var haveHash bool
+	locked := false
 	tick := time.NewTicker(time.Duration(cfg.CaptureIntervalSec) * time.Second)
 	defer tick.Stop()
 	retentionTick := time.NewTicker(time.Hour)
 	defer retentionTick.Stop()
+	lockTick := time.NewTicker(time.Minute)
+	defer lockTick.Stop()
 	log.Printf("dayflow daemon: capturing every %ds -> %s", cfg.CaptureIntervalSec, framesDir())
 
 	capture := func() {
@@ -305,9 +347,26 @@ func runDaemon(cfg Config) error {
 	for {
 		select {
 		case <-tick.C:
+			if cfg.AutoPauseLocked && locked {
+				// locked: do not capture, reset hash so we don't leak last frame
+				haveHash = false
+				continue
+			}
 			capture()
 		case <-retentionTick.C:
 			runRetention(db, cfg)
+		case <-lockTick.C:
+			if !cfg.AutoPauseLocked {
+				continue
+			}
+			if screenLocked() && !paused() && !locked {
+				locked = true
+				haveHash = false
+				logEvent(db, "auto_paused", "screen locked")
+			} else if !screenLocked() && locked {
+				locked = false
+				logEvent(db, "auto_resumed", "screen unlocked")
+			}
 		}
 	}
 }

@@ -11,17 +11,19 @@ import (
 )
 
 type tuiModel struct {
-	db      *sql.DB
-	cfg     Config
-	cards   []Card
-	cursor  int
-	offset  int
-	height  int
-	mode    string // day|week|month|search
-	query   string
+	db        *sql.DB
+	cfg       Config
+	cards     []Card
+	insights  insights
+	standup   string
+	cursor    int
+	offset    int
+	height    int
+	mode      string // day|week|month|search|standup|insights
+	query     string
 	searching bool
-	status  string
-	err     error
+	status    string
+	err       error
 }
 
 var (
@@ -44,8 +46,23 @@ func (m tuiModel) loadRange() (tuiModel, tea.Cmd) {
 		// last 30 days
 		start = now.AddDate(0, 0, -30)
 		end = now.AddDate(0, 0, 1)
+	case "insights":
+		start, end = weekBounds(now)
+	case "standup":
+		_, _, err := generateStandup(m.db, m.cfg, false)
+		if err == nil {
+			m.standup, _, _ = generateStandup(m.db, m.cfg, false)
+		}
+		m.err = err
+		return m, nil
 	default:
 		start, end = dayBounds(now)
+	}
+	if m.mode == "insights" {
+		in, err := generateInsights(m.db, m.cfg, start, end)
+		m.insights = in
+		m.err = err
+		return m, nil
 	}
 	blocks, err := blocksBetween(m.db, start, end)
 	m.err = err
@@ -114,6 +131,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "M":
 			m.mode = "month"
 			return m.loadRange()
+		case "s":
+			m.mode = "standup"
+			return m.loadRange()
+		case "i":
+			m.mode = "insights"
+			return m.loadRange()
 		case "/":
 			m.searching = true
 			m.query = ""
@@ -145,12 +168,28 @@ func (m tuiModel) View() string {
 		b.WriteString(tuiDim.Render("  query: ") + m.query)
 	}
 	b.WriteString("\n")
-	b.WriteString(tuiDim.Render(" j/k move · d day · w week · M month · / search · r refresh · q quit"))
+	b.WriteString(tuiDim.Render(" j/k move · d day · w week · M month · s standup · i insights · / search · r refresh · q quit"))
 	b.WriteString("\n\n")
 
 	if m.err != nil {
 		b.WriteString("  " + m.err.Error() + "\n")
 	}
+
+	switch m.mode {
+	case "standup":
+		if m.standup == "" {
+			b.WriteString(tuiDim.Render("  (no standup data)\n"))
+		} else {
+			for _, l := range strings.Split(m.standup, "\n") {
+				b.WriteString("  " + tuiDim.Render(l) + "\n")
+			}
+		}
+		return b.String()
+	case "insights":
+		renderInsightsTUI(&b, m.insights)
+		return b.String()
+	}
+
 	if len(m.cards) == 0 {
 		b.WriteString(tuiDim.Render("  (no activity cards in this range)\n"))
 	}
@@ -185,6 +224,36 @@ func (m tuiModel) View() string {
 	}
 	b.WriteString("\n" + tuiDim.Render(fmt.Sprintf(" %d cards · dayflow %s", len(m.cards), version)))
 	return b.String()
+}
+
+func renderInsightsTUI(b *strings.Builder, in insights) {
+	if in.TotalMins == 0 {
+		b.WriteString(tuiDim.Render("  (no activity in this range)\n"))
+		return
+	}
+	b.WriteString(tuiBold.Render("  Totals") + "\n")
+	fmt.Fprintf(b, "  Total: %.1f hr · Focus: %.1f hr · Distraction/idle: %.1f hr\n\n", in.TotalMins/60, in.FocusMins/60, (in.DistractionMins+in.IdleMins)/60)
+	if len(in.Categories) > 0 {
+		b.WriteString(tuiBold.Render("  Categories") + "\n")
+		for _, c := range in.Categories {
+			fmt.Fprintf(b, "  %-14s %.1f hr (%d)\n", c.Name, c.Mins/60, c.Count)
+		}
+		b.WriteString("\n")
+	}
+	if len(in.Apps) > 0 {
+		b.WriteString(tuiBold.Render("  Top apps") + "\n")
+		for _, a := range in.Apps {
+			fmt.Fprintf(b, "  %-14s %.1f hr (%d)\n", a.Name, a.Mins/60, a.Count)
+		}
+		b.WriteString("\n")
+	}
+	if len(in.TopDistractions) > 0 {
+		b.WriteString(tuiBold.Render("  Distractions") + "\n")
+		for _, d := range in.TopDistractions {
+			fmt.Fprintf(b, "  %-14s %.1f hr (%d)\n", d.Name, d.Mins/60, d.Count)
+		}
+		b.WriteString("\n")
+	}
 }
 
 func wrapText(s string, width int) []string {

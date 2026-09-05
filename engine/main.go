@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const version = "0.2.0"
+const version = "1.0.0"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `dayflow %s — private, automatic work journal for Wayland/Omarchy
@@ -28,13 +28,16 @@ Query:
   day <YYYY-MM-DD> [--json]
   status [--json]     Show recording state and counts
   blocks [--json]     List blocks that failed summarization
+  standup [--json]    Generate a standup update from yesterday/today
+  insights [day|week|month] [--json]  Focus, category, app, and distraction analytics
 
 Control:
   pause | resume | toggle   Control screen capture
   config                  Print config path and current config
-  config set <key> <val>  Update config (model, capture_interval_sec, block_minutes,
-                          frames_per_block, jpeg_quality, keep_frames, retention_days,
-                          ignore_apps, output, capture_command, openrouter_api_key)
+  config set <key> <val>  Update config (model, api_base_url, capture_interval_sec,
+                          block_minutes, frames_per_block, jpeg_quality, keep_frames,
+                          retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
+                          output, capture_command, openrouter_api_key)
   ignore [--active|class] Add an app to the ignore list (--active = focused window)
   unignore <class>        Remove an app from the ignore list
   events [--json] [-n N]  Recent event log (captures, skips, errors, summaries)
@@ -42,14 +45,14 @@ Control:
   week | month [--json]   Timeline rollups
   export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
   mcp                     Run the MCP server over stdio (for agents)
-  tui                     Interactive terminal timeline (day/week/month, search)
+  tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
   search <query>          Search block titles, summaries, and apps
   retry                   Reset failed/dead blocks for re-summarization
 
 Setup & health:
-  setup                   Interactive OpenRouter onboarding (key + vision model)
+  setup                   Interactive AI-provider onboarding (OpenRouter or local endpoint)
   models                  List vision-capable models on your OpenRouter account
-  doctor                  Check session, grim, key, and model support
+  doctor                  Check session, grim, key, model, and endpoint support
 
 Config: %s
 Data:   %s
@@ -156,7 +159,7 @@ func main() {
 	case "config":
 		if len(args) >= 3 && args[0] == "set" {
 			if args[1] == "model" {
-				if vis, ok := isVisionModel(cfg.OpenRouterAPIKey, args[2]); ok && !vis {
+				if vis, ok := isVisionModel(cfg, args[2]); ok && !vis {
 					fatal(fmt.Errorf("model %q cannot read images — dayflow needs a vision model (see 'dayflow models')", args[2]))
 				}
 			}
@@ -229,6 +232,54 @@ func main() {
 				"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"), "blocks": blocks})
 		} else {
 			fmt.Print(markdownTimeline(blocks, "dayflow "+cmd))
+		}
+
+	case "standup":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		md, j, err := generateStandup(db, cfg, jsonOut)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(j)
+		} else {
+			fmt.Print(md)
+		}
+
+	case "insights":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		var start, end time.Time
+		label := "dayflow insights"
+		sel := "week"
+		for _, a := range args {
+			if a[0] != '-' {
+				sel = a
+			}
+		}
+		switch sel {
+		case "day", "today":
+			start, end = dayBounds(time.Now())
+			label = "dayflow insights — today"
+		case "yesterday":
+			start, end = dayBounds(time.Now().AddDate(0, 0, -1))
+			label = "dayflow insights — yesterday"
+		case "week":
+			start, end = weekBounds(time.Now())
+			label = "dayflow insights — this week"
+		case "month":
+			start, end = monthBounds(time.Now())
+			label = "dayflow insights — this month"
+		default:
+			usage()
+		}
+		in, err := generateInsights(db, cfg, start, end)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(in.JSON())
+		} else {
+			fmt.Print(formatInsightsMarkdown(in, start, end, label))
 		}
 
 	case "search":

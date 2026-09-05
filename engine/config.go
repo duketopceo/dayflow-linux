@@ -12,6 +12,7 @@ import (
 type Config struct {
 	OpenRouterAPIKey   string   `json:"openrouter_api_key"`
 	Model              string   `json:"model"`
+	APIBaseURL         string   `json:"api_base_url"`    // OpenAI-compatible endpoint; empty = OpenRouter
 	CaptureIntervalSec int      `json:"capture_interval_sec"`
 	BlockMinutes       int      `json:"block_minutes"`
 	FramesPerBlock     int      `json:"frames_per_block"`
@@ -23,6 +24,7 @@ type Config struct {
 	Output             string   `json:"output"`          // grim -o <output>; empty = all outputs
 	SiteName           string   `json:"site_name"`       // OpenRouter X-Title
 	MaxStorageMB       int      `json:"max_storage_mb"`  // 0 = unlimited frame storage
+	AutoPauseLocked    bool     `json:"auto_pause_locked"`
 }
 
 func configDir() string {
@@ -65,6 +67,8 @@ func defaultConfig() Config {
 		RetentionDays:      7,
 		IgnoreApps:         []string{},
 		SiteName:           "dayflow-linux",
+		MaxStorageMB:       10240,
+		AutoPauseLocked:    true,
 	}
 }
 
@@ -99,6 +103,13 @@ func loadConfig() (Config, error) {
 	if cfg.Model == "" {
 		cfg.Model = "google/gemma-4-31b-it"
 	}
+	if cfg.SiteName == "" {
+		cfg.SiteName = "dayflow-linux"
+	}
+	// max_storage_mb: absent config gets the 10GB default; explicit 0 means unlimited.
+	if cfg.MaxStorageMB == 0 && !strings.Contains(string(b), "max_storage_mb") {
+		cfg.MaxStorageMB = 10240
+	}
 	return cfg, nil
 }
 
@@ -127,9 +138,9 @@ func writeDefaultConfig() error {
 }
 
 // setConfigValue updates one key in config.json. Supported keys:
-// model, capture_interval_sec, block_minutes, frames_per_block,
+// model, api_base_url, capture_interval_sec, block_minutes, frames_per_block,
 // jpeg_quality, keep_frames, retention_days, ignore_apps (comma list),
-// openrouter_api_key, output, capture_command.
+// openrouter_api_key, output, capture_command, max_storage_mb, auto_pause_locked.
 func setConfigValue(key, value string) error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -138,6 +149,8 @@ func setConfigValue(key, value string) error {
 	switch key {
 	case "model":
 		cfg.Model = value
+	case "api_base_url":
+		cfg.APIBaseURL = strings.TrimSpace(value)
 	case "openrouter_api_key":
 		cfg.OpenRouterAPIKey = value
 	case "capture_interval_sec", "block_minutes", "frames_per_block", "jpeg_quality", "retention_days":
@@ -160,9 +173,17 @@ func setConfigValue(key, value string) error {
 	case "keep_frames":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
-			return fmt.Errorf("keep_frames must be true/false")
+			return fmt.Errorf("keep_frames must be true or false")
 		}
 		cfg.KeepFrames = b
+	case "auto_pause_locked":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("auto_pause_locked must be true or false")
+		}
+		cfg.AutoPauseLocked = b
+	case "site_name":
+		cfg.SiteName = value
 	case "ignore_apps":
 		if value == "" {
 			cfg.IgnoreApps = []string{}

@@ -131,6 +131,22 @@ Panel {
     }
   }
 
+  Process {
+    id: standupProc
+    command: ["bash", "-c", "dayflow standup | wl-copy"]
+    onExited: function(exitCode) {
+      root.notice = exitCode === 0 ? "copied standup to clipboard" : "standup copy failed"
+    }
+  }
+
+  Process {
+    id: insightsProc
+    command: ["bash", "-c", "dayflow insights | wl-copy"]
+    onExited: function(exitCode) {
+      root.notice = exitCode === 0 ? "copied weekly insights to clipboard" : "insights copy failed"
+    }
+  }
+
   function categoryColor(cat) {
     switch (cat) {
       case "coding":        return Color.accent
@@ -412,6 +428,20 @@ Panel {
             tooltipText: "Summarize pending blocks now"
             foreground: root.barForeground
             onClicked: { if (!summarizeProc.running) summarizeProc.running = true }
+          }
+
+          PanelActionButton {
+            iconText: "󰦮"
+            tooltipText: "Copy standup to clipboard"
+            foreground: root.barForeground
+            onClicked: { if (!standupProc.running) standupProc.running = true }
+          }
+
+          PanelActionButton {
+            iconText: "󰃨"
+            tooltipText: "Copy weekly insights to clipboard"
+            foreground: root.barForeground
+            onClicked: { if (!insightsProc.running) insightsProc.running = true }
           }
 
           Text {

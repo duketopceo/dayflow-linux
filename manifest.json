@@ -2,18 +2,20 @@
   "schemaVersion": 1,
   "id": "io.github.duketopceo.dayflow",
   "name": "Dayflow",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "author": "lukedaduke",
   "license": "MIT",
-  "description": "Automatic work journal: AI-summarized timeline of your day via OpenRouter vision models. Bar widget + panel; requires the dayflow engine (Go, in engine/).",
+  "description": "Private, automatic work journal for Omarchy and Hyprland. Records your screen, summarizes every 15-minute block with a vision model, and shows a timeline plus standup and insights in the bar panel.",
   "kinds": [
     "bar-widget"
   ],
+  "activation": "on-demand",
   "entryPoints": {
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "Dayflow",
+    "description": "Automatic work journal with standup updates, focus analytics, and pause/resume from the bar.",
     "category": "Productivity",
     "allowMultiple": false,
     "defaultSection": "right"
