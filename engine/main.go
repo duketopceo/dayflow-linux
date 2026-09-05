@@ -61,6 +61,7 @@ Control:
   usage [--json]          Token usage totals from the api_calls log
   stats [--json]          Storage, block counts, date range, and API usage
   week | month [--json]   Timeline rollups
+  weekly [--json]        Weekly analytics payload (donut, treemap, context shifts, highlights)
   export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
   mcp                     Run the MCP server over stdio (for agents)
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
@@ -309,6 +310,19 @@ func main() {
 				"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"), "blocks": blocks})
 		} else {
 			fmt.Print(markdownTimeline(blocks, "dayflow "+cmd))
+		}
+
+	case "weekly":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		start, end := weekBounds(time.Now())
+		p, err := generateWeeklyPayload(db, cfg, start, end)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(p)
+		} else {
+			fmt.Print(formatWeeklyPayload(p, start, end))
 		}
 
 	case "standup":

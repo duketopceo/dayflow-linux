@@ -39,6 +39,7 @@ Panel {
   property string weekEnd: ""
   property string weekSummary: ""
   property bool weekSummaryLoading: false
+  property var weeklyPayload: ({ start: "", end: "", total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, category_donut: [], app_treemap: [], context_shifts: [], context_shift_count: 0, top_distractions: [], focus_blocks: [], highlights: [], suggestions: [], heatmap: [] })
   property var spans: []
   property int dayOffset: 0
   property bool expanded: false
@@ -68,6 +69,7 @@ Panel {
     if (!standupFetchProc.running) standupFetchProc.running = true
     if (!insightsFetchProc.running) insightsFetchProc.running = true
     if (!weekTimelineProc.running) weekTimelineProc.running = true
+    if (!weeklyProc.running) weeklyProc.running = true
     if (!configProc.running) configProc.running = true
   }
 
@@ -337,6 +339,15 @@ Panel {
     }
   }
 
+  function applyWeeklyPayload(raw) {
+    try {
+      var d = JSON.parse(raw)
+      dayflow.weeklyPayload = d
+    } catch (e) {
+      dayflow.weeklyPayload = ({ start: "", end: "", total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, category_donut: [], app_treemap: [], context_shifts: [], context_shift_count: 0, top_distractions: [], focus_blocks: [], highlights: [], suggestions: [], heatmap: [] })
+    }
+  }
+
   function weekStartDate() {
     if (dayflow.weekStart === "") return new Date()
     return new Date(dayflow.weekStart + "T00:00:00")
@@ -603,6 +614,15 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyWeekReview(text)
+    }
+  }
+
+  Process {
+    id: weeklyProc
+    command: ["dayflow", "weekly", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyWeeklyPayload(text)
     }
   }
 
@@ -1545,6 +1565,150 @@ Panel {
                     }
                   }
                 }
+              }
+            }
+          }
+        }
+
+        Rectangle {
+          visible: dayflow.weeklyPayload.category_donut.length > 0
+          width: parent.width
+          height: chartsCol.implicitHeight + Style.space(16)
+          radius: Style.cornerRadius
+          color: dayflow.fgFill(0.04)
+          border.color: dayflow.fgFill(0.08)
+
+          Column {
+            id: chartsCol
+            width: parent.width - Style.space(16)
+            anchors.centerIn: parent
+            spacing: Style.space(10)
+
+            Text {
+              text: "Category breakdown"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Row {
+              id: donutRow
+              width: parent.width
+              height: Style.space(24)
+              spacing: 0
+
+              Repeater {
+                model: dayflow.weeklyPayload.category_donut
+                delegate: Rectangle {
+                  width: donutRow.width * (modelData.percentage / 100)
+                  height: parent.height
+                  color: dayflow.categoryColor(modelData.name)
+                }
+              }
+            }
+
+            Repeater {
+              model: dayflow.weeklyPayload.category_donut
+              delegate: Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Rectangle {
+                  width: Style.space(10)
+                  height: Style.space(10)
+                  radius: Style.space(2)
+                  color: dayflow.categoryColor(modelData.name)
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  text: (modelData.display || modelData.name) + "  " + modelData.percentage + "%"
+                  color: dayflow.foreground
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+            }
+
+            Text {
+              visible: dayflow.weeklyPayload.app_treemap.length > 0
+              text: "Top apps"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Column {
+              visible: dayflow.weeklyPayload.app_treemap.length > 0
+              width: parent.width
+              spacing: Style.space(4)
+
+              Repeater {
+                model: dayflow.weeklyPayload.app_treemap
+                delegate: Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+
+                  Rectangle {
+                    width: Math.max(Style.space(4), parent.width * (modelData.percentage / 100))
+                    height: Style.space(14)
+                    radius: Style.space(2)
+                    color: dayflow.accentFill(0.5)
+                  }
+
+                  Text {
+                    text: (modelData.display || modelData.name) + "  " + modelData.percentage + "%"
+                    color: dayflow.foreground
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: dayflow.weeklyPayload.highlights.length > 0
+              text: "Highlights"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Repeater {
+              model: dayflow.weeklyPayload.highlights
+              delegate: Text {
+                width: parent.width
+                text: "• " + modelData
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
+
+            Text {
+              visible: dayflow.weeklyPayload.suggestions.length > 0
+              text: "Suggestions"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Repeater {
+              model: dayflow.weeklyPayload.suggestions
+              delegate: Text {
+                width: parent.width
+                text: "• " + modelData
+                color: dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
               }
             }
           }
