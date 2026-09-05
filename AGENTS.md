@@ -47,6 +47,7 @@ dayflow scrub <query>                          # delete blocks matching <query>
 dayflow pause|resume|toggle
 dayflow ignore <class> | ignore --active | unignore <class>
 dayflow config [--json] [set <k> <v>] [patch <json>]
+dayflow models [--json]                               # recommended vision model presets
 dayflow doctor
 ```
 
