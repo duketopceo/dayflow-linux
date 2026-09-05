@@ -12,6 +12,58 @@ import (
 	"time"
 )
 
+// ModelPreset is a recommended vision model for Dayflow.
+type ModelPreset struct {
+	Name   string `json:"name"`
+	Slug   string `json:"slug"`
+	Vision bool   `json:"vision"`
+	Notes  string `json:"notes"`
+}
+
+func modelPresets() []ModelPreset {
+	return []ModelPreset{
+		{
+			Name:   "Gemma 4 31B — default",
+			Slug:   "google/gemma-4-31b-it",
+			Vision: true,
+			Notes:  "Best overall balance on OpenRouter; fast, cheap, and accurate.",
+		},
+		{
+			Name:   "Gemma 3 27B — bigger still small",
+			Slug:   "google/gemma-3-27b-it",
+			Vision: true,
+			Notes:  "More capable than the 12B without being huge. Good for detailed summaries.",
+		},
+		{
+			Name:   "Gemma 3 12B — cheap minimal",
+			Slug:   "google/gemma-3-12b-it",
+			Vision: true,
+			Notes:  "Small, fast, cheapest. Good for everyday work tracking.",
+		},
+		{
+			Name:   "Qwen2.5-VL 7B — local minimal",
+			Slug:   "qwen2.5vl:7b",
+			Vision: true,
+			Notes:  "Local option for Ollama/LM Studio. Pull with: ollama pull qwen2.5vl:7b",
+		},
+		{
+			Name:   "Gemma 3 4B — local tiny",
+			Slug:   "gemma3:4b",
+			Vision: true,
+			Notes:  "Minimal local vision option. Lower accuracy but runs on modest hardware.",
+		},
+	}
+}
+
+func knownVisionModel(slug string) bool {
+	for _, p := range modelPresets() {
+		if p.Slug == slug {
+			return p.Vision
+		}
+	}
+	return false
+}
+
 // fetchModels lists models from OpenRouter. Needs a key; returns nil on error.
 func fetchModels(apiKey string) ([]struct {
 	ID           string `json:"id"`
@@ -56,6 +108,9 @@ func fetchModels(apiKey string) ([]struct {
 func isVisionModel(cfg Config, model string) (bool, bool) {
 	if cfg.APIBaseURL != "" {
 		return true, false
+	}
+	if knownVisionModel(model) {
+		return true, true
 	}
 	if cfg.OpenRouterAPIKey == "" {
 		return false, false
@@ -131,17 +186,20 @@ func runSetup() error {
 	}
 	suggested := "google/gemma-4-31b-it"
 	if baseURL != "" {
-		suggested = "llama3.2-vision"
+		suggested = "gemma3:4b"
 	}
 	fmt.Println("Recommended vision models:")
-	for _, id := range []string{"google/gemma-4-31b-it", "google/gemma-4-26b-a4b-it", "google/gemini-3.5-flash-lite", "google/gemini-3.1-flash-lite"} {
+	for _, p := range modelPresets() {
+		if baseURL != "" && !strings.Contains(p.Slug, ":") {
+			continue // skip OpenRouter-only slugs for local endpoints
+		}
 		mark := " "
 		for _, v := range vision {
-			if v == id {
+			if v == p.Slug {
 				mark = "✓"
 			}
 		}
-		fmt.Printf("  %s %s\n", mark, id)
+		fmt.Printf("  %s %-30s  %s\n", mark, p.Slug, p.Notes)
 	}
 	fmt.Printf("Model [%s]: ", suggested)
 	choice, _ := r.ReadString('\n')
@@ -164,14 +222,20 @@ func runSetup() error {
 	return nil
 }
 
+func printModelPresets() {
+	b, _ := json.MarshalIndent(modelPresets(), "", "  ")
+	fmt.Println(string(b))
+}
+
 func listModels(cfg Config) {
+	printModelPresets()
 	if cfg.APIBaseURL != "" {
-		fmt.Println("custom api_base_url set; list local models with your endpoint's /models route")
+		fmt.Println("\ncustom api_base_url set; list local models with your endpoint's /models route")
 		return
 	}
 	models, err := fetchModels(cfg.OpenRouterAPIKey)
 	if err != nil {
-		fmt.Println("could not fetch models:", err)
+		fmt.Println("\ncould not fetch models:", err)
 		return
 	}
 	fmt.Println("vision-capable models (image input):")

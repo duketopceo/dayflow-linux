@@ -1,16 +1,36 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import qs.Ui
 
 Flickable {
   id: root
   property var dayflow: parent && parent.panel ? parent.panel : null
+  property var presets: []
 
   width: parent ? parent.width : 0
   implicitHeight: Math.min(col.implicitHeight + Style.space(12), Style.space(460))
   height: implicitHeight
   contentHeight: col.implicitHeight + Style.space(12)
   clip: true
+
+  function applyPresets(raw) {
+    try {
+      root.presets = JSON.parse(raw)
+    } catch (e) {
+      console.warn("dayflow: could not parse model presets")
+    }
+  }
+
+  Process {
+    id: modelsProc
+    command: ["dayflow", "models", "--json"]
+    running: true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyPresets(text)
+    }
+  }
 
   Column {
     id: col
@@ -61,6 +81,67 @@ Flickable {
         value: dayflow.configDraft.model || ""
         hint: "e.g. google/gemma-4-31b-it"
         onEdited: dayflow.configDraft.model = text
+      }
+
+      Text {
+        width: parent.width
+        text: "Presets"
+        color: dayflow.foreground
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+
+      Flow {
+        width: parent.width
+        spacing: Style.space(6)
+
+        Repeater {
+          model: root.presets
+          delegate: Rectangle {
+            width: chipText.implicitWidth + Style.space(12)
+            height: chipText.implicitHeight + Style.space(6)
+            radius: Style.cornerRadius
+            color: dayflow.configDraft.model === modelData.slug
+              ? dayflow.accentFill(0.16)
+              : (chipMouse.containsMouse ? dayflow.accentFill(0.08) : dayflow.fgFill(0.04))
+            border.color: dayflow.configDraft.model === modelData.slug
+              ? dayflow.accentFill(0.5)
+              : dayflow.fgFill(0.12)
+
+            Text {
+              id: chipText
+              anchors.centerIn: parent
+              text: modelData.name
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: chipMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: dayflow.configDraft.model = modelData.slug
+            }
+          }
+        }
+      }
+
+      Text {
+        width: parent.width
+        text: root.presets.length > 0 && dayflow.configDraft.model
+          ? (function() {
+              for (var i = 0; i < root.presets.length; i++) {
+                if (root.presets[i].slug === dayflow.configDraft.model) return root.presets[i].notes
+              }
+              return ""
+            })()
+          : ""
+        color: dayflow.dim
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+        visible: text !== ""
       }
 
       Text {

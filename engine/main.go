@@ -392,7 +392,11 @@ func main() {
 	case "doctor":
 		runDoctor(cfg)
 	case "models":
-		listModels(cfg)
+		if len(args) >= 1 && args[0] == "--json" {
+			printModelPresets()
+		} else {
+			listModels(cfg)
+		}
 
 	case "install":
 		fatal(installUnits())
