@@ -618,7 +618,8 @@ Panel {
     Rectangle {
       visible: items.length > 0
       width: parent ? parent.width : 0
-      height: sCol.implicitHeight + Style.space(16)
+      implicitHeight: sCol.implicitHeight + Style.space(16)
+      height: implicitHeight
       radius: Style.cornerRadius
       color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.04)
       border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.08)
