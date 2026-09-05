@@ -19,13 +19,16 @@ import (
 // var so tests can point at a stub server.
 var openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
 
-const summarizePrompt = `You are analyzing screen captures from a personal activity tracker.
+const summarizePromptTemplate = `You are analyzing screen captures from a personal activity tracker.
 These images are frames sampled across a %d-minute window of the user's screen.
 
+Classify the activity into exactly one category from the list below. Use the description to decide:
+%s
+%s
 Respond with ONLY a JSON object (no markdown fences) in this exact shape:
 {"title": "a descriptive 4-8 word title naming the concrete task, project, or topic — e.g. 'Debugging Hyprland audio routing in Omarchy', 'Reviewing PR feedback on dayflow panel', 'Reading OpenRouter docs for vision API'",
  "summary": "2-4 sentences describing what the user was actually doing, in second person past tense. Be specific and descriptive — name the project, files, apps, sites, and the goal or problem being worked on, e.g. 'You were debugging why the Dayflow panel buttons rendered white in Quickshell, editing Panel.qml and restarting the shell to verify the accent color fix.' — not generic like 'Coding and testing'.",
- "category": "one of: coding, browsing, communication, writing, design, media, meetings, system, idle, personal, other",
+ "category": "one of: %s",
  "productive": true or false — true if the user was actively making progress on work (coding, writing, debugging, configuring, planning a project, applying for a job, etc.), false if they were passively consuming, social browsing, idle, or in entertainment. For example: Ghostty with a terminal build is productive=true; YouTube/Reddit/music is productive=false; managing OpenRouter keys in a browser is productive=true because it is task work.",
  "activities": [{"app": "window class or app name, lowercase, e.g. 'neovim' or 'firefox'", "title": "3-6 word descriptive title naming the specific thing done in that app", "summary": "1-2 sentences, second person past tense, concrete details", "category": "same enum", "productive": true or false}]}
 
@@ -33,6 +36,22 @@ Respond with ONLY a JSON object (no markdown fences) in this exact shape:
 Be concrete and descriptive: name apps, sites, files, repos, doc pages, and the actual topic or task visible on screen. Avoid generic labels like "Software Development" or "Coding and Testing" — say WHAT was being developed or tested. If the screen was locked, idle, or unchanged the whole time, use category "idle" and return activities: [].
 If the screen contains explicit sexual or adult content, do not describe it. Instead produce a generic, non-graphic summary such as "Personal activity" and use category "personal". Never name adult sites or describe explicit material.
 Do not include credit card numbers, bank account details, ID numbers, Social Security numbers, passwords, API keys, access tokens, or other sensitive personal information. If the screen is dominated by such sensitive information, produce a generic summary such as "Personal activity" and use category "personal".`
+
+func buildSummarizePrompt(cfg Config) string {
+	var catList strings.Builder
+	for _, c := range cfg.Categories {
+		fmt.Fprintf(&catList, "- %s: %s\n", c.Name, c.Description)
+	}
+	catNames := make([]string, len(cfg.Categories))
+	for i, c := range cfg.Categories {
+		catNames[i] = c.Name
+	}
+	extra := ""
+	if cfg.ClassificationPrompt != "" {
+		extra = "\nThe user has also provided the following extra classification guidance:\n" + cfg.ClassificationPrompt + "\n"
+	}
+	return fmt.Sprintf(summarizePromptTemplate, cfg.BlockMinutes, catList.String(), extra, strings.Join(catNames, ", "))
+}
 
 type orContent struct {
 	Type     string `json:"type"`
@@ -95,7 +114,7 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 	if cfg.APIBaseURL == "" && apiKey(cfg) == "" {
 		return nil, 0, 0, fmt.Errorf("no API key: set openrouter_api_key in %s or OPENROUTER_API_KEY", configPath())
 	}
-	content := []orContent{{Type: "text", Text: fmt.Sprintf(summarizePrompt, cfg.BlockMinutes)}}
+	content := []orContent{{Type: "text", Text: buildSummarizePrompt(cfg)}}
 	for _, f := range frames {
 		raw, err := os.ReadFile(f)
 		if err != nil {

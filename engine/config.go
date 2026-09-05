@@ -10,25 +10,36 @@ import (
 	"strings"
 )
 
+// Category is a user-definable bucket for activity classification.
+// The description is shown to the vision model so it can map screenshots
+// to the right bucket.
+type Category struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Color       string `json:"color,omitempty"` // optional hex color for UI
+}
+
 type Config struct {
-	Provider            string   `json:"provider"` // openrouter, local, custom, mcp
-	OpenRouterAPIKey    string   `json:"openrouter_api_key"`
-	Model               string   `json:"model"`
-	APIBaseURL          string   `json:"api_base_url"` // OpenAI-compatible endpoint; empty = OpenRouter
-	CaptureIntervalSec  int      `json:"capture_interval_sec"`
-	BlockMinutes        int      `json:"block_minutes"`
-	FramesPerBlock      int      `json:"frames_per_block"`
-	JPEGQuality         int      `json:"jpeg_quality"`
-	KeepFrames          bool     `json:"keep_frames"`
-	RetentionDays       int      `json:"retention_days"`
-	IgnoreApps          []string `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
-	CaptureCommand      string   `json:"capture_command"` // override; default auto-detect grim
-	Output              string   `json:"output"`          // grim -o <output>; empty = all outputs
-	SiteName            string   `json:"site_name"`       // OpenRouter X-Title
-	MaxStorageMB        int      `json:"max_storage_mb"`  // 0 = unlimited frame storage
-	AutoPauseLocked     bool     `json:"auto_pause_locked"`
-	FilterInappropriate bool     `json:"filter_inappropriate"` // redact adult/explicit content
-	Debug               bool     `json:"debug"`                // verbose engine log to debug.log
+	Provider             string     `json:"provider"` // openrouter, local, custom, mcp
+	OpenRouterAPIKey     string     `json:"openrouter_api_key"`
+	Model                string     `json:"model"`
+	APIBaseURL           string     `json:"api_base_url"` // OpenAI-compatible endpoint; empty = OpenRouter
+	CaptureIntervalSec   int        `json:"capture_interval_sec"`
+	BlockMinutes         int        `json:"block_minutes"`
+	FramesPerBlock       int        `json:"frames_per_block"`
+	JPEGQuality          int        `json:"jpeg_quality"`
+	KeepFrames           bool       `json:"keep_frames"`
+	RetentionDays        int        `json:"retention_days"`
+	IgnoreApps           []string   `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
+	CaptureCommand       string     `json:"capture_command"` // override; default auto-detect grim
+	Output               string     `json:"output"`          // grim -o <output>; empty = all outputs
+	SiteName             string     `json:"site_name"`       // OpenRouter X-Title
+	MaxStorageMB         int        `json:"max_storage_mb"`  // 0 = unlimited frame storage
+	AutoPauseLocked      bool       `json:"auto_pause_locked"`
+	FilterInappropriate  bool       `json:"filter_inappropriate"` // redact adult/explicit content
+	Debug                bool       `json:"debug"`                // verbose engine log to debug.log
+	Categories           []Category `json:"categories"`
+	ClassificationPrompt string     `json:"classification_prompt"` // extra instructions for the vision model
 }
 
 // normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1
@@ -80,19 +91,37 @@ func configPath() string {
 
 func defaultConfig() Config {
 	return Config{
-		Provider:            "openrouter",
-		Model:               "google/gemma-4-31b-it",
-		CaptureIntervalSec:  10,
-		BlockMinutes:        15,
-		FramesPerBlock:      30,
-		JPEGQuality:         55,
-		KeepFrames:          false,
-		RetentionDays:       7,
-		IgnoreApps:          []string{},
-		SiteName:            "dayflow-linux",
-		MaxStorageMB:        10240,
-		AutoPauseLocked:     true,
-		FilterInappropriate: true,
+		Provider:             "openrouter",
+		Model:                "google/gemma-4-31b-it",
+		CaptureIntervalSec:   10,
+		BlockMinutes:         15,
+		FramesPerBlock:       30,
+		JPEGQuality:          55,
+		KeepFrames:           false,
+		RetentionDays:        7,
+		IgnoreApps:           []string{},
+		SiteName:             "dayflow-linux",
+		MaxStorageMB:         10240,
+		AutoPauseLocked:      true,
+		FilterInappropriate:  true,
+		Categories:           defaultCategories(),
+		ClassificationPrompt: "",
+	}
+}
+
+func defaultCategories() []Category {
+	return []Category{
+		{Name: "coding", Description: "Writing, debugging, reviewing, or shipping code, config, scripts, or infrastructure."},
+		{Name: "browsing", Description: "General web browsing, reading docs, or searching without a concrete task."},
+		{Name: "communication", Description: "Email, chat, calls, video meetings, or messaging."},
+		{Name: "writing", Description: "Writing documents, notes, markdown, specs, or long-form text."},
+		{Name: "design", Description: "Creating or editing designs, images, video, UI/UX, or 3D assets."},
+		{Name: "media", Description: "Watching videos, listening to music, gaming, or other entertainment."},
+		{Name: "meetings", Description: "In a meeting, standup, interview, or call."},
+		{Name: "system", Description: "OS maintenance, package installs, backups, file management, or sysadmin work."},
+		{Name: "idle", Description: "Screen locked, away, or no visible activity."},
+		{Name: "personal", Description: "Personal, private, or sensitive activity that is not work-related."},
+		{Name: "other", Description: "Anything that does not fit the other buckets."},
 	}
 }
 
@@ -154,6 +183,65 @@ func openRouterKeysFallback() string {
 		return ""
 	}
 	return k.APIKey
+}
+
+func writeConfig(cfg Config) error {
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	if err := os.MkdirAll(configDir(), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(configPath(), b, 0o600)
+}
+
+// patchConfig merges a JSON patch object into the current config. Values with
+// the sentinel "***redacted***" are ignored so the panel can safely round-trip
+// the API key field without overwriting it.
+func patchConfig(patch string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	var patchMap map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(patch), &patchMap); err != nil {
+		return fmt.Errorf("patch must be a JSON object: %w", err)
+	}
+	if v, ok := patchMap["openrouter_api_key"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil && s == "***redacted***" {
+			delete(patchMap, "openrouter_api_key")
+		}
+	}
+	if v, ok := patchMap["api_base_url"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			patchMap["api_base_url"] = json.RawMessage(`"` + normalizeAPIBaseURL(s) + `"`)
+		}
+	}
+	baseJSON, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(baseJSON, &merged); err != nil {
+		return err
+	}
+	for k, v := range patchMap {
+		merged[k] = v
+	}
+	mergedJSON, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(mergedJSON, &cfg); err != nil {
+		return fmt.Errorf("patched config is invalid: %w", err)
+	}
+	if cfg.Model == "" {
+		return fmt.Errorf("model is required")
+	}
+	if cfg.Provider == "" {
+		cfg.Provider = "openrouter"
+	}
+	return writeConfig(cfg)
 }
 
 func writeDefaultConfig() error {
@@ -238,6 +326,12 @@ func setConfigValue(key, value string) error {
 		cfg.Debug = b
 	case "site_name":
 		cfg.SiteName = value
+	case "classification_prompt":
+		cfg.ClassificationPrompt = value
+	case "categories":
+		if err := json.Unmarshal([]byte(value), &cfg.Categories); err != nil {
+			return fmt.Errorf("categories must be a JSON array of {name, description, color?}: %w", err)
+		}
 	case "ignore_apps":
 		if value == "" {
 			cfg.IgnoreApps = []string{}
@@ -260,9 +354,5 @@ func setConfigValue(key, value string) error {
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}
-	b, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := os.MkdirAll(configDir(), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(configPath(), b, 0o600)
+	return writeConfig(cfg)
 }

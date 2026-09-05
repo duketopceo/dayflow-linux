@@ -161,7 +161,12 @@ func main() {
 		}
 
 	case "config":
-		if len(args) >= 3 && args[0] == "set" {
+		jsonOut := false
+		if len(args) >= 1 && args[0] == "--json" {
+			jsonOut = true
+			args = args[1:]
+		}
+		if len(args) >= 2 && args[0] == "set" {
 			if args[1] == "model" {
 				if vis, ok := isVisionModel(cfg, args[2]); ok && !vis {
 					fatal(fmt.Errorf("model %q cannot read images — dayflow needs a vision model (see 'dayflow models')", args[2]))
@@ -171,12 +176,26 @@ func main() {
 			fmt.Println("set", args[1])
 			break
 		}
+		if len(args) >= 1 && args[0] == "patch" {
+			patch := args[1]
+			if patch == "" {
+				fatal(fmt.Errorf("config patch requires a JSON object"))
+			}
+			fatal(patchConfig(patch))
+			fmt.Println("config patched")
+			break
+		}
 		masked := cfg
 		if masked.OpenRouterAPIKey != "" {
 			masked.OpenRouterAPIKey = "***redacted***"
 		}
-		b, _ := json.MarshalIndent(masked, "", "  ")
-		fmt.Printf("%s\n%s\n", configPath(), b)
+		if jsonOut {
+			b, _ := json.MarshalIndent(map[string]any{"path": configPath(), "config": masked}, "", "  ")
+			fmt.Println(string(b))
+		} else {
+			b, _ := json.MarshalIndent(masked, "", "  ")
+			fmt.Printf("%s\n%s\n", configPath(), b)
+		}
 
 	case "ignore":
 		var cls string
