@@ -1811,6 +1811,16 @@ Panel {
     }
   }
 
+  Component {
+    id: settingsTabNew
+    Loader {
+      width: parent.width
+      height: item ? item.implicitHeight : Style.space(460)
+      source: "Settings.qml"
+      property var panel: dayflow
+    }
+  }
+
   // ---- helpers ----
   Component {
     id: sectionList
@@ -2065,7 +2075,7 @@ Panel {
           sourceComponent: dayflow.currentTab === "today" ? todayTab
             : dayflow.currentTab === "standup" ? standupTab
             : dayflow.currentTab === "week" ? weekTab
-            : settingsTab
+            : settingsTabNew
         }
 
         PanelSeparator { foreground: dayflow.foreground }

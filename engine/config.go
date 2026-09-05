@@ -105,9 +105,15 @@ func defaultConfig() Config {
 		AutoPauseLocked:      true,
 		FilterInappropriate:  true,
 		Categories:           defaultCategories(),
-		ClassificationPrompt: "",
+		ClassificationPrompt: defaultClassificationPrompt,
 	}
 }
+
+const defaultClassificationPrompt = `Browsing and coding can each be work or personal depending on what is visible.
+- Work = actively shipping or maintaining projects, job-related tasks, debugging, configuring systems, reading docs to solve a problem, applying for roles, or writing project code.
+- Personal = entertainment, social media scrolling, idle chat, adult content, or consumption with no clear goal.
+- A personal side project still counts as productive when the user is intentionally building or learning for that project.
+- Err on the side of productive when the user is actively creating, debugging, or problem solving.`
 
 func defaultCategories() []Category {
 	return []Category{
