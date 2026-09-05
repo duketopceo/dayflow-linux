@@ -9,6 +9,12 @@ It captures a lightweight screenshot every 10 seconds, deduplicates unchanged fr
 - **Light**: single static Go binary, ~25MB RAM, sub-1% CPU.
 - **Private controls**: pause toggle, per-app ignore list, automatic frame deletion, retention pruning.
 - **Activity chunking**: each block is split into per-app segments (`activities[]`) and consecutive same-app blocks merge into cards. Failed summaries retry automatically (max 3 attempts, then `dead`; `dayflow retry` resets).
+- **Multi-provider routing**: configure multiple OpenRouter / custom / local / MCP providers and route vision, summary, review, standup, and chat tasks to different endpoints.
+- **Chat with your journal**: ask natural-language questions about your timeline, standup, weekly analytics, or search your journal.
+- **Inline editing**: correct a block's title, category, summary, or productive flag; edits overlay the raw row and flow into analytics.
+- **Standup drafts**: save highlights, tasks, blockers, and priorities; they appear in generated standup updates.
+- **Daily workflow grid**: a macOS-style 15-minute slot view of the day by category.
+- **Weekly analytics**: category donut, app treemap, context-shift Sankey, focus blocks, highlights, and suggestions.
 
 ## Repository layout
 
@@ -95,9 +101,17 @@ Uninstalling leaves your data in place until you `rm -rf` it, so you can back ou
 ```sh
 dayflow today                  # today's timeline
 dayflow day 2026-09-03         # any day
+dayflow day --grid             # macOS-style daily workflow grid
 dayflow status                 # state, counts, model
 dayflow standup                # yesterday/today standup update
+dayflow standup save           # save draft fields for today
+dayflow standup draft          # load saved draft
 dayflow insights [day|week|month] # focus, categories, apps, distractions
+dayflow weekly                 # weekly analytics + charts
+dayflow chat "What did I work on this week?" [--conversation-id N]
+dayflow conversations          # list chat threads
+dayflow edit <start> <field> <value>   # correct title/category/summary/productive
+dayflow provider list|add|set|remove|test  # multi-provider routing
 dayflow summarize --now        # force summarization including the current block
 dayflow pause | resume | toggle
 dayflow ignore <class>         # never capture while this app is focused

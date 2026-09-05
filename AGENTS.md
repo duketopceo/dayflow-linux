@@ -32,8 +32,12 @@ screen frames, and a summarizer turns each 15-minute block into a
 
 ```sh
 dayflow today|day <date>|timeline [--json] [date]
+dayflow day <date> --grid [--json]              # macOS-style daily workflow grid
 dayflow week|month [--json]
+dayflow weekly [--json]                         # weekly analytics, charts, highlights
 dayflow standup [--json]                         # yesterday/today standup update
+dayflow standup save --date YYYY-MM-DD --highlights "..." --tasks "..." --blockers "..." --priorities "..."
+dayflow standup draft|load [--date YYYY-MM-DD]   # saved standup draft
 dayflow insights [day|week|month] [--json]      # focus, category, app analytics
 dayflow export [today|week|month|YYYY-MM-DD]   # markdown
 dayflow status [--json]
@@ -42,6 +46,11 @@ dayflow usage [--json]
 dayflow stats [--json]                          # storage, block counts, coverage, API usage
 dayflow blocks [--json]                        # failed summaries
 dayflow search <query>                         # search titles/summaries/apps
+dayflow chat [message] [--conversation-id N] [--json]
+dayflow conversations [--json]                   # list chat conversations
+dayflow edit <start_ts|YYYY-MM-DD HH:MM> <field> <value>  # correct title/category/summary/productive
+dayflow edits <start_ts|YYYY-MM-DD HH:MM>        # audit history for a block
+dayflow provider list|add|set|remove|test        # multi-provider routing
 dayflow retry                                  # reset failed blocks
 dayflow scrub <query>                          # delete blocks matching <query>
 dayflow pause|resume|toggle
@@ -55,7 +64,7 @@ dayflow doctor
 
 `dayflow mcp` exposes tools: `get_timeline(date)`, `get_status`,
 `search_journal(query)`, `get_events(limit)`, `get_usage`, `get_stats()`,
-`get_standup()`, `get_insights(range)`.
+`get_standup()`, `get_insights(range)`, `chat(message, conversation_id)`.
 
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp
@@ -67,7 +76,15 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 frames(id, ts, path)                                     -- pending raw frames
 blocks(start_ts PK, end_ts, title, summary, category,    -- the journal
        frame_count, status, error, created_at,
-       productive, activities)
+       productive, activities, attempts, app)             -- app is dominant window class
+block_edits(id, start_ts, field, old_value, new_value, edited_at)  -- user corrections overlay
+chat_conversations(id, title, created_at, updated_at)
+chat_messages(id, conversation_id, role, content, tool_calls, created_at)
+daily_standup_entries(id, date, highlights, tasks, blockers, priorities, ai_summary, created_at, updated_at)
+journal_entries(id, date, entry_type, content, created_at, updated_at)
+day_goals(id, date, description, created_at, updated_at)
+day_goal_categories(id, goal_id, category_name, minutes)
+llm_calls(id, ts, call_type, provider, model, prompt_tokens, completion_tokens, status, error)
 events(id, ts, type, detail)                             -- audit log
 api_calls(id, ts, block_start, model, frames_sent,       -- cost log
           prompt_tokens, completion_tokens, latency_ms, status, error)
@@ -102,14 +119,16 @@ back to the category/app heuristic.
 `capture_command`, `openrouter_api_key`, `site_name`, `debug`,
 `categories` (array of `{name, description, color?}`), and `classification_prompt`
 (extra free-form instructions prepended to every summarization prompt).
+Also `providers` (array of `{id,name,kind,api_base_url,api_key,model,vision,chat,enabled,prompt_overrides}`)
+and `routing` (`{primary,secondary,task_provider}`) for multi-provider/failover routing.
 
 `dayflow config` prints the config with the API key masked; `dayflow config set`
 still writes the real key. `dayflow config --json` prints machine-readable JSON
 (with the key redacted). `dayflow config patch '<json-object>'` merges multiple
 keys atomically and is used by the Settings tab.
-`provider` is a hint for which endpoint style is in use; the summarizer only sends
-`openrouter_api_key` to OpenRouter or `custom` endpoints, never to `local`/`mcp`
-endpoints.
+`provider` is a legacy hint for the endpoint style; the new `providers`/`routing`
+fields control which endpoint each task uses. API keys are only sent to providers
+that are not `local` or `mcp` and have a key configured.
 
 `debug true` writes a verbose engine log to `~/.local/share/dayflow/debug.log`
 (captures, dedup skips, summarize calls with tokens/latency, retention runs,
