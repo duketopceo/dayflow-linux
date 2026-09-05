@@ -7,6 +7,7 @@ Flickable {
   id: root
   property var dayflow: parent && parent.panel ? parent.panel : null
   property var presets: []
+  property string usageText: dayflow ? dayflow.storageText : ""
 
   width: parent ? parent.width : 0
   implicitHeight: Math.min(col.implicitHeight + Style.space(12), Style.space(460))
@@ -30,6 +31,11 @@ Flickable {
       waitForEnd: true
       onStreamFinished: root.applyPresets(text)
     }
+  }
+
+  Connections {
+    target: dayflow
+    function onStorageTextChanged() { root.usageText = dayflow.storageText }
   }
 
   Column {
@@ -317,21 +323,14 @@ Flickable {
         }
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
-          label: "Max storage (MB)"
+          label: root.usageText !== ""
+            ? "Max storage (MB) — using " + root.usageText
+            : "Max storage (MB)"
           value: String(dayflow.configDraft.max_storage_mb || 10240)
           hint: "10240"
           numeric: true
           onEdited: dayflow.configDraft.max_storage_mb = parseInt(text, 10) || 0
         }
-      }
-
-      Text {
-        width: parent.width
-        text: "Currently using " + (dayflow ? dayflow.storageText : "—") + " of data."
-        color: dayflow.dim
-        font.family: dayflow.fontFamily
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.WordWrap
       }
 
       Text {
