@@ -31,6 +31,7 @@ Query:
   blocks [--json]     List blocks that failed summarization
   standup [--json]    Generate a standup update from yesterday/today
   insights [day|week|month] [--json]  Focus, category, app, and distraction analytics
+  review [day|week|month] [--json]  AI-generated weekly review with corrections and advice
 
 Control:
   pause | resume | toggle   Control screen capture
@@ -310,6 +311,48 @@ func main() {
 			json.NewEncoder(os.Stdout).Encode(in.JSON())
 		} else {
 			fmt.Print(formatInsightsMarkdown(in, start, end, label))
+		}
+
+	case "review":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		var start, end time.Time
+		rangeLabel := "this week"
+		sel := "week"
+		for _, a := range args {
+			if a[0] != '-' {
+				sel = a
+			}
+		}
+		switch sel {
+		case "day", "today":
+			start, end = dayBounds(time.Now())
+			rangeLabel = "today"
+		case "yesterday":
+			start, end = dayBounds(time.Now().AddDate(0, 0, -1))
+			rangeLabel = "yesterday"
+		case "week":
+			start, end = weekBounds(time.Now())
+		case "month":
+			start, end = monthBounds(time.Now())
+			rangeLabel = "this month"
+		default:
+			usage()
+		}
+		text, pt, ct, err := reviewRange(db, cfg, start, end, rangeLabel)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(map[string]any{
+				"review":            text,
+				"prompt_tokens":     pt,
+				"completion_tokens": ct,
+			})
+		} else {
+			fmt.Println(text)
+			if pt+ct > 0 {
+				fmt.Printf("\n(tokens: %d prompt + %d completion)\n", pt, ct)
+			}
 		}
 
 	case "search":

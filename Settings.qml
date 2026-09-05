@@ -324,14 +324,21 @@ Flickable {
         }
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
-          label: root.usageText !== ""
-            ? "Max storage (MB) — using " + root.usageText
-            : "Max storage (MB)"
+          label: "Max storage (MB)"
           value: String(dayflow.configDraft.max_storage_mb || 10240)
           hint: "10240"
           numeric: true
           onEdited: dayflow.configDraft.max_storage_mb = parseInt(text, 10) || 0
         }
+      }
+
+      Text {
+        width: parent.width
+        text: "Currently using " + (root.usageText !== "" ? root.usageText : "—") + " of data."
+        color: dayflow.dim
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
       }
 
       Text {

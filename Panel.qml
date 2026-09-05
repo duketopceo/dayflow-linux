@@ -34,6 +34,8 @@ Panel {
   property var weekBlocks: []
   property string weekStart: ""
   property string weekEnd: ""
+  property string weekSummary: ""
+  property bool weekSummaryLoading: false
   property var spans: []
   property int dayOffset: 0
   property bool expanded: false
@@ -247,6 +249,16 @@ Panel {
       dayflow.weekEnd = d.end || ""
     } catch (e) {
       dayflow.weekBlocks = []
+    }
+  }
+
+  function applyWeekReview(raw) {
+    dayflow.weekSummaryLoading = false
+    try {
+      var d = JSON.parse(raw)
+      dayflow.weekSummary = d.review || ""
+    } catch (e) {
+      dayflow.weekSummary = "Could not load weekly review."
     }
   }
 
@@ -480,6 +492,15 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyWeekTimeline(text)
+    }
+  }
+
+  Process {
+    id: reviewProc
+    command: ["dayflow", "review", "week", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyWeekReview(text)
     }
   }
 
@@ -1070,6 +1091,114 @@ Panel {
                   }
                 }
               }
+            }
+          }
+        }
+
+        Rectangle {
+          visible: dayflow.insights.total_minutes > 0
+          width: parent.width
+          height: reviewCol.implicitHeight + Style.space(16)
+          radius: Style.cornerRadius
+          color: dayflow.fgFill(0.04)
+          border.color: dayflow.fgFill(0.08)
+
+          Column {
+            id: reviewCol
+            width: parent.width - Style.space(16)
+            anchors.centerIn: parent
+            spacing: Style.space(8)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Text {
+                text: "Weekly review"
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+
+              Rectangle {
+                width: genText.implicitWidth + Style.space(12)
+                height: genText.implicitHeight + Style.space(6)
+                radius: Style.cornerRadius
+                color: dayflow.btnBg(genMa.containsMouse)
+                border.color: dayflow.accentFill(0.5)
+                visible: !dayflow.weekSummaryLoading && dayflow.weekSummary === ""
+
+                Text {
+                  id: genText
+                  anchors.centerIn: parent
+                  text: "Generate"
+                  color: dayflow.foreground
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                MouseArea {
+                  id: genMa
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  onClicked: { dayflow.weekSummaryLoading = true; if (!reviewProc.running) reviewProc.running = true }
+                }
+              }
+
+              Rectangle {
+                width: regText.implicitWidth + Style.space(12)
+                height: regText.implicitHeight + Style.space(6)
+                radius: Style.cornerRadius
+                color: dayflow.btnBg(regMa.containsMouse)
+                border.color: dayflow.accentFill(0.5)
+                visible: !dayflow.weekSummaryLoading && dayflow.weekSummary !== ""
+
+                Text {
+                  id: regText
+                  anchors.centerIn: parent
+                  text: "Regenerate"
+                  color: dayflow.foreground
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                MouseArea {
+                  id: regMa
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  onClicked: { dayflow.weekSummaryLoading = true; if (!reviewProc.running) reviewProc.running = true }
+                }
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: dayflow.weekSummary === "" && !dayflow.weekSummaryLoading
+              text: "Generate a weekly review to get AI advice, corrections, and suggestions."
+              color: dayflow.dim
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              width: parent.width
+              visible: dayflow.weekSummaryLoading
+              text: "Generating weekly review..."
+              color: dayflow.dim
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              width: parent.width
+              visible: !dayflow.weekSummaryLoading && dayflow.weekSummary !== ""
+              text: dayflow.weekSummary
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.WordWrap
+              textFormat: Text.MarkdownText
             }
           }
         }
@@ -2096,9 +2225,7 @@ Panel {
             Text {
               id: a2
               anchors.centerIn: parent
-              text: dayflow.activeApp !== ""
-                ? "Ignore " + dayflow.appDisplayName(dayflow.activeApp)
-                : "Ignore app"
+              text: "Ignore current app"
               color: dayflow.activeApp !== "" ? dayflow.foreground : dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -2149,7 +2276,7 @@ Panel {
             Text {
               id: a4
               anchors.centerIn: parent
-              text: "Copy journal"
+              text: "Copy today's journal"
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
