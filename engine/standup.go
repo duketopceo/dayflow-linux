@@ -3,9 +3,20 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
+
+// StandupEntry is one aggregated line of a standup: all the day's merged
+// cards for the same app + category folded into a single duration-ranked row.
+type StandupEntry struct {
+	Title    string `json:"title"`
+	Minutes  int    `json:"minutes"`
+	Category string `json:"category"`
+	App      string `json:"app"`
+	Span     string `json:"span"`
+}
 
 // generateStandup returns a markdown standup update using yesterday's and
 // today's summarized blocks. It relies on the existing block summaries rather
@@ -23,44 +34,48 @@ func generateStandup(db *sql.DB, cfg Config, asJSON bool) (string, map[string]an
 		return "", nil, err
 	}
 
-	yHighlights := standupHighlights(yBlocks)
-	tHighlights := standupHighlights(tBlocks)
+	yEntries, yTotal := standupEntries(yBlocks)
+	tEntries, tTotal := standupEntries(tBlocks)
 
 	if asJSON {
-		if yHighlights == nil {
-			yHighlights = []string{}
+		if yEntries == nil {
+			yEntries = []StandupEntry{}
 		}
-		if tHighlights == nil {
-			tHighlights = []string{}
+		if tEntries == nil {
+			tEntries = []StandupEntry{}
 		}
 		out := map[string]any{
 			"yesterday": map[string]any{
-				"date":       yesterday.Format("2006-01-02"),
-				"highlights": yHighlights,
+				"date":          yesterday.Format("2006-01-02"),
+				"total_minutes": yTotal,
+				"entries":       yEntries,
 			},
 			"today": map[string]any{
-				"date":       today.Format("2006-01-02"),
-				"highlights": tHighlights,
+				"date":          today.Format("2006-01-02"),
+				"total_minutes": tTotal,
+				"entries":       tEntries,
 			},
 		}
 		return "", out, nil
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Standup update\n\n**Yesterday** (%s):\n", yesterday.Format("Monday, Jan 2"))
-	if len(yHighlights) == 0 {
+	fmt.Fprintf(&b, "# Standup update\n\n**Yesterday** (%s) — %s tracked:\n",
+		yesterday.Format("Monday, Jan 2"), fmtDur(yTotal))
+	if len(yEntries) == 0 {
 		b.WriteString("_No summarized activity._\n")
 	} else {
-		for _, h := range yHighlights {
-			fmt.Fprintf(&b, "- %s\n", h)
+		for _, e := range yEntries {
+			fmt.Fprintf(&b, "- **%s** — %s\n", fmtDur(e.Minutes), standupLabel(e))
 		}
 	}
-	fmt.Fprintf(&b, "\n**Today so far** (%s):\n", today.Format("Monday, Jan 2"))
-	if len(tHighlights) == 0 {
+	fmt.Fprintf(&b, "\n**Today so far** (%s) — %s tracked:\n",
+		today.Format("Monday, Jan 2"), fmtDur(tTotal))
+	if len(tEntries) == 0 {
 		b.WriteString("_No summarized activity yet._\n")
 	} else {
-		for _, h := range tHighlights {
-			fmt.Fprintf(&b, "- %s\n", h)
+		for _, e := range tEntries {
+			fmt.Fprintf(&b, "- **%s** — %s\n", fmtDur(e.Minutes), standupLabel(e))
 		}
 	}
 	b.WriteString("\n**Blockers:**\n_What is in your way?_\n")
@@ -68,26 +83,53 @@ func generateStandup(db *sql.DB, cfg Config, asJSON bool) (string, map[string]an
 	return b.String(), nil, nil
 }
 
-func standupHighlights(blocks []Block) []string {
-	if len(blocks) == 0 {
-		return nil
+func standupLabel(e StandupEntry) string {
+	parts := []string{}
+	if e.App != "" {
+		parts = append(parts, e.App)
 	}
-	var out []string
+	parts = append(parts, catDisplay(e.Category))
+	return fmt.Sprintf("%s (%s)", e.Title, strings.Join(parts, " · "))
+}
+
+// standupEntries folds the day's merged cards into app+category groups and
+// returns them ranked by total minutes, along with tracked minutes overall.
+func standupEntries(blocks []Block) ([]StandupEntry, int) {
+	if len(blocks) == 0 {
+		return nil, 0
+	}
+	type group struct {
+		entry    StandupEntry
+		bestMins int
+	}
+	groups := map[string]*group{}
+	total := 0
 	for _, c := range mergeCards(blocks) {
 		if c.Category == "idle" || c.Title == "No activity" {
 			continue
 		}
-		app := ""
-		if c.App != "" {
-			app = fmt.Sprintf(" @%s", appDisplayName(c.App))
+		total += c.Minutes
+		app := c.AppName
+		if app == "" {
+			app = appDisplayName(c.App)
 		}
-		if c.Blocks > 1 {
-			out = append(out, fmt.Sprintf("%s–%s — %s (%s, %s, %d blocks)%s",
-				c.StartStr, c.EndStr, c.Title, catDisplay(c.Category), fmtDur(c.Minutes), c.Blocks, app))
-		} else {
-			out = append(out, fmt.Sprintf("%s–%s — %s (%s, %s)%s",
-				c.StartStr, c.EndStr, c.Title, catDisplay(c.Category), fmtDur(c.Minutes), app))
+		key := app + "|" + c.Category
+		g, ok := groups[key]
+		if !ok {
+			g = &group{entry: StandupEntry{Category: c.Category, App: app}}
+			groups[key] = g
+		}
+		g.entry.Minutes += c.Minutes
+		if c.Minutes >= g.bestMins {
+			g.bestMins = c.Minutes
+			g.entry.Title = c.Title
+			g.entry.Span = c.StartStr + "–" + c.EndStr
 		}
 	}
-	return out
+	out := make([]StandupEntry, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, g.entry)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Minutes > out[j].Minutes })
+	return out, total
 }

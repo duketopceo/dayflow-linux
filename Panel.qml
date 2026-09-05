@@ -26,7 +26,7 @@ Panel {
   property string storageText: ""
   property string notice: ""
   property string currentTab: "today"
-  property var standup: ({ yesterday: { date: "", highlights: [] }, today: { date: "", highlights: [] } })
+  property var standup: ({ yesterday: { date: "", total_minutes: 0, entries: [] }, today: { date: "", total_minutes: 0, entries: [] } })
   property var insights: ({ total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, categories: [], apps: [], top_distractions: [], focus_blocks: [], days: 0 })
   property var weekBlocks: []
   property string weekStart: ""
@@ -713,7 +713,7 @@ Panel {
       spacing: Style.space(10)
 
       Text {
-        visible: dayflow.standup.yesterday.highlights.length === 0 && dayflow.standup.today.highlights.length === 0
+        visible: dayflow.standup.yesterday.entries.length === 0 && dayflow.standup.today.entries.length === 0
         width: parent.width
         text: "No standup data yet — need a few summarized blocks."
         color: dayflow.dim
@@ -722,80 +722,120 @@ Panel {
         wrapMode: Text.WordWrap
       }
 
-      Rectangle {
-        visible: dayflow.standup.yesterday.highlights.length > 0
-        width: parent.width
-        height: yCol.implicitHeight + Style.space(16)
-        radius: Style.cornerRadius
-        color: dayflow.fgFill(0.04)
-        border.color: dayflow.fgFill(0.08)
+      Component {
+        id: standupDay
 
-        Column {
-          id: yCol
-          width: parent.width - Style.space(16)
-          anchors.centerIn: parent
-          spacing: Style.space(6)
+        Rectangle {
+          property string label: ""
+          property var day: ({ date: "", total_minutes: 0, entries: [] })
 
-          Text {
-            text: "Yesterday" + (dayflow.standup.yesterday.date ? " · " + dayflow.standup.yesterday.date : "")
-            color: dayflow.foreground
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
+          width: parent.width
+          height: sdCol.implicitHeight + Style.space(16)
+          radius: Style.cornerRadius
+          color: dayflow.fgFill(0.04)
+          border.color: dayflow.fgFill(0.08)
 
-          Repeater {
-            model: dayflow.standup.yesterday.highlights || []
-            delegate: Text {
+          Column {
+            id: sdCol
+            width: parent.width - Style.space(16)
+            anchors.centerIn: parent
+            spacing: Style.space(8)
+
+            Row {
               width: parent.width
-              text: "• " + modelData
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              wrapMode: Text.WordWrap
+
+              Text {
+                text: label
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+
+              Text {
+                anchors.right: parent.right
+                text: dayflow.fmtDur(day.total_minutes) + " tracked"
+                color: dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Repeater {
+              model: day.entries || []
+              delegate: Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Rectangle {
+                  width: durText.implicitWidth + Style.space(10)
+                  height: durText.implicitHeight + Style.space(4)
+                  radius: Style.cornerRadius
+                  color: dayflow.accentFill(0.12)
+
+                  Text {
+                    id: durText
+                    anchors.centerIn: parent
+                    text: dayflow.fmtDur(modelData.minutes)
+                    color: dayflow.foreground
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+                }
+
+                Column {
+                  width: parent.width - parent.spacing - (durText.implicitWidth + Style.space(10))
+                  spacing: Style.space(1)
+
+                  Text {
+                    width: parent.width
+                    text: modelData.title
+                    color: dayflow.foreground
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                  }
+
+                  Text {
+                    width: parent.width
+                    text: (modelData.app ? modelData.app + " · " : "")
+                          + dayflow.catDisplay(modelData.category)
+                          + (modelData.span ? " · " + modelData.span : "")
+                    color: dayflow.dim
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                }
+              }
             }
           }
         }
       }
 
-      Rectangle {
-        visible: dayflow.standup.today.highlights.length > 0
+      Loader {
         width: parent.width
-        height: tCol.implicitHeight + Style.space(16)
-        radius: Style.cornerRadius
-        color: dayflow.fgFill(0.04)
-        border.color: dayflow.fgFill(0.08)
+        visible: dayflow.standup.yesterday.entries.length > 0
+        sourceComponent: standupDay
+        onLoaded: {
+          item.label = "Yesterday"
+          item.day = dayflow.standup.yesterday
+        }
+      }
 
-        Column {
-          id: tCol
-          width: parent.width - Style.space(16)
-          anchors.centerIn: parent
-          spacing: Style.space(6)
-
-          Text {
-            text: "Today" + (dayflow.standup.today.date ? " · " + dayflow.standup.today.date : "")
-            color: dayflow.foreground
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-
-          Repeater {
-            model: dayflow.standup.today.highlights || []
-            delegate: Text {
-              width: parent.width
-              text: "• " + modelData
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              wrapMode: Text.WordWrap
-            }
-          }
+      Loader {
+        width: parent.width
+        visible: dayflow.standup.today.entries.length > 0
+        sourceComponent: standupDay
+        onLoaded: {
+          item.label = "Today"
+          item.day = dayflow.standup.today
         }
       }
 
       Rectangle {
-        visible: dayflow.standup.today.highlights.length > 0
+        visible: dayflow.standup.today.entries.length > 0 || dayflow.standup.yesterday.entries.length > 0
         width: parent.width
         height: bCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
@@ -818,7 +858,7 @@ Panel {
 
           Text {
             width: parent.width
-            text: "What is in your way? (add manually in standup)"
+            text: "Nothing flagged — fill this in when you write your update."
             color: dayflow.dim
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
