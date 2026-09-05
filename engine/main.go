@@ -69,6 +69,10 @@ Control:
   conversations [--json]  List saved chat conversations
   retry                   Reset failed/dead blocks for re-summarization
   scrub <query>           Delete blocks whose title or summary contains <query>
+  edit <start> <field> <value>   Correct a block's title, category, summary,
+                          or productive flag. <start> is a Unix timestamp or
+                          "YYYY-MM-DD HH:MM" (local time)
+  edits <start> [--json]  List the edit history for a block
 
 Setup & health:
   setup                   Interactive AI-provider onboarding (OpenRouter or local endpoint)
@@ -520,6 +524,62 @@ func main() {
 		n, err := deleteBlocksLike(db, args[0])
 		fatal(err)
 		fmt.Printf("deleted %d block(s) matching %q\n", n, args[0])
+
+	case "edit":
+		// edit <start_ts|"YYYY-MM-DD HH:MM"> <field> <value...>
+		var pos []string
+		for _, a := range args {
+			if a[0] != '-' {
+				pos = append(pos, a)
+			}
+		}
+		ts, rest, err := parseBlockStart(pos)
+		fatal(err)
+		if len(rest) < 2 {
+			fatal(fmt.Errorf("usage: dayflow edit <start> <title|category|summary|productive> <value>"))
+		}
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		field := rest[0]
+		value := strings.Join(rest[1:], " ")
+		fatal(saveBlockEdit(db, cfg, ts, field, value))
+		logEvent(db, "block_edited", fmt.Sprintf("%d %s", ts, field))
+		if jsonOut {
+			b, _ := loadBlockWithEdits(db, ts)
+			json.NewEncoder(os.Stdout).Encode(map[string]any{"block": b})
+		} else {
+			fmt.Printf("edited %s on block %s\n", field,
+				time.Unix(ts, 0).Local().Format("2006-01-02 15:04"))
+		}
+
+	case "edits":
+		var pos []string
+		for _, a := range args {
+			if a[0] != '-' {
+				pos = append(pos, a)
+			}
+		}
+		ts, _, err := parseBlockStart(pos)
+		fatal(err)
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		edits, err := editsForBlock(db, ts)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(edits)
+			break
+		}
+		if len(edits) == 0 {
+			fmt.Println("no edits for this block")
+			break
+		}
+		for _, e := range edits {
+			fmt.Printf("%s  %-10s %q -> %q\n",
+				time.Unix(e.EditedAt, 0).Local().Format("2006-01-02 15:04"),
+				e.Field, e.OldValue, e.NewValue)
+		}
 
 	case "retry":
 		db, err := openDB()

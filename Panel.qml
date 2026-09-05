@@ -165,12 +165,14 @@ Panel {
         prev.count++
         prev.title = b.title
         prev.summary = b.summary
+        prev.productive = prev.productive || (b.productive === true)
       } else {
         spans.push({
           start: b.start, end: b.end,
           start_ts: b.start_ts, end_ts: b.end_ts,
           title: b.title, summary: b.summary,
           category: b.category, app: b.app,
+          productive: b.productive === true,
           appName: b.app_name || dayflow.appDisplayName(b.app),
           minutes: Math.round((Number(b.end_ts) - Number(b.start_ts)) / 60),
           count: 1,
@@ -180,6 +182,40 @@ Panel {
     }
     spans.reverse()
     return spans
+  }
+
+  // ---- block editing ----
+  // Pending `dayflow edit` argv arrays, run one at a time so several field
+  // changes on the same card don't race each other.
+  property var editQueue: []
+
+  // Queue one edit per changed field, then drain via editProc.
+  function saveBlockEdits(startTs, title, category, productive, orig) {
+    var q = []
+    if (title !== (orig.title || ""))
+      q.push(["dayflow", "edit", String(startTs), "title", title])
+    if (category !== (orig.category || ""))
+      q.push(["dayflow", "edit", String(startTs), "category", category])
+    if (productive !== (orig.productive === true))
+      q.push(["dayflow", "edit", String(startTs), "productive", productive ? "true" : "false"])
+    if (q.length === 0) {
+      dayflow.notice = "no changes"
+      return
+    }
+    dayflow.editQueue = q
+    dayflow.runNextEdit()
+  }
+
+  function runNextEdit() {
+    if (dayflow.editQueue.length === 0) {
+      dayflow.notice = "edits saved"
+      dayflow.loadTimeline()
+      return
+    }
+    var next = dayflow.editQueue[0]
+    dayflow.editQueue = dayflow.editQueue.slice(1)
+    editProc.command = next
+    editProc.running = true
   }
 
   function fmtDur(mins) {
@@ -611,6 +647,23 @@ Panel {
   }
 
   Process {
+    id: editProc
+    command: ["dayflow", "edit"]
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: { if (text.trim() !== "") dayflow.notice = text.trim() }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        dayflow.editQueue = []
+        dayflow.notice = "edit failed"
+        return
+      }
+      Qt.callLater(dayflow.runNextEdit)
+    }
+  }
+
+  Process {
     id: standupProc
     command: ["bash", "-c", "dayflow standup | wl-copy"]
     onExited: function(exitCode) {
@@ -755,12 +808,25 @@ Panel {
           model: dayflow.spans
 
           delegate: Rectangle {
+            id: cardRoot
             width: col.width
             height: cardCol.implicitHeight + Style.space(16)
             radius: Style.cornerRadius
             color: dayflow.fgFill(0.04)
             border.color: dayflow.fgFill(0.08)
             clip: true
+
+            property bool editing: false
+            property string editTitle: ""
+            property string editCategory: ""
+            property bool editProd: false
+
+            function beginEdit() {
+              editTitle = modelData.title || ""
+              editCategory = modelData.category || ""
+              editProd = modelData.productive === true
+              editing = true
+            }
 
             // Category-colored edge so spans scan by activity type.
             Rectangle {
@@ -816,6 +882,34 @@ Panel {
                     font.pixelSize: Style.font.caption
                   }
                 }
+
+                Text {
+                  visible: modelData.productive === true
+                  text: "⚡"
+                  color: dayflow.dim
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  text: cardRoot.editing ? "close" : "edit"
+                  color: editLink.containsMouse ? dayflow.foreground : dayflow.dim
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.underline: editLink.containsMouse
+                  anchors.verticalCenter: parent.verticalCenter
+                  MouseArea {
+                    id: editLink
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      if (cardRoot.editing) cardRoot.editing = false
+                      else cardRoot.beginEdit()
+                    }
+                  }
+                }
               }
 
               Text {
@@ -838,6 +932,135 @@ Panel {
                 wrapMode: Text.WordWrap
                 maximumLineCount: 4
                 elide: Text.ElideRight
+              }
+
+              // ---- inline edit form (title, category, productive) ----
+              Column {
+                visible: cardRoot.editing
+                width: parent.width
+                spacing: Style.space(6)
+
+                Rectangle {
+                  width: parent.width
+                  height: titleEdit.implicitHeight + Style.space(8)
+                  radius: Style.cornerRadius
+                  color: dayflow.fgFill(0.06)
+                  border.color: dayflow.fgFill(0.12)
+                  clip: true
+                  TextEdit {
+                    id: titleEdit
+                    anchors.fill: parent
+                    anchors.margins: Style.space(4)
+                    text: cardRoot.editTitle
+                    color: dayflow.foreground
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: TextEdit.Wrap
+                    onTextChanged: { if (activeFocus) cardRoot.editTitle = text }
+                  }
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(6)
+
+                  Rectangle {
+                    width: parent.width - prodPill.width - Style.space(6)
+                    height: catEdit.implicitHeight + Style.space(8)
+                    radius: Style.cornerRadius
+                    color: dayflow.fgFill(0.06)
+                    border.color: dayflow.fgFill(0.12)
+                    clip: true
+                    TextEdit {
+                      id: catEdit
+                      anchors.fill: parent
+                      anchors.margins: Style.space(4)
+                      text: cardRoot.editCategory
+                      color: dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.body
+                      onTextChanged: { if (activeFocus) cardRoot.editCategory = text }
+                    }
+                  }
+
+                  Rectangle {
+                    id: prodPill
+                    height: catEdit.implicitHeight + Style.space(8)
+                    width: prodPillText.implicitWidth + Style.space(12)
+                    radius: height / 2
+                    color: cardRoot.editProd ? dayflow.accentFill(0.15) : dayflow.fgFill(0.06)
+                    border.color: cardRoot.editProd ? dayflow.accentFill(0.5) : dayflow.fgFill(0.12)
+                    Text {
+                      id: prodPillText
+                      anchors.centerIn: parent
+                      text: cardRoot.editProd ? "⚡ productive" : "not productive"
+                      color: dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                    MouseArea {
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: cardRoot.editProd = !cardRoot.editProd
+                    }
+                  }
+                }
+
+                Row {
+                  spacing: Style.space(8)
+
+                  Rectangle {
+                    height: Style.space(24)
+                    width: saveEditText.implicitWidth + Style.space(14)
+                    radius: Style.cornerRadius
+                    color: mSaveEdit.containsMouse ? dayflow.accentFill(0.12) : "transparent"
+                    border.color: dayflow.accentFill(0.5)
+                    Text {
+                      id: saveEditText
+                      anchors.centerIn: parent
+                      text: "Save"
+                      color: dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                    MouseArea {
+                      id: mSaveEdit
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: {
+                        cardRoot.editing = false
+                        dayflow.saveBlockEdits(modelData.start_ts,
+                          cardRoot.editTitle, cardRoot.editCategory,
+                          cardRoot.editProd, modelData)
+                      }
+                    }
+                  }
+
+                  Rectangle {
+                    height: Style.space(24)
+                    width: cancelEditText.implicitWidth + Style.space(14)
+                    radius: Style.cornerRadius
+                    color: mCancelEdit.containsMouse ? dayflow.fgFill(0.08) : "transparent"
+                    border.color: dayflow.fgFill(0.15)
+                    Text {
+                      id: cancelEditText
+                      anchors.centerIn: parent
+                      text: "Cancel"
+                      color: dayflow.dim
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                    MouseArea {
+                      id: mCancelEdit
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: cardRoot.editing = false
+                    }
+                  }
+                }
               }
 
               // Merged span: one row per underlying 15-min block.
