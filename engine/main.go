@@ -41,6 +41,16 @@ Control:
                           retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
                           output, capture_command, openrouter_api_key, provider,
                           filter_inappropriate, debug)
+  provider [list]       List configured providers and routing
+  provider add <id> <kind>          Add a provider (openrouter, local, custom,
+                                    gemini, chatgpt, claude, mcp)
+  provider set <id> <key> <value>   Update a provider (name, kind, api_base_url,
+                                    api_key, model, enabled, vision, chat,
+                                    title_prompt, summary_prompt,
+                                    detailed_prompt, chat_prompt)
+  provider remove <id>              Remove a provider
+  provider test <id|task>           Test a provider or a routed task (vision,
+                                    summary, detailed, chat, review, standup)
   ignore [--active|class] Add an app to the ignore list (--active = focused window)
   unignore <class>        Remove an app from the ignore list
   events [--json] [-n N]  Recent event log (captures, skips, errors, summaries)
@@ -189,6 +199,11 @@ func main() {
 		masked := cfg
 		if masked.OpenRouterAPIKey != "" {
 			masked.OpenRouterAPIKey = "***redacted***"
+		}
+		for i := range masked.Providers {
+			if masked.Providers[i].APIKey != "" {
+				masked.Providers[i].APIKey = "***redacted***"
+			}
 		}
 		if jsonOut {
 			b, _ := json.MarshalIndent(map[string]any{"path": configPath(), "config": masked}, "", "  ")
@@ -424,6 +439,15 @@ func main() {
 		} else {
 			fmt.Print(md)
 		}
+
+	case "provider":
+		var pargs []string
+		for _, a := range args {
+			if a[0] != '-' {
+				pargs = append(pargs, a)
+			}
+		}
+		fatal(runProvider(cfg, pargs, jsonOut))
 
 	case "mcp":
 		fatal(runMCP(cfg))

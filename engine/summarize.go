@@ -1,14 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -51,6 +48,20 @@ func buildSummarizePrompt(cfg Config) string {
 		extra = "\nThe user has also provided the following extra classification guidance:\n" + cfg.ClassificationPrompt + "\n"
 	}
 	return fmt.Sprintf(summarizePromptTemplate, cfg.BlockMinutes, catList.String(), extra, strings.Join(catNames, ", "))
+}
+
+// buildPromptForProvider returns the summarize prompt for a provider, honoring
+// a per-provider summary_prompt override; the classification_prompt is still
+// appended so user guidance applies to every provider.
+func buildPromptForProvider(p Provider, cfg Config) string {
+	if p.PromptOverrides.SummaryPrompt == "" {
+		return buildSummarizePrompt(cfg)
+	}
+	prompt := p.PromptOverrides.SummaryPrompt
+	if cfg.ClassificationPrompt != "" {
+		prompt += "\n\nThe user has also provided the following extra classification guidance:\n" + cfg.ClassificationPrompt
+	}
+	return prompt
 }
 
 type orContent struct {
@@ -110,11 +121,14 @@ func useOpenRouterHeaders(cfg Config) bool {
 	return cfg.APIBaseURL == "" || strings.Contains(cfg.APIBaseURL, "openrouter.ai")
 }
 
+// callOpenRouter summarizes a block's frames via the provider routed for the
+// "vision" task.
 func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error) {
-	if cfg.APIBaseURL == "" && apiKey(cfg) == "" {
-		return nil, 0, 0, fmt.Errorf("no API key: set openrouter_api_key in %s or OPENROUTER_API_KEY", configPath())
+	p, err := providerForTask(cfg, "vision")
+	if err != nil {
+		return nil, 0, 0, err
 	}
-	content := []orContent{{Type: "text", Text: buildSummarizePrompt(cfg)}}
+	content := []orContent{{Type: "text", Text: buildPromptForProvider(p, cfg)}}
 	for _, f := range frames {
 		raw, err := os.ReadFile(f)
 		if err != nil {
@@ -130,55 +144,15 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 		return nil, 0, 0, fmt.Errorf("no readable frames")
 	}
 
-	reqBody, _ := json.Marshal(orRequest{
-		Model:    cfg.Model,
-		Messages: []orMessage{{Role: "user", Content: content}},
-	})
-	req, err := http.NewRequest("POST", chatURL(cfg), bytes.NewReader(reqBody))
+	text, pt, ct, err := callProviderChat(cfg, p, []orMessage{{Role: "user", Content: content}})
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	// Only attach the OpenRouter key to OpenRouter or explicitly "custom"
-	// providers; never send it to local/mcp endpoints.
-	if apiKey(cfg) != "" && (cfg.Provider == "openrouter" || cfg.Provider == "custom") {
-		req.Header.Set("Authorization", "Bearer "+apiKey(cfg))
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if useOpenRouterHeaders(cfg) {
-		req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
-		req.Header.Set("X-Title", cfg.SiteName)
-	}
-
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("api request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != 200 {
-		return nil, 0, 0, fmt.Errorf("api %d: %s", resp.StatusCode, truncate(string(body), 300))
-	}
-	var or orResponse
-	if err := json.Unmarshal(body, &or); err != nil {
-		return nil, 0, 0, fmt.Errorf("api response was not valid JSON: %w", err)
-	}
-	if or.Error != nil {
-		return nil, 0, 0, fmt.Errorf("api error: %s", or.Error.Message)
-	}
-	if len(or.Choices) == 0 {
-		return nil, 0, 0, fmt.Errorf("api returned no choices")
-	}
-	text := stripFences(or.Choices[0].Message.Content)
 	var res blockResult
 	if err := json.Unmarshal([]byte(text), &res); err != nil {
 		return nil, 0, 0, fmt.Errorf("bad model JSON: %w (raw: %s)", err, truncate(text, 200))
 	}
 	sanitizeResult(cfg, &res)
-	pt, ct := 0, 0
-	if or.Usage != nil {
-		pt, ct = or.Usage.PromptTokens, or.Usage.CompletionTokens
-	}
 	return &res, pt, ct, nil
 }
 
@@ -314,8 +288,8 @@ func pendingBlocks(db *sql.DB, cfg Config, now time.Time) ([]time.Time, error) {
 }
 
 func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) {
-	if cfg.OpenRouterAPIKey == "" {
-		return 0, fmt.Errorf("no API key: set openrouter_api_key in %s or OPENROUTER_API_KEY", configPath())
+	if _, err := providerForTask(cfg, "vision"); err != nil {
+		return 0, err
 	}
 	now := time.Now()
 	if includeCurrent {
