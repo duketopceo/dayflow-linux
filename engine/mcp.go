@@ -47,6 +47,8 @@ var mcpTools = []map[string]any{
 			"limit": map[string]any{"type": "integer"}}}},
 	{"name": "get_usage", "description": "OpenRouter token usage totals.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "get_stats", "description": "Storage usage (db, frames, total), journal block counts, date coverage, and API call/token totals.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "get_standup", "description": "Generate a standup update from yesterday and today's blocks.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "get_insights", "description": "Focus, category, app, and distraction analytics for a range (day, week, month).",
@@ -157,6 +159,68 @@ func mcpCall(db *sql.DB, cfg Config, name string, args map[string]any) (any, err
 		}
 		return map[string]any{"api_calls": calls, "ok": okn, "failed": failed,
 			"prompt_tokens": pt, "completion_tokens": ct}, nil
+
+	case "get_stats":
+		var blocksTotal, blocksDone, blocksFailed, blocksDead, framesPending, eventsTotal int
+		db.QueryRow(`SELECT COUNT(1),
+		  COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END),0),
+		  COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0),
+		  COALESCE(SUM(CASE WHEN status='dead' THEN 1 ELSE 0 END),0)
+		  FROM blocks`).Scan(&blocksTotal, &blocksDone, &blocksFailed, &blocksDead)
+		db.QueryRow(`SELECT COUNT(1) FROM frames`).Scan(&framesPending)
+		db.QueryRow(`SELECT COUNT(1) FROM events`).Scan(&eventsTotal)
+		var firstTS, lastTS sql.NullInt64
+		db.QueryRow(`SELECT MIN(start_ts), MAX(end_ts) FROM blocks WHERE status='done'`).Scan(&firstTS, &lastTS)
+		firstDay, lastDay := "", ""
+		if firstTS.Valid {
+			firstDay = time.Unix(firstTS.Int64, 0).Local().Format("2006-01-02")
+		}
+		if lastTS.Valid {
+			lastDay = time.Unix(lastTS.Int64, 0).Local().Format("2006-01-02")
+		}
+		var calls2, ok2, failed2, pt2, ct2 int
+		var avgLat float64
+		db.QueryRow(`SELECT COUNT(1),
+		  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0),
+		  COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
+		  COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+		  COALESCE(AVG(latency_ms),0)
+		  FROM api_calls`).Scan(&calls2, &ok2, &failed2, &pt2, &ct2, &avgLat)
+		var dbBytes, walBytes int64
+		if fi, err := os.Stat(dbPath()); err == nil {
+			dbBytes = fi.Size()
+		}
+		if fi, err := os.Stat(dbPath() + "-wal"); err == nil {
+			walBytes = fi.Size()
+		}
+		framesBytes, frameFiles := dirStats(framesDir())
+		return map[string]any{
+			"storage": map[string]any{
+				"total_bytes": dataDirSize(), "total": humanBytes(dataDirSize()),
+				"db_bytes": dbBytes, "db": humanBytes(dbBytes),
+				"wal_bytes": walBytes, "wal": humanBytes(walBytes),
+				"frames_bytes": framesBytes, "frames": humanBytes(framesBytes),
+				"frame_files": frameFiles, "data_dir": dataDir(),
+				"cap_mb": cfg.MaxStorageMB,
+			},
+			"blocks": map[string]any{
+				"total": blocksTotal, "done": blocksDone,
+				"failed": blocksFailed, "dead": blocksDead,
+				"pending_frames": framesPending,
+				"first_day":      firstDay, "last_day": lastDay,
+			},
+			"events": eventsTotal,
+			"api": map[string]any{
+				"calls": calls2, "ok": ok2, "failed": failed2,
+				"prompt_tokens": pt2, "completion_tokens": ct2,
+				"avg_latency_ms": int(avgLat),
+			},
+			"config": map[string]any{
+				"provider": cfg.Provider, "model": cfg.Model,
+				"retention_days": cfg.RetentionDays, "keep_frames": cfg.KeepFrames,
+				"max_storage_mb": cfg.MaxStorageMB, "debug": cfg.Debug,
+			},
+		}, nil
 
 	case "get_standup":
 		_, j, err := generateStandup(db, cfg, true)

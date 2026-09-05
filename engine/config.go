@@ -11,22 +11,24 @@ import (
 )
 
 type Config struct {
-	OpenRouterAPIKey   string   `json:"openrouter_api_key"`
-	Model              string   `json:"model"`
-	APIBaseURL         string   `json:"api_base_url"` // OpenAI-compatible endpoint; empty = OpenRouter
-	CaptureIntervalSec int      `json:"capture_interval_sec"`
-	BlockMinutes       int      `json:"block_minutes"`
-	FramesPerBlock     int      `json:"frames_per_block"`
-	JPEGQuality        int      `json:"jpeg_quality"`
-	KeepFrames         bool     `json:"keep_frames"`
-	RetentionDays      int      `json:"retention_days"`
-	IgnoreApps         []string `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
-	CaptureCommand     string   `json:"capture_command"` // override; default auto-detect grim
-	Output             string   `json:"output"`          // grim -o <output>; empty = all outputs
-	SiteName           string   `json:"site_name"`       // OpenRouter X-Title
-	MaxStorageMB        int      `json:"max_storage_mb"`        // 0 = unlimited frame storage
+	Provider            string   `json:"provider"` // openrouter, local, custom, mcp
+	OpenRouterAPIKey    string   `json:"openrouter_api_key"`
+	Model               string   `json:"model"`
+	APIBaseURL          string   `json:"api_base_url"` // OpenAI-compatible endpoint; empty = OpenRouter
+	CaptureIntervalSec  int      `json:"capture_interval_sec"`
+	BlockMinutes        int      `json:"block_minutes"`
+	FramesPerBlock      int      `json:"frames_per_block"`
+	JPEGQuality         int      `json:"jpeg_quality"`
+	KeepFrames          bool     `json:"keep_frames"`
+	RetentionDays       int      `json:"retention_days"`
+	IgnoreApps          []string `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
+	CaptureCommand      string   `json:"capture_command"` // override; default auto-detect grim
+	Output              string   `json:"output"`          // grim -o <output>; empty = all outputs
+	SiteName            string   `json:"site_name"`       // OpenRouter X-Title
+	MaxStorageMB        int      `json:"max_storage_mb"`  // 0 = unlimited frame storage
 	AutoPauseLocked     bool     `json:"auto_pause_locked"`
 	FilterInappropriate bool     `json:"filter_inappropriate"` // redact adult/explicit content
+	Debug               bool     `json:"debug"`                // verbose engine log to debug.log
 }
 
 // normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1
@@ -78,14 +80,15 @@ func configPath() string {
 
 func defaultConfig() Config {
 	return Config{
-		Model:              "google/gemma-4-31b-it",
-		CaptureIntervalSec: 10,
-		BlockMinutes:       15,
-		FramesPerBlock:     30,
-		JPEGQuality:        55,
-		KeepFrames:         false,
-		RetentionDays:      7,
-		IgnoreApps:         []string{},
+		Provider:            "openrouter",
+		Model:               "google/gemma-4-31b-it",
+		CaptureIntervalSec:  10,
+		BlockMinutes:        15,
+		FramesPerBlock:      30,
+		JPEGQuality:         55,
+		KeepFrames:          false,
+		RetentionDays:       7,
+		IgnoreApps:          []string{},
 		SiteName:            "dayflow-linux",
 		MaxStorageMB:        10240,
 		AutoPauseLocked:     true,
@@ -124,6 +127,9 @@ func loadConfig() (Config, error) {
 	if cfg.Model == "" {
 		cfg.Model = "google/gemma-4-31b-it"
 	}
+	if cfg.Provider == "" {
+		cfg.Provider = "openrouter"
+	}
 	cfg.APIBaseURL = normalizeAPIBaseURL(cfg.APIBaseURL)
 	if cfg.SiteName == "" {
 		cfg.SiteName = "dayflow-linux"
@@ -160,15 +166,29 @@ func writeDefaultConfig() error {
 }
 
 // setConfigValue updates one key in config.json. Supported keys:
-// model, api_base_url, capture_interval_sec, block_minutes, frames_per_block,
+// provider, model, api_base_url, capture_interval_sec, block_minutes, frames_per_block,
 // jpeg_quality, keep_frames, retention_days, ignore_apps (comma list),
-// openrouter_api_key, output, capture_command, max_storage_mb, auto_pause_locked.
+// openrouter_api_key, output, capture_command, max_storage_mb, auto_pause_locked,
+// filter_inappropriate, debug.
 func setConfigValue(key, value string) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	switch key {
+	case "provider":
+		p := strings.ToLower(strings.TrimSpace(value))
+		switch p {
+		case "openrouter", "local", "custom", "mcp":
+			cfg.Provider = p
+			if p == "openrouter" {
+				cfg.APIBaseURL = ""
+			} else if p == "local" && cfg.APIBaseURL == "" {
+				cfg.APIBaseURL = "http://localhost:11434/v1"
+			}
+		default:
+			return fmt.Errorf("provider must be one of: openrouter, local, custom, mcp")
+		}
 	case "model":
 		cfg.Model = value
 	case "api_base_url":
@@ -204,6 +224,18 @@ func setConfigValue(key, value string) error {
 			return fmt.Errorf("auto_pause_locked must be true or false")
 		}
 		cfg.AutoPauseLocked = b
+	case "filter_inappropriate":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("filter_inappropriate must be true or false")
+		}
+		cfg.FilterInappropriate = b
+	case "debug":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("debug must be true or false")
+		}
+		cfg.Debug = b
 	case "site_name":
 		cfg.SiteName = value
 	case "ignore_apps":

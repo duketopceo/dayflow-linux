@@ -188,12 +188,15 @@ type Activity struct {
 type Block struct {
 	Start      time.Time  `json:"-"`
 	End        time.Time  `json:"-"`
+	StartTs    int64      `json:"start_ts"`
+	EndTs      int64      `json:"end_ts"`
 	StartStr   string     `json:"start"`
 	EndStr     string     `json:"end"`
 	Title      string     `json:"title"`
 	Summary    string     `json:"summary"`
 	Category   string     `json:"category"`
 	App        string     `json:"app"`
+	AppName    string     `json:"app_name"`
 	Activities []Activity `json:"activities,omitempty"`
 	FrameCount int        `json:"frame_count"`
 }
@@ -225,8 +228,11 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 		}
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
+		b.StartTs = s
+		b.EndTs = e
 		b.StartStr = b.Start.Format("3:04 PM")
 		b.EndStr = b.End.Format("3:04 PM")
+		b.AppName = appDisplayName(b.App)
 		out = append(out, b)
 	}
 	return out, rows.Err()

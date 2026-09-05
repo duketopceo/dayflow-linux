@@ -184,21 +184,25 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *uint64) err
 	cls := activeWindowClass()
 	if isIgnored(cfg, cls) {
 		logEvent(db, "capture_ignored", cls)
+		debugf(cfg, "capture: ignored app %s", cls)
 		return nil
 	}
 	raw, err := grabFrame(cmdArgs)
 	if err != nil {
 		logEvent(db, "capture_error", err.Error())
+		debugf(cfg, "capture: grab failed: %v", err)
 		return fmt.Errorf("capture: %w", err)
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		logEvent(db, "capture_error", "decode: "+err.Error())
+		debugf(cfg, "capture: decode failed: %v", err)
 		return fmt.Errorf("decode: %w", err)
 	}
 	h := ahash(img)
 	if lastHash != nil && hamming(h, *lastHash) <= dedupThreshold {
 		logEvent(db, "capture_deduped", "")
+		debugf(cfg, "capture: deduped (hamming %d, app %s)", hamming(h, *lastHash), cls)
 		return nil // screen unchanged
 	}
 	*lastHash = h
@@ -217,6 +221,7 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *uint64) err
 		return err
 	}
 	logEvent(db, "capture_saved", path)
+	debugf(cfg, "capture: saved %s (%d bytes, app %s)", filepath.Base(path), len(raw), cls)
 	return nil
 }
 
@@ -349,6 +354,8 @@ func runDaemon(cfg Config) error {
 				cmdArgs = na
 			}
 			logEvent(db, "config_reloaded", "")
+			debugf(cfg, "config reloaded: provider=%s model=%s interval=%ds block=%dm debug=%v",
+				cfg.Provider, cfg.Model, cfg.CaptureIntervalSec, cfg.BlockMinutes, cfg.Debug)
 		}
 	}
 
@@ -362,6 +369,9 @@ func runDaemon(cfg Config) error {
 	lockTick := time.NewTicker(time.Minute)
 	defer lockTick.Stop()
 	log.Printf("dayflow daemon: capturing every %ds -> %s", cfg.CaptureIntervalSec, framesDir())
+	debugf(cfg, "daemon start: provider=%s model=%s endpoint=%s interval=%ds block=%dm quality=%d retention=%dd keep_frames=%v debug=%v",
+		cfg.Provider, cfg.Model, chatURL(cfg), cfg.CaptureIntervalSec, cfg.BlockMinutes,
+		cfg.JPEGQuality, cfg.RetentionDays, cfg.KeepFrames, cfg.Debug)
 
 	capture := func() {
 		reloadIfChanged()
@@ -392,6 +402,7 @@ func runDaemon(cfg Config) error {
 			capture()
 		case <-retentionTick.C:
 			runRetention(db, cfg)
+			debugf(cfg, "retention run complete; data dir %s", humanBytes(dataDirSize()))
 		case <-lockTick.C:
 			if !cfg.AutoPauseLocked {
 				continue
@@ -400,9 +411,11 @@ func runDaemon(cfg Config) error {
 				locked = true
 				haveHash = false
 				logEvent(db, "auto_paused", "screen locked")
+				debugf(cfg, "auto-paused: screen locked")
 			} else if !screenLocked() && locked {
 				locked = false
 				logEvent(db, "auto_resumed", "screen unlocked")
+				debugf(cfg, "auto-resumed: screen unlocked")
 			}
 		}
 	}

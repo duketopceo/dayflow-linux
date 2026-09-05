@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -37,11 +38,13 @@ Control:
   config set <key> <val>  Update config (model, api_base_url, capture_interval_sec,
                           block_minutes, frames_per_block, jpeg_quality, keep_frames,
                           retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
-                          output, capture_command, openrouter_api_key)
+                          output, capture_command, openrouter_api_key, provider,
+                          filter_inappropriate, debug)
   ignore [--active|class] Add an app to the ignore list (--active = focused window)
   unignore <class>        Remove an app from the ignore list
   events [--json] [-n N]  Recent event log (captures, skips, errors, summaries)
   usage [--json]          Token usage totals from the api_calls log
+  stats [--json]          Storage, block counts, date range, and API usage
   week | month [--json]   Timeline rollups
   export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
   mcp                     Run the MCP server over stdio (for agents)
@@ -168,7 +171,11 @@ func main() {
 			fmt.Println("set", args[1])
 			break
 		}
-		b, _ := json.MarshalIndent(cfg, "", "  ")
+		masked := cfg
+		if masked.OpenRouterAPIKey != "" {
+			masked.OpenRouterAPIKey = "***redacted***"
+		}
+		b, _ := json.MarshalIndent(masked, "", "  ")
 		fmt.Printf("%s\n%s\n", configPath(), b)
 
 	case "ignore":
@@ -215,6 +222,9 @@ func main() {
 
 	case "usage":
 		printUsage(jsonOut)
+
+	case "stats":
+		printStats(cfg, jsonOut)
 
 	case "week", "month":
 		db, err := openDB()
@@ -407,11 +417,11 @@ func printTimeline(cfg Config, day time.Time, asJSON bool) {
 	for _, b := range blocks {
 		app := ""
 		if b.App != "" {
-			app = "  @" + b.App
+			app = "  @" + b.AppName
 		}
-		fmt.Printf("\n%s-%s  %s  [%s]%s\n  %s\n", b.StartStr, b.EndStr, b.Title, b.Category, app, b.Summary)
+		fmt.Printf("\n%s-%s  %s  [%s]%s\n  %s\n", b.StartStr, b.EndStr, b.Title, catDisplay(b.Category), app, b.Summary)
 		for _, a := range b.Activities {
-			fmt.Printf("    • %s: %s [%s]\n", a.App, a.Title, a.Category)
+			fmt.Printf("    • %s: %s [%s]\n", appDisplayName(a.App), a.Title, catDisplay(a.Category))
 		}
 	}
 }
@@ -429,17 +439,23 @@ func printStatus(cfg Config, asJSON bool) {
 	if lastTS > 0 {
 		last = time.Unix(lastTS, 0).Local().Format("3:04 PM")
 	}
+	var blocksTotal int
+	db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE status='done'`).Scan(&blocksTotal)
+	storage := dataDirSize()
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"paused":         paused(),
 			"frames_today":   frames,
 			"blocks_done":    blocksDone,
 			"blocks_pending": len(pending),
+			"blocks_total":   blocksTotal,
 			"last_frame":     last,
 			"model":          cfg.Model,
 			"ignored_apps":   cfg.IgnoreApps,
 			"active_app":     activeWindowClass(),
 			"configured":     cfg.OpenRouterAPIKey != "",
+			"storage_bytes":  storage,
+			"storage_text":   humanBytes(storage),
 			"version":        version,
 		})
 		return
@@ -448,8 +464,8 @@ func printStatus(cfg Config, asJSON bool) {
 	if paused() {
 		state = "PAUSED"
 	}
-	fmt.Printf("state: %s\nframes today: %d\nblocks summarized: %d\nblocks pending: %d\nlast frame: %s\nmodel: %s\n",
-		state, frames, blocksDone, len(pending), last, cfg.Model)
+	fmt.Printf("state: %s\nframes today: %d\nblocks summarized: %d\nblocks pending: %d\nlast frame: %s\nmodel: %s\nstorage: %s\n",
+		state, frames, blocksDone, len(pending), last, cfg.Model, humanBytes(storage))
 }
 
 func printFailed(cfg Config, asJSON bool) {
@@ -574,4 +590,102 @@ func printUsage(asJSON bool) {
 	}
 	fmt.Printf("api calls: %d (%d ok, %d failed)\nprompt tokens: %d\ncompletion tokens: %d\n",
 		calls, ok, failed, prompt, completion)
+}
+
+// printStats reports storage usage, journal counts, date coverage, and API
+// usage — the "how much is this thing using" view.
+func printStats(cfg Config, asJSON bool) {
+	db, err := openDB()
+	fatal(err)
+	defer db.Close()
+
+	var blocksTotal, blocksDone, blocksFailed, blocksDead, framesPending, eventsTotal int
+	db.QueryRow(`SELECT COUNT(1),
+	  COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END),0),
+	  COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0),
+	  COALESCE(SUM(CASE WHEN status='dead' THEN 1 ELSE 0 END),0)
+	  FROM blocks`).Scan(&blocksTotal, &blocksDone, &blocksFailed, &blocksDead)
+	db.QueryRow(`SELECT COUNT(1) FROM frames`).Scan(&framesPending)
+	db.QueryRow(`SELECT COUNT(1) FROM events`).Scan(&eventsTotal)
+
+	var firstTS, lastTS sql.NullInt64
+	db.QueryRow(`SELECT MIN(start_ts), MAX(end_ts) FROM blocks WHERE status='done'`).Scan(&firstTS, &lastTS)
+	firstDay, lastDay := "", ""
+	if firstTS.Valid {
+		firstDay = time.Unix(firstTS.Int64, 0).Local().Format("2006-01-02")
+	}
+	if lastTS.Valid {
+		lastDay = time.Unix(lastTS.Int64, 0).Local().Format("2006-01-02")
+	}
+
+	var calls, okCalls, failedCalls, promptTok, completionTok int
+	var avgLatency float64
+	db.QueryRow(`SELECT COUNT(1),
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0),
+	  COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
+	  COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+	  COALESCE(AVG(latency_ms),0)
+	  FROM api_calls`).Scan(&calls, &okCalls, &failedCalls, &promptTok, &completionTok, &avgLatency)
+
+	var dbBytes, walBytes int64
+	if fi, err := os.Stat(dbPath()); err == nil {
+		dbBytes = fi.Size()
+	}
+	if fi, err := os.Stat(dbPath() + "-wal"); err == nil {
+		walBytes = fi.Size()
+	}
+	framesBytes, frameFiles := dirStats(framesDir())
+	totalBytes := dataDirSize()
+
+	if asJSON {
+		json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"storage": map[string]any{
+				"total_bytes": totalBytes, "total": humanBytes(totalBytes),
+				"db_bytes": dbBytes, "db": humanBytes(dbBytes),
+				"wal_bytes": walBytes, "wal": humanBytes(walBytes),
+				"frames_bytes": framesBytes, "frames": humanBytes(framesBytes),
+				"frame_files": frameFiles,
+				"data_dir":    dataDir(),
+				"cap_mb":      cfg.MaxStorageMB,
+			},
+			"blocks": map[string]any{
+				"total": blocksTotal, "done": blocksDone,
+				"failed": blocksFailed, "dead": blocksDead,
+				"pending_frames": framesPending,
+				"first_day":      firstDay, "last_day": lastDay,
+			},
+			"events": eventsTotal,
+			"api": map[string]any{
+				"calls": calls, "ok": okCalls, "failed": failedCalls,
+				"prompt_tokens": promptTok, "completion_tokens": completionTok,
+				"avg_latency_ms": int(avgLatency),
+			},
+			"config": map[string]any{
+				"provider": cfg.Provider, "model": cfg.Model,
+				"retention_days": cfg.RetentionDays, "keep_frames": cfg.KeepFrames,
+				"max_storage_mb": cfg.MaxStorageMB, "debug": cfg.Debug,
+			},
+		})
+		return
+	}
+
+	fmt.Printf("Storage\n")
+	fmt.Printf("  data dir:   %s (%s)\n", humanBytes(totalBytes), dataDir())
+	fmt.Printf("  database:   %s + %s wal\n", humanBytes(dbBytes), humanBytes(walBytes))
+	fmt.Printf("  frames:     %s (%d files awaiting summary)\n", humanBytes(framesBytes), frameFiles)
+	fmt.Printf("  cap:        %s\n", map[bool]string{true: "unlimited", false: fmt.Sprintf("%d MB", cfg.MaxStorageMB)}[cfg.MaxStorageMB == 0])
+	fmt.Printf("Journal\n")
+	fmt.Printf("  blocks:     %d total (%d done, %d failed, %d dead)\n", blocksTotal, blocksDone, blocksFailed, blocksDead)
+	if firstDay != "" {
+		fmt.Printf("  coverage:   %s → %s\n", firstDay, lastDay)
+	}
+	fmt.Printf("  events:     %d log rows\n", eventsTotal)
+	fmt.Printf("API\n")
+	fmt.Printf("  calls:      %d (%d ok, %d failed)\n", calls, okCalls, failedCalls)
+	fmt.Printf("  tokens:     %d in / %d out\n", promptTok, completionTok)
+	fmt.Printf("  avg latency: %.0f ms\n", avgLatency)
+	fmt.Printf("Config\n")
+	fmt.Printf("  provider:   %s\n  model:      %s\n", cfg.Provider, cfg.Model)
+	fmt.Printf("  retention:  %d days, keep_frames=%v\n", cfg.RetentionDays, cfg.KeepFrames)
+	fmt.Printf("  debug log:  %v (%s)\n", cfg.Debug, debugLogPath())
 }

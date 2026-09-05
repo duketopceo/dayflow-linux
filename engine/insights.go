@@ -33,18 +33,19 @@ func (i insights) JSON() map[string]any {
 		"focus_minutes":       i.FocusMins,
 		"distraction_minutes": i.DistractionMins,
 		"idle_minutes":        i.IdleMins,
-		"categories":          i.distMaps(i.Categories),
-		"apps":                i.distMaps(i.Apps),
+		"categories":          i.distMaps(i.Categories, catDisplay),
+		"apps":                i.distMaps(i.Apps, appDisplayName),
 		"focus_blocks":        i.FocusBlocks,
-		"top_distractions":    i.distMaps(i.TopDistractions),
+		"top_distractions":    i.distMaps(i.TopDistractions, appDisplayName),
 		"days":                i.Days,
 	}
 }
 
-func (i insights) distMaps(d []insightDist) []map[string]any {
+func (i insights) distMaps(d []insightDist, display func(string) string) []map[string]any {
 	var out []map[string]any
 	for _, v := range d {
-		out = append(out, map[string]any{"name": v.Name, "minutes": v.Mins, "count": v.Count})
+		out = append(out, map[string]any{
+			"name": v.Name, "display": display(v.Name), "minutes": v.Mins, "count": v.Count})
 	}
 	return out
 }
@@ -154,19 +155,19 @@ func formatInsightsMarkdown(i insights, start, end time.Time, label string) stri
 	if len(i.Categories) > 0 {
 		b.WriteString("\n## Categories\n")
 		for _, c := range i.Categories {
-			fmt.Fprintf(&b, "- %s: %.1f hr (%d blocks)\n", c.Name, c.Mins/60, c.Count)
+			fmt.Fprintf(&b, "- %s: %.1f hr (%d blocks)\n", catDisplay(c.Name), c.Mins/60, c.Count)
 		}
 	}
 	if len(i.Apps) > 0 {
 		b.WriteString("\n## Top apps\n")
 		for _, a := range i.Apps {
-			fmt.Fprintf(&b, "- %s: %.1f hr (%d blocks)\n", a.Name, a.Mins/60, a.Count)
+			fmt.Fprintf(&b, "- %s: %.1f hr (%d blocks)\n", appDisplayName(a.Name), a.Mins/60, a.Count)
 		}
 	}
 	if len(i.TopDistractions) > 0 {
 		b.WriteString("\n## Distractions to watch\n")
 		for _, d := range i.TopDistractions {
-			fmt.Fprintf(&b, "- %s: %.1f hr (%d blocks)\n", d.Name, d.Mins/60, d.Count)
+			fmt.Fprintf(&b, "- %s: %.1f hr (%d blocks)\n", appDisplayName(d.Name), d.Mins/60, d.Count)
 		}
 	}
 	if len(i.FocusBlocks) > 0 {

@@ -23,10 +23,17 @@ Panel {
   property var ignoredApps: []
   property int framesToday: 0
   property int blocksPending: 0
+  property string storageText: ""
   property string notice: ""
   property string currentTab: "today"
   property var standup: ({ yesterday: { date: "", highlights: [] }, today: { date: "", highlights: [] } })
   property var insights: ({ total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, categories: [], apps: [], top_distractions: [], focus_blocks: [], days: 0 })
+  property var weekBlocks: []
+  property string weekStart: ""
+  property string weekEnd: ""
+  property var spans: []
+  property int dayOffset: 0
+  property bool expanded: false
 
   readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(dayflow.foreground, 1.5)
@@ -48,20 +55,115 @@ Panel {
   }
 
   function refreshAll() {
-    if (!timelineProc.running) timelineProc.running = true
+    dayflow.loadTimeline()
     if (!statusProc.running) statusProc.running = true
     if (!standupFetchProc.running) standupFetchProc.running = true
     if (!insightsFetchProc.running) insightsFetchProc.running = true
+    if (!weekTimelineProc.running) weekTimelineProc.running = true
+  }
+
+  function viewDate() {
+    var d = new Date()
+    d.setDate(d.getDate() + dayflow.dayOffset)
+    return d
+  }
+
+  function viewDateStr() {
+    var d = dayflow.viewDate()
+    var m = ("0" + (d.getMonth() + 1)).slice(-2)
+    var dd = ("0" + d.getDate()).slice(-2)
+    return d.getFullYear() + "-" + m + "-" + dd
+  }
+
+  function viewDateLabel() {
+    if (dayflow.dayOffset === 0) return "Today"
+    if (dayflow.dayOffset === -1) return "Yesterday"
+    var names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    var d = dayflow.viewDate()
+    return names[d.getDay()] + " " + dayflow.viewDateStr().substring(5)
+  }
+
+  function goDay(delta) {
+    var next = dayflow.dayOffset + delta
+    if (next > 0) return
+    dayflow.dayOffset = next
+    dayflow.blocks = []
+    dayflow.spans = []
+    dayflow.loadTimeline()
+  }
+
+  function loadTimeline() {
+    timelineProc.command = ["dayflow", "timeline", "--json", dayflow.viewDateStr()]
+    if (!timelineProc.running) timelineProc.running = true
+  }
+
+  // Merge consecutive blocks about the same thing (same title, or same
+  // app+category) into longer "blocked out" spans.
+  function mergeSpans(blocks) {
+    var list = (blocks || []).slice()
+    list.sort(function(a, b) { return Number(a.start_ts) - Number(b.start_ts) })
+    var spans = []
+    for (var i = 0; i < list.length; i++) {
+      var b = list[i]
+      var prev = spans.length ? spans[spans.length - 1] : null
+      var same = prev && (b.title === prev.title ||
+        (b.app === prev.app && b.category === prev.category))
+      if (same) {
+        prev.children.push(b)
+        prev.end = b.end
+        prev.end_ts = b.end_ts
+        prev.minutes += Math.round((Number(b.end_ts) - Number(b.start_ts)) / 60)
+        prev.count++
+        prev.title = b.title
+        prev.summary = b.summary
+      } else {
+        spans.push({
+          start: b.start, end: b.end,
+          start_ts: b.start_ts, end_ts: b.end_ts,
+          title: b.title, summary: b.summary,
+          category: b.category, app: b.app,
+          appName: b.app_name || dayflow.appDisplayName(b.app),
+          minutes: Math.round((Number(b.end_ts) - Number(b.start_ts)) / 60),
+          count: 1,
+          children: [b]
+        })
+      }
+    }
+    spans.reverse()
+    return spans
+  }
+
+  function fmtDur(mins) {
+    mins = Math.round(Number(mins) || 0)
+    if (mins < 60) return mins + "m"
+    var h = Math.floor(mins / 60)
+    var m = mins % 60
+    return m ? h + "h " + m + "m" : h + "h"
+  }
+
+  function appIcon(cls) {
+    if (!cls || cls === "") return ""
+    var tail = String(cls).split(".").pop()
+    var names = [cls, String(cls).toLowerCase(), tail, tail.toLowerCase()]
+    for (var i = 0; i < names.length; i++) {
+      try {
+        var p = Quickshell.iconPath(names[i], true)
+        if (p && String(p).length > 0) return p
+      } catch (e) {}
+    }
+    return ""
   }
 
   function applyTimeline(raw) {
     try {
       var d = JSON.parse(raw)
       dayflow.blocks = d.blocks || []
+      dayflow.spans = dayflow.mergeSpans(dayflow.blocks)
       dayflow.dateLabel = d.date || ""
       dayflow.errorText = ""
     } catch (e) {
       dayflow.blocks = []
+      dayflow.spans = []
       dayflow.errorText = "could not read timeline"
     }
   }
@@ -76,6 +178,7 @@ Panel {
       dayflow.ignoredApps = s.ignored_apps || []
       dayflow.framesToday = Number(s.frames_today || 0)
       dayflow.blocksPending = Number(s.blocks_pending || 0)
+      dayflow.storageText = s.storage_text || ""
     } catch (e) {}
   }
 
@@ -93,25 +196,195 @@ Panel {
     } catch (e) {}
   }
 
-  function appShortName(cls) {
-    if (!cls || cls === "") return "?"
-    var seg = cls.split(".").pop()
-    return seg.length > 12 ? seg.substring(0, 12) : seg
+  function applyWeekTimeline(raw) {
+    try {
+      var d = JSON.parse(raw)
+      dayflow.weekBlocks = d.blocks || []
+      dayflow.weekStart = d.start || ""
+      dayflow.weekEnd = d.end || ""
+    } catch (e) {
+      dayflow.weekBlocks = []
+    }
+  }
+
+  function weekStartDate() {
+    if (dayflow.weekStart === "") return new Date()
+    return new Date(dayflow.weekStart + "T00:00:00")
+  }
+
+  function categoryForHour(dayIndex, hour) {
+    if (!dayflow.weekBlocks.length) return ""
+    var base = dayflow.weekStartDate().getTime() + dayIndex * 86400000 + hour * 3600000
+    for (var i = 0; i < dayflow.weekBlocks.length; i++) {
+      var b = dayflow.weekBlocks[i]
+      var s = Number(b.start_ts || 0) * 1000
+      var e = Number(b.end_ts || 0) * 1000
+      if (s < base + 3600000 && e > base) {
+        return b.category
+      }
+    }
+    return ""
+  }
+
+  function dayName(index) {
+    var names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    return names[index] || ""
+  }
+
+  function weekDayBlocks(dayIndex) {
+    if (!dayflow.weekBlocks.length) return []
+    var dayStart = dayflow.weekStartDate().getTime() + dayIndex * 86400000
+    var dayEnd = dayStart + 86400000
+    var out = []
+    for (var i = 0; i < dayflow.weekBlocks.length; i++) {
+      var s = Number(dayflow.weekBlocks[i].start_ts || 0) * 1000
+      if (s >= dayStart && s < dayEnd) out.push(dayflow.weekBlocks[i])
+    }
+    return out
+  }
+
+  function weekDaySpans(dayIndex) {
+    return dayflow.mergeSpans(dayflow.weekDayBlocks(dayIndex))
+  }
+
+  function weekDayMinutes(dayIndex) {
+    var list = dayflow.weekDayBlocks(dayIndex)
+    var total = 0
+    for (var i = 0; i < list.length; i++)
+      total += (Number(list[i].end_ts) - Number(list[i].start_ts)) / 60
+    return Math.round(total)
+  }
+
+  function catDisplay(cat) {
+    if (!cat || cat === "") return ""
+    return cat.charAt(0).toUpperCase() + cat.slice(1)
+  }
+
+  function modelShort() {
+    var m = dayflow.modelName
+    return m.indexOf("/") >= 0 ? m.split("/").pop() : m
+  }
+
+  // Resolve a window class or app name to a proper display name.
+  // Prefers the desktop entry's real Name, then a cleaned-up tail.
+  function appDisplayName(cls) {
+    if (!cls || cls === "") return ""
+    try {
+      var entries = DesktopEntries.applications.values || []
+      var lc = String(cls).toLowerCase()
+      var tail = lc.split(".").pop()
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i]
+        var eid = String(e.id || "").toLowerCase()
+        if (eid === lc || eid === tail ||
+            eid === lc + ".desktop" || eid === tail + ".desktop") {
+          return e.name
+        }
+      }
+    } catch (e2) {}
+    return dayflow.titleize(cls)
+  }
+
+  function titleize(cls) {
+    var s = String(cls)
+    var i = s.indexOf("__")
+    if (i >= 0) s = s.substring(0, i)
+    var tail = s
+    var j = tail.lastIndexOf(".")
+    if (j >= 0) tail = tail.substring(j + 1)
+    var lt = tail.toLowerCase()
+    if (tail === "" || lt === "com" || lt === "org" || lt === "net" ||
+        lt === "default" || tail.length <= 2) {
+      var k = s.indexOf(".")
+      tail = k > 0 ? s.substring(0, k) : s
+      lt = tail.toLowerCase()
+    }
+    var junk = ["-default", "-browser", "-bin", ".bin"]
+    for (var m = 0; m < junk.length; m++) {
+      var suf = junk[m]
+      if (lt.length >= suf.length &&
+          lt.substring(lt.length - suf.length) === suf) {
+        tail = tail.substring(0, tail.length - suf.length)
+        lt = tail.toLowerCase()
+      }
+    }
+    tail = tail.replace(/^[_\-. ]+|[_\-. ]+$/g, "")
+    if (tail === "") tail = s
+    var words = tail.split(/[\s_\-]+/)
+    for (var w = 0; w < words.length; w++) {
+      if (words[w] !== "")
+        words[w] = words[w].charAt(0).toUpperCase() + words[w].substring(1)
+    }
+    return words.join(" ")
   }
 
   function categoryColor(cat) {
     switch (cat) {
-      case "coding":        return Color.accent
-      case "communication": return Qt.lighter(Color.accent, 1.2)
-      case "browsing":      return Qt.lighter(Color.accent, 1.4)
-      case "writing":       return Qt.lighter(Color.accent, 1.4)
-      case "meetings":      return Qt.lighter(Color.accent, 1.2)
-      case "design":        return Qt.lighter(Color.accent, 1.3)
-      case "idle":          return Qt.darker(dayflow.foreground, 1.8)
-      case "personal":      return Color.urgent !== undefined ? Color.urgent : dayflow.foreground
-      case "other":         return Qt.darker(dayflow.foreground, 1.5)
+      case "coding":        return Qt.rgba(0.22, 0.55, 0.95, 1.0)
+      case "communication": return Qt.rgba(0.95, 0.45, 0.15, 1.0)
+      case "browsing":      return Qt.rgba(0.55, 0.35, 0.95, 1.0)
+      case "writing":       return Qt.rgba(0.20, 0.75, 0.55, 1.0)
+      case "meetings":      return Qt.rgba(0.95, 0.70, 0.15, 1.0)
+      case "design":        return Qt.rgba(0.95, 0.25, 0.55, 1.0)
+      case "media":         return Qt.rgba(0.95, 0.25, 0.25, 1.0)
+      case "system":        return Qt.rgba(0.50, 0.50, 0.55, 1.0)
+      case "idle":          return dayflow.dim
+      case "personal":      return Color.urgent !== undefined ? Color.urgent : Qt.rgba(0.95, 0.25, 0.35, 1.0)
+      case "other":         return Qt.darker(dayflow.foreground, 1.4)
       default:              return dayflow.foreground
     }
+  }
+
+  function cellColor(cat) {
+    if (!cat || cat === "") return dayflow.fgFill(0.06)
+    var c = dayflow.categoryColor(cat)
+    return Qt.rgba(c.r, c.g, c.b, 0.85)
+  }
+
+  function pillBgColor(cat) {
+    var c = dayflow.categoryColor(cat)
+    return Qt.rgba(c.r, c.g, c.b, 0.15)
+  }
+
+  function _rgb(c) {
+    if (typeof c === "string") {
+      var h = c.charAt(0) === "#" ? c.substring(1) : c
+      if (h.length === 8) h = h.substring(0, 6)
+      if (h.length === 3) {
+        h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2)
+      }
+      if (h.length === 6) {
+        return [parseInt(h.substring(0, 2), 16) / 255,
+                parseInt(h.substring(2, 4), 16) / 255,
+                parseInt(h.substring(4, 6), 16) / 255]
+      }
+      return [1, 1, 1]
+    }
+    if (c === undefined || c === null) return [1, 1, 1]
+    return [c.r, c.g, c.b]
+  }
+
+  function themeFill(alpha) {
+    var rgb = dayflow._rgb(dayflow.foreground)
+    return Qt.rgba(rgb[0], rgb[1], rgb[2], alpha)
+  }
+
+  function accentFill(alpha) {
+    var c = (Color.accent === undefined || Color.accent === null)
+      ? dayflow.foreground : Color.accent
+    var rgb = dayflow._rgb(c)
+    return Qt.rgba(rgb[0], rgb[1], rgb[2], alpha)
+  }
+
+  function fgFill(alpha) {
+    var rgb = dayflow._rgb(dayflow.foreground)
+    return Qt.rgba(rgb[0], rgb[1], rgb[2], alpha)
+  }
+
+  function btnBg(hot) {
+    return hot
+      ? dayflow.accentFill(0.12)
+      : "transparent"
   }
 
   function fmtHours(mins) {
@@ -155,6 +428,15 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyInsights(text)
+    }
+  }
+
+  Process {
+    id: weekTimelineProc
+    command: ["dayflow", "week", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyWeekTimeline(text)
     }
   }
 
@@ -229,8 +511,81 @@ Panel {
         width: parent.width
         spacing: Style.space(10)
 
+        // ---- day switcher ----
+        Row {
+          width: parent.width
+          spacing: Style.space(6)
+
+          Rectangle {
+            height: Style.space(24)
+            width: Style.space(24)
+            radius: Style.cornerRadius
+            color: dPrev.containsMouse ? dayflow.accentFill(0.12) : "transparent"
+            border.color: dayflow.accentFill(0.4)
+            Text {
+              anchors.centerIn: parent
+              text: "‹"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+            }
+            MouseArea {
+              id: dPrev
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: dayflow.goDay(-1)
+            }
+          }
+
+          Text {
+            text: dayflow.viewDateLabel()
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          Rectangle {
+            height: Style.space(24)
+            width: Style.space(24)
+            radius: Style.cornerRadius
+            color: dNext.containsMouse ? dayflow.accentFill(0.12) : "transparent"
+            border.color: dayflow.accentFill(0.4)
+            opacity: dayflow.dayOffset < 0 ? 1 : 0.4
+            Text {
+              anchors.centerIn: parent
+              text: "›"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+            }
+            MouseArea {
+              id: dNext
+              anchors.fill: parent
+              hoverEnabled: true
+              enabled: dayflow.dayOffset < 0
+              onClicked: dayflow.goDay(1)
+            }
+          }
+
+          Text {
+            visible: dayflow.dayOffset !== 0
+            text: "back to today"
+            color: dayflow.dim
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            anchors.verticalCenter: parent.verticalCenter
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: { dayflow.dayOffset = 0; dayflow.loadTimeline() }
+            }
+          }
+        }
+
         Text {
-          visible: dayflow.blocks.length === 0 && dayflow.errorText === "" && dayflow.configured
+          visible: dayflow.spans.length === 0 && dayflow.errorText === "" && dayflow.configured
           width: parent.width
           text: "Nothing summarized yet — blocks land every 15 minutes."
           color: dayflow.dim
@@ -240,14 +595,14 @@ Panel {
         }
 
         Repeater {
-          model: dayflow.blocks
+          model: dayflow.spans
 
           delegate: Rectangle {
             width: col.width
             height: cardCol.implicitHeight + Style.space(16)
             radius: Style.cornerRadius
-            color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.04)
-            border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.08)
+            color: dayflow.fgFill(0.04)
+            border.color: dayflow.fgFill(0.08)
 
             Column {
               id: cardCol
@@ -259,8 +614,19 @@ Panel {
                 width: parent.width
                 spacing: Style.space(8)
 
+                Image {
+                  width: Style.space(14)
+                  height: Style.space(14)
+                  source: dayflow.appIcon(modelData.app)
+                  visible: status === Image.Ready
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
                 Text {
-                  text: modelData.start + "–" + modelData.end
+                  text: modelData.start + "–" + modelData.end +
+                        " · " + dayflow.fmtDur(modelData.minutes) +
+                        (modelData.count > 1 ? " · " + modelData.count + " blocks" : "") +
+                        (modelData.appName ? " · " + modelData.appName : "")
                   color: dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -271,15 +637,13 @@ Panel {
                   height: catText.implicitHeight + Style.space(4)
                   width: catText.implicitWidth + Style.space(10)
                   radius: height / 2
-                  color: Qt.rgba(dayflow.categoryColor(modelData.category).r,
-                                 dayflow.categoryColor(modelData.category).g,
-                                 dayflow.categoryColor(modelData.category).b, 0.15)
+                  color: dayflow.pillBgColor(modelData.category)
 
                   Text {
                     id: catText
                     anchors.centerIn: parent
-                    text: modelData.category
-                    color: dayflow.categoryColor(modelData.category)
+                    text: dayflow.catDisplay(modelData.category)
+                    color: dayflow.foreground
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
                   }
@@ -308,12 +672,27 @@ Panel {
                 elide: Text.ElideRight
               }
 
+              // Merged span: one row per underlying 15-min block.
               Repeater {
-                model: modelData.activities || []
+                model: modelData.count > 1 ? modelData.children : []
 
                 delegate: Text {
                   width: parent.width
-                  text: dayflow.appShortName(modelData.app) + " · " + modelData.title
+                  text: "· " + modelData.start + " " + modelData.title
+                  color: dayflow.dim
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+              }
+
+              // Single block: per-app segments as before.
+              Repeater {
+                model: modelData.count === 1 ? (modelData.children[0].activities || []) : []
+
+                delegate: Text {
+                  width: parent.width
+                  text: dayflow.appDisplayName(modelData.app) + " · " + modelData.title
                   color: dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -348,8 +727,8 @@ Panel {
         width: parent.width
         height: yCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
-        color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.04)
-        border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.08)
+        color: dayflow.fgFill(0.04)
+        border.color: dayflow.fgFill(0.08)
 
         Column {
           id: yCol
@@ -359,7 +738,7 @@ Panel {
 
           Text {
             text: "Yesterday" + (dayflow.standup.yesterday.date ? " · " + dayflow.standup.yesterday.date : "")
-            color: Color.accent
+            color: dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
             font.bold: true
@@ -384,8 +763,8 @@ Panel {
         width: parent.width
         height: tCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
-        color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.04)
-        border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.08)
+        color: dayflow.fgFill(0.04)
+        border.color: dayflow.fgFill(0.08)
 
         Column {
           id: tCol
@@ -395,7 +774,7 @@ Panel {
 
           Text {
             text: "Today" + (dayflow.standup.today.date ? " · " + dayflow.standup.today.date : "")
-            color: Color.accent
+            color: dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
             font.bold: true
@@ -420,8 +799,8 @@ Panel {
         width: parent.width
         height: bCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
-        color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.04)
-        border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.08)
+        color: dayflow.fgFill(0.04)
+        border.color: dayflow.fgFill(0.08)
 
         Column {
           id: bCol
@@ -452,15 +831,15 @@ Panel {
             width: cpy.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
             color: mcp.containsMouse
-              ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.15)
+              ? dayflow.accentFill(0.12)
               : "transparent"
-            border.color: Color.accent
+            border.color: dayflow.accentFill(0.25)
 
             Text {
               id: cpy
               anchors.centerIn: parent
               text: "Copy standup"
-              color: Color.accent
+              color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
             }
@@ -506,8 +885,8 @@ Panel {
           width: parent.width
           height: statCol.implicitHeight + Style.space(16)
           radius: Style.cornerRadius
-          color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.04)
-          border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.08)
+          color: dayflow.fgFill(0.04)
+          border.color: dayflow.fgFill(0.08)
 
           Column {
             id: statCol
@@ -517,7 +896,7 @@ Panel {
 
             Text {
               text: "This week" + (dayflow.insights.days ? " · " + dayflow.insights.days + " days" : "")
-              color: Color.accent
+              color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
               font.bold: true
@@ -542,6 +921,154 @@ Panel {
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
+            }
+          }
+        }
+
+        Rectangle {
+          visible: dayflow.weekBlocks.length > 0
+          width: parent.width
+          height: heatCol.implicitHeight + Style.space(16)
+          radius: Style.cornerRadius
+          color: dayflow.fgFill(0.04)
+          border.color: dayflow.fgFill(0.08)
+
+          Column {
+            id: heatCol
+            width: parent.width - Style.space(16)
+            anchors.centerIn: parent
+            spacing: Style.space(8)
+
+            Text {
+              text: "Week heat map"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Text {
+              text: "1 cell = 1 hour"
+              color: dayflow.dim
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+              model: 7
+              delegate: Row {
+                width: parent.width
+                spacing: Style.space(2)
+
+                Text {
+                  width: Style.space(28)
+                  text: dayflow.dayName(index)
+                  color: dayflow.dim
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Row {
+                  id: hourRow
+                  width: parent.width - Style.space(28) - Style.space(2)
+                  spacing: 1
+
+                  Repeater {
+                    model: 24
+                    delegate: Rectangle {
+                      width: (parent.width - 23 * hourRow.spacing) / 24
+                      height: Style.space(10)
+                      radius: 2
+                      color: dayflow.cellColor(dayflow.categoryForHour(index, modelData))
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // ---- full week timeline (merged spans per day) ----
+        Rectangle {
+          visible: dayflow.weekBlocks.length > 0
+          width: parent.width
+          height: weekCol.implicitHeight + Style.space(16)
+          radius: Style.cornerRadius
+          color: dayflow.fgFill(0.04)
+          border.color: dayflow.fgFill(0.08)
+
+          Column {
+            id: weekCol
+            width: parent.width - Style.space(16)
+            anchors.centerIn: parent
+            spacing: Style.space(8)
+
+            Text {
+              text: "Week timeline" +
+                    (dayflow.weekStart ? "  " + dayflow.weekStart.substring(5) + " – " + dayflow.weekEnd.substring(5) : "")
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Repeater {
+              model: 7
+              delegate: Column {
+                property var daySpans: dayflow.weekDaySpans(index)
+                visible: daySpans.length > 0
+                width: parent.width
+                spacing: Style.space(2)
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(6)
+                  Text {
+                    text: dayflow.dayName(index)
+                    color: dayflow.foreground
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                  Text {
+                    text: dayflow.fmtDur(dayflow.weekDayMinutes(index))
+                    color: dayflow.dim
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+
+                Repeater {
+                  model: parent.daySpans
+                  delegate: Row {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Rectangle {
+                      width: Style.space(6)
+                      height: wTxt.implicitHeight
+                      radius: width / 2
+                      color: dayflow.cellColor(modelData.category)
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                      id: wTxt
+                      width: parent.width - Style.space(6) - parent.spacing
+                      text: modelData.start + "–" + modelData.end +
+                            "  " + modelData.title +
+                            (modelData.count > 1 ? "  (" + dayflow.fmtDur(modelData.minutes) + ")" : "")
+                      color: dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -578,8 +1105,8 @@ Panel {
           width: parent.width
           height: fCol.implicitHeight + Style.space(16)
           radius: Style.cornerRadius
-          color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.04)
-          border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.08)
+          color: dayflow.fgFill(0.04)
+          border.color: dayflow.fgFill(0.08)
 
           Column {
             id: fCol
@@ -589,7 +1116,7 @@ Panel {
 
             Text {
               text: "Longest focus blocks"
-              color: Color.accent
+              color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
               font.bold: true
@@ -621,8 +1148,8 @@ Panel {
       implicitHeight: sCol.implicitHeight + Style.space(16)
       height: implicitHeight
       radius: Style.cornerRadius
-      color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.04)
-      border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.08)
+      color: dayflow.fgFill(0.04)
+      border.color: dayflow.fgFill(0.08)
       property var items: []
       property string title: ""
 
@@ -634,7 +1161,7 @@ Panel {
 
         Text {
           text: title
-          color: Color.accent
+          color: dayflow.foreground
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.body
           font.bold: true
@@ -648,7 +1175,7 @@ Panel {
 
             Text {
               width: parent.width - mins.implicitWidth - parent.spacing
-              text: modelData.name
+              text: modelData.display || modelData.name
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -677,7 +1204,7 @@ Panel {
     bar: dayflow.bar
     open: dayflow.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(340))
+    contentWidth: panel.fittedContentWidth(dayflow.expanded ? Style.space(560) : Style.space(340))
     contentHeight: panel.fittedContentHeight(content.implicitHeight)
 
     PanelKeyCatcher {
@@ -701,7 +1228,7 @@ Panel {
           spacing: Style.space(8)
 
           Column {
-            width: parent.width - toggleBtn.width - parent.spacing
+            width: parent.width - toggleBtn.width - expandBtn.width - Style.space(6) - parent.spacing
             spacing: 0
 
             Text {
@@ -713,7 +1240,7 @@ Panel {
             }
 
             Text {
-              text: (dayflow.paused ? "paused" : "recording") + " · " + dayflow.modelName
+              text: (dayflow.paused ? "paused" : "recording") + " · " + dayflow.modelShort()
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -723,14 +1250,39 @@ Panel {
           }
 
           Rectangle {
+            id: expandBtn
+            height: Style.space(28)
+            width: exg.implicitWidth + Style.space(14)
+            radius: Style.cornerRadius
+            color: mexg.containsMouse ? dayflow.accentFill(0.12) : "transparent"
+            border.color: dayflow.accentFill(0.5)
+
+            Text {
+              id: exg
+              anchors.centerIn: parent
+              text: dayflow.expanded ? "Shrink" : "Expand"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              id: mexg
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: dayflow.expanded = !dayflow.expanded
+            }
+          }
+
+          Rectangle {
             id: toggleBtn
             height: Style.space(28)
             width: tgl.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
             color: mtgl.containsMouse
-              ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.15)
+              ? dayflow.accentFill(0.12)
               : "transparent"
-            border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.15)
+            border.color: dayflow.accentFill(0.5)
 
             Text {
               id: tgl
@@ -763,16 +1315,17 @@ Panel {
               width: tabLabel.implicitWidth + Style.space(16)
               radius: Style.cornerRadius
               color: dayflow.currentTab === modelData
-                ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.15)
+                ? dayflow.accentFill(0.12)
                 : (tabMouse.containsMouse
-                    ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.10)
+                    ? dayflow.accentFill(0.06)
                     : "transparent")
 
               Text {
                 id: tabLabel
                 anchors.centerIn: parent
                 text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
-                color: dayflow.currentTab === modelData ? Color.accent : dayflow.foreground
+                color: dayflow.foreground
+                font.bold: dayflow.currentTab === modelData
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -834,18 +1387,12 @@ Panel {
           height: implicitHeight
           spacing: Style.space(6)
 
-          function bgColor(hot) {
-            return hot
-              ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.15)
-              : "transparent"
-          }
-
           Rectangle {
             height: Style.space(26)
             width: a1.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
-            color: bgColor(m1.containsMouse)
-            border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.15)
+            color: dayflow.btnBg(m1.containsMouse)
+            border.color: dayflow.accentFill(0.5)
             Text {
               id: a1
               anchors.centerIn: parent
@@ -866,8 +1413,8 @@ Panel {
             height: Style.space(26)
             width: a2.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
-            color: bgColor(m2.containsMouse)
-            border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.15)
+            color: dayflow.btnBg(m2.containsMouse)
+            border.color: dayflow.accentFill(0.5)
             opacity: dayflow.activeApp !== "" ? 1 : 0.45
             Text {
               id: a2
@@ -890,8 +1437,8 @@ Panel {
             height: Style.space(26)
             width: a3.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
-            color: bgColor(m3.containsMouse)
-            border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.15)
+            color: dayflow.btnBg(m3.containsMouse)
+            border.color: dayflow.accentFill(0.5)
             Text {
               id: a3
               anchors.centerIn: parent
@@ -912,8 +1459,8 @@ Panel {
             height: Style.space(26)
             width: a4.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
-            color: bgColor(m4.containsMouse)
-            border.color: Qt.rgba(dayflow.foreground.r, dayflow.foreground.g, dayflow.foreground.b, 0.15)
+            color: dayflow.btnBg(m4.containsMouse)
+            border.color: dayflow.accentFill(0.5)
             Text {
               id: a4
               anchors.centerIn: parent
@@ -935,7 +1482,8 @@ Panel {
         Text {
           width: parent.width - content.leftPadding - content.rightPadding
           text: dayflow.framesToday + " frames · " + dayflow.blocksPending + " pending" +
-                (dayflow.ignoredApps.length ? " · ignoring " + dayflow.ignoredApps.map(dayflow.appShortName).join(", ") : "")
+                (dayflow.storageText !== "" ? " · " + dayflow.storageText : "") +
+                (dayflow.ignoredApps.length ? " · ignoring " + dayflow.ignoredApps.map(function(a) { return dayflow.appDisplayName(a) }).join(", ") : "")
           color: dayflow.dim
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.caption
@@ -946,7 +1494,7 @@ Panel {
           visible: dayflow.notice !== ""
           width: parent.width - content.leftPadding - content.rightPadding
           text: dayflow.notice
-          color: Color.accent
+          color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap

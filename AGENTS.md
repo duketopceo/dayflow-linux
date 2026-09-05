@@ -1,6 +1,6 @@
 # dayflow — agent access guide
 
-This file is the contract for agents (Claude, Codex, kurultai workers, MCP clients)
+This file is the contract for agents (Claude, Codex, MCP clients)
 that read or operate the dayflow work journal on this machine.
 
 ## What this is
@@ -15,6 +15,7 @@ screen frames, and a summarizer turns each 15-minute block into a
 ~/.local/share/dayflow/
 ├── dayflow.db     # SQLite (WAL). The journal.
 ├── frames/        # raw JPEG frames awaiting summarization (usually empty)
+├── debug.log      # daemon log, written when config `debug` is true
 └── PAUSED         # flag file; its existence means "do not capture"
 ```
 
@@ -38,9 +39,11 @@ dayflow export [today|week|month|YYYY-MM-DD]   # markdown
 dayflow status [--json]
 dayflow events [--json] [-n N]
 dayflow usage [--json]
+dayflow stats [--json]                          # storage, block counts, coverage, API usage
 dayflow blocks [--json]                        # failed summaries
 dayflow search <query>                         # search titles/summaries/apps
 dayflow retry                                  # reset failed blocks
+dayflow scrub <query>                          # delete blocks matching <query>
 dayflow pause|resume|toggle
 dayflow ignore <class> | ignore --active | unignore <class>
 dayflow config [set <k> <v>]
@@ -50,8 +53,8 @@ dayflow doctor
 ### MCP (stdio)
 
 `dayflow mcp` exposes tools: `get_timeline(date)`, `get_status`,
-`search_journal(query)`, `get_events(limit)`, `get_usage`, `get_standup()`,
-`get_insights(range)`.
+`search_journal(query)`, `get_events(limit)`, `get_usage`, `get_stats()`,
+`get_standup()`, `get_insights(range)`.
 
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp
@@ -88,7 +91,21 @@ meetings, system, idle, other.
 
 ## Config reference
 
-`~/.config/dayflow/config.json` — keys: `model`, `api_base_url`,
-`capture_interval_sec`, `block_minutes`, `frames_per_block`, `jpeg_quality`,
-`keep_frames`, `retention_days`, `max_storage_mb`, `auto_pause_locked`,
-`ignore_apps`, `output`, `capture_command`, `openrouter_api_key`, `site_name`.
+`~/.config/dayflow/config.json` — keys: `provider` (`openrouter`|`local`|`custom`|`mcp`),
+`model`, `api_base_url`, `capture_interval_sec`, `block_minutes`, `frames_per_block`,
+`jpeg_quality`, `keep_frames`, `retention_days`, `max_storage_mb`,
+`auto_pause_locked`, `filter_inappropriate`, `ignore_apps`, `output`,
+`capture_command`, `openrouter_api_key`, `site_name`, `debug`.
+
+`dayflow config` prints the config with the API key masked; `dayflow config set`
+still writes the real key. `provider` is a hint for which endpoint style is in
+use; the summarizer only sends `openrouter_api_key` to OpenRouter or `custom`
+endpoints, never to `local`/`mcp` endpoints.
+
+`debug true` writes a verbose engine log to `~/.local/share/dayflow/debug.log`
+(captures, dedup skips, summarize calls with tokens/latency, retention runs,
+config reloads, auto-pause events). Turn it off when not needed.
+
+`dayflow stats` shows storage usage (data dir, database, WAL, frames awaiting
+summary), journal block counts and date coverage, event log size, and API
+call/token/latency totals. The panel status line shows total storage too.

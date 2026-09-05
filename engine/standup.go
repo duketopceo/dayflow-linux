@@ -73,16 +73,21 @@ func standupHighlights(blocks []Block) []string {
 		return nil
 	}
 	var out []string
-	for _, blk := range blocks {
-		if blk.Category == "idle" || blk.Title == "No activity" {
+	for _, c := range mergeCards(blocks) {
+		if c.Category == "idle" || c.Title == "No activity" {
 			continue
 		}
-		dur := blk.End.Sub(blk.Start).Minutes()
 		app := ""
-		if blk.App != "" {
-			app = fmt.Sprintf(" @%s", blk.App)
+		if c.App != "" {
+			app = fmt.Sprintf(" @%s", appDisplayName(c.App))
 		}
-		out = append(out, fmt.Sprintf("%s–%s — %s (%s, %.0f min)%s", blk.StartStr, blk.EndStr, blk.Title, blk.Category, dur, app))
+		if c.Blocks > 1 {
+			out = append(out, fmt.Sprintf("%s–%s — %s (%s, %s, %d blocks)%s",
+				c.StartStr, c.EndStr, c.Title, catDisplay(c.Category), fmtDur(c.Minutes), c.Blocks, app))
+		} else {
+			out = append(out, fmt.Sprintf("%s–%s — %s (%s, %s)%s",
+				c.StartStr, c.EndStr, c.Title, catDisplay(c.Category), fmtDur(c.Minutes), app))
+		}
 	}
 	return out
 }

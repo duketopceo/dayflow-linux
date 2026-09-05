@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -22,14 +23,15 @@ const summarizePrompt = `You are analyzing screen captures from a personal activ
 These images are frames sampled across a %d-minute window of the user's screen.
 
 Respond with ONLY a JSON object (no markdown fences) in this exact shape:
-{"title": "2-5 word activity title",
- "summary": "1-3 sentences describing what the user was actually doing, in second person past tense, e.g. 'You were editing dayflow-linux's summarize.go in Neovim and reading the OpenRouter docs in Chromium.'",
+{"title": "a descriptive 4-8 word title naming the concrete task, project, or topic — e.g. 'Debugging Hyprland audio routing in Omarchy', 'Reviewing PR feedback on dayflow panel', 'Reading OpenRouter docs for vision API'",
+ "summary": "2-4 sentences describing what the user was actually doing, in second person past tense. Be specific and descriptive — name the project, files, apps, sites, and the goal or problem being worked on, e.g. 'You were debugging why the Dayflow panel buttons rendered white in Quickshell, editing Panel.qml and restarting the shell to verify the accent color fix.' — not generic like 'Coding and testing'.",
  "category": "one of: coding, browsing, communication, writing, design, media, meetings, system, idle, personal, other",
- "activities": [{"app": "window class or app name, lowercase, e.g. 'neovim' or 'firefox'", "title": "2-5 word title", "summary": "1-2 sentences, second person past tense", "category": "same enum"}]}
+ "activities": [{"app": "window class or app name, lowercase, e.g. 'neovim' or 'firefox'", "title": "3-6 word descriptive title naming the specific thing done in that app", "summary": "1-2 sentences, second person past tense, concrete details", "category": "same enum"}]}
 
 "activities" breaks the window into per-app segments in chronological order (usually 1-3 entries; 1 if the user stayed in one app).
-Be concrete: name apps, sites, files, and topics you can see. If the screen was locked, idle, or unchanged the whole time, use category "idle" and return activities: [].
-If the screen contains explicit sexual or adult content, do not describe it. Instead produce a generic, non-graphic summary such as "Personal activity" and use category "personal". Never name adult sites or describe explicit material.`
+Be concrete and descriptive: name apps, sites, files, repos, doc pages, and the actual topic or task visible on screen. Avoid generic labels like "Software Development" or "Coding and Testing" — say WHAT was being developed or tested. If the screen was locked, idle, or unchanged the whole time, use category "idle" and return activities: [].
+If the screen contains explicit sexual or adult content, do not describe it. Instead produce a generic, non-graphic summary such as "Personal activity" and use category "personal". Never name adult sites or describe explicit material.
+Do not include credit card numbers, bank account details, ID numbers, Social Security numbers, passwords, API keys, access tokens, or other sensitive personal information. If the screen is dominated by such sensitive information, produce a generic summary such as "Personal activity" and use category "personal".`
 
 type orContent struct {
 	Type     string `json:"type"`
@@ -115,7 +117,9 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	if apiKey(cfg) != "" {
+	// Only attach the OpenRouter key to OpenRouter or explicitly "custom"
+	// providers; never send it to local/mcp endpoints.
+	if apiKey(cfg) != "" && (cfg.Provider == "openrouter" || cfg.Provider == "custom") {
 		req.Header.Set("Authorization", "Bearer "+apiKey(cfg))
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -175,16 +179,34 @@ func truncate(s string, n int) string {
 	return s
 }
 
-var inappropriateTerms = []string{
+var sensitiveTerms = []string{
+	// adult / explicit
 	"porn", "pornhub", "xvideos", "xhamster", "redtube", "youporn",
 	"adult content", "adult video", "adult site", "adult website",
 	"pornographic", "sex video", "explicit content", "explicit video",
+	// financial / PII
+	"bank account", "checking account", "savings account", "routing number",
+	"account number", "IBAN", "sort code", "wire transfer",
+	"credit card", "debit card", "card number", "cvv", "expiration date",
+	"social security", "SSN", "passport", "driver's license", "ID number",
+	"national ID", "tax ID", "tax identification", "government ID",
 }
 
-func containsInappropriate(text string) bool {
+var sensitivePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`\b\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{4}\b`), // credit-card-like
+	regexp.MustCompile(`\b\d{16}\b`),                           // 16-digit PAN
+	regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`),                // SSN-like
+}
+
+func containsSensitive(text string) bool {
 	lower := strings.ToLower(text)
-	for _, term := range inappropriateTerms {
+	for _, term := range sensitiveTerms {
 		if strings.Contains(lower, term) {
+			return true
+		}
+	}
+	for _, re := range sensitivePatterns {
+		if re.MatchString(text) {
 			return true
 		}
 	}
@@ -198,9 +220,9 @@ func sanitizeResult(cfg Config, res *blockResult) {
 	if res == nil {
 		return
 	}
-	dirty := containsInappropriate(res.Title) ||
-		containsInappropriate(res.Summary) ||
-		containsInappropriate(strings.Join(func() []string {
+	dirty := containsSensitive(res.Title) ||
+		containsSensitive(res.Summary) ||
+		containsSensitive(strings.Join(func() []string {
 			var parts []string
 			for _, a := range res.Activities {
 				parts = append(parts, a.Title, a.Summary)
@@ -212,8 +234,8 @@ func sanitizeResult(cfg Config, res *blockResult) {
 		res.Summary = "Personal activity not recorded."
 		res.Category = "personal"
 		for i := range res.Activities {
-			if containsInappropriate(res.Activities[i].Title) ||
-				containsInappropriate(res.Activities[i].Summary) {
+			if containsSensitive(res.Activities[i].Title) ||
+				containsSensitive(res.Activities[i].Summary) {
 				res.Activities[i].Title = "Personal activity"
 				res.Activities[i].Summary = "Personal activity not recorded."
 				res.Activities[i].Category = "personal"
@@ -288,6 +310,8 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 			continue
 		}
 		paths := sampleFrames(frames, cfg.FramesPerBlock)
+		debugf(cfg, "summarize %s: sending %d/%d frames to %s (%s)",
+			start.Format("15:04"), len(paths), len(frames), cfg.Model, chatURL(cfg))
 		t0 := time.Now()
 		res, pt, ct, err := callOpenRouter(cfg, paths)
 		latency := int(time.Since(t0).Milliseconds())
@@ -297,8 +321,11 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 			logAPICall(db, start, cfg.Model, len(paths), 0, 0, latency, "error", err.Error())
 			logEvent(db, "summarize_error", start.Format("15:04")+": "+err.Error())
 			log.Printf("summarize %s: %v", start.Format("15:04"), err)
+			debugf(cfg, "summarize %s: error after %dms: %v", start.Format("15:04"), latency, err)
 			continue
 		}
+		debugf(cfg, "summarize %s: ok in %dms, tokens in=%d out=%d, title=%q",
+			start.Format("15:04"), latency, pt, ct, res.Title)
 		logAPICall(db, start, cfg.Model, len(paths), pt, ct, latency, "ok", "")
 		logEvent(db, "summarized", start.Format("15:04")+" "+res.Title)
 		app := dominantApp(db, start, end)
