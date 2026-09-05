@@ -221,8 +221,8 @@ func blocksForDay(db *sql.DB, day time.Time) ([]Block, error) {
 		}
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
-		b.StartStr = b.Start.Format("15:04")
-		b.EndStr = b.End.Format("15:04")
+		b.StartStr = b.Start.Format("3:04 PM")
+		b.EndStr = b.End.Format("3:04 PM")
 		out = append(out, b)
 	}
 	return out, rows.Err()

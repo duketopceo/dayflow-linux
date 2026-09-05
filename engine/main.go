@@ -415,7 +415,7 @@ func printStatus(cfg Config, asJSON bool) {
 	lastTS, _ := lastFrameTS(db)
 	last := ""
 	if lastTS > 0 {
-		last = time.Unix(lastTS, 0).Local().Format("15:04")
+		last = time.Unix(lastTS, 0).Local().Format("3:04 PM")
 	}
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
@@ -529,8 +529,8 @@ func printSearch(query string, asJSON bool) {
 		if err := rows.Scan(&s, &e, &m.Title, &m.Summary, &m.Category, &m.App); err != nil {
 			continue
 		}
-		m.Start = time.Unix(s, 0).Local().Format("2006-01-02 15:04")
-		m.End = time.Unix(e, 0).Local().Format("15:04")
+		m.Start = time.Unix(s, 0).Local().Format("2006-01-02 3:04 PM")
+		m.End = time.Unix(e, 0).Local().Format("3:04 PM")
 		out = append(out, m)
 	}
 	if asJSON {
