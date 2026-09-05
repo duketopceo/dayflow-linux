@@ -286,6 +286,19 @@ func framesBefore(db *sql.DB, cutoff time.Time) ([]string, error) {
 	return paths, err
 }
 
+// deleteBlocksLike removes done/failed blocks whose title or summary matches
+// the case-insensitive LIKE pattern. It returns the number of rows deleted.
+func deleteBlocksLike(db *sql.DB, pattern string) (int64, error) {
+	like := "%" + pattern + "%"
+	r, err := db.Exec(`DELETE FROM blocks
+	  WHERE status IN ('done','failed') AND
+	        (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))`, like, like)
+	if err != nil {
+		return 0, err
+	}
+	return r.RowsAffected()
+}
+
 func pruneOldEvents(db *sql.DB, cutoff time.Time) {
 	db.Exec(`DELETE FROM events WHERE ts < ?`, cutoff.Unix())
 	db.Exec(`DELETE FROM api_calls WHERE ts < ?`, cutoff.Unix())

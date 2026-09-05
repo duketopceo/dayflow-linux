@@ -24,11 +24,12 @@ These images are frames sampled across a %d-minute window of the user's screen.
 Respond with ONLY a JSON object (no markdown fences) in this exact shape:
 {"title": "2-5 word activity title",
  "summary": "1-3 sentences describing what the user was actually doing, in second person past tense, e.g. 'You were editing dayflow-linux's summarize.go in Neovim and reading the OpenRouter docs in Chromium.'",
- "category": "one of: coding, browsing, communication, writing, design, media, meetings, system, idle, other",
+ "category": "one of: coding, browsing, communication, writing, design, media, meetings, system, idle, personal, other",
  "activities": [{"app": "window class or app name, lowercase, e.g. 'neovim' or 'firefox'", "title": "2-5 word title", "summary": "1-2 sentences, second person past tense", "category": "same enum"}]}
 
 "activities" breaks the window into per-app segments in chronological order (usually 1-3 entries; 1 if the user stayed in one app).
-Be concrete: name apps, sites, files, and topics you can see. If the screen was locked, idle, or unchanged the whole time, use category "idle" and return activities: [].`
+Be concrete: name apps, sites, files, and topics you can see. If the screen was locked, idle, or unchanged the whole time, use category "idle" and return activities: [].
+If the screen contains explicit sexual or adult content, do not describe it. Instead produce a generic, non-graphic summary such as "Personal activity" and use category "personal". Never name adult sites or describe explicit material.`
 
 type orContent struct {
 	Type     string `json:"type"`
@@ -148,6 +149,7 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 	if err := json.Unmarshal([]byte(text), &res); err != nil {
 		return nil, 0, 0, fmt.Errorf("bad model JSON: %w (raw: %s)", err, truncate(text, 200))
 	}
+	sanitizeResult(cfg, &res)
 	pt, ct := 0, 0
 	if or.Usage != nil {
 		pt, ct = or.Usage.PromptTokens, or.Usage.CompletionTokens
@@ -171,6 +173,53 @@ func truncate(s string, n int) string {
 		return s[:n] + "..."
 	}
 	return s
+}
+
+var inappropriateTerms = []string{
+	"porn", "pornhub", "xvideos", "xhamster", "redtube", "youporn",
+	"adult content", "adult video", "adult site", "adult website",
+	"pornographic", "sex video", "explicit content", "explicit video",
+}
+
+func containsInappropriate(text string) bool {
+	lower := strings.ToLower(text)
+	for _, term := range inappropriateTerms {
+		if strings.Contains(lower, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeResult(cfg Config, res *blockResult) {
+	if !cfg.FilterInappropriate {
+		return
+	}
+	if res == nil {
+		return
+	}
+	dirty := containsInappropriate(res.Title) ||
+		containsInappropriate(res.Summary) ||
+		containsInappropriate(strings.Join(func() []string {
+			var parts []string
+			for _, a := range res.Activities {
+				parts = append(parts, a.Title, a.Summary)
+			}
+			return parts
+		}(), " "))
+	if dirty {
+		res.Title = "Personal time"
+		res.Summary = "Personal activity not recorded."
+		res.Category = "personal"
+		for i := range res.Activities {
+			if containsInappropriate(res.Activities[i].Title) ||
+				containsInappropriate(res.Activities[i].Summary) {
+				res.Activities[i].Title = "Personal activity"
+				res.Activities[i].Summary = "Personal activity not recorded."
+				res.Activities[i].Category = "personal"
+			}
+		}
+	}
 }
 
 // blockStart floors t to the nearest local wall-clock block boundary.

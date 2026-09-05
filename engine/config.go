@@ -24,8 +24,9 @@ type Config struct {
 	CaptureCommand     string   `json:"capture_command"` // override; default auto-detect grim
 	Output             string   `json:"output"`          // grim -o <output>; empty = all outputs
 	SiteName           string   `json:"site_name"`       // OpenRouter X-Title
-	MaxStorageMB       int      `json:"max_storage_mb"`  // 0 = unlimited frame storage
-	AutoPauseLocked    bool     `json:"auto_pause_locked"`
+	MaxStorageMB        int      `json:"max_storage_mb"`        // 0 = unlimited frame storage
+	AutoPauseLocked     bool     `json:"auto_pause_locked"`
+	FilterInappropriate bool     `json:"filter_inappropriate"` // redact adult/explicit content
 }
 
 // normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1
@@ -85,9 +86,10 @@ func defaultConfig() Config {
 		KeepFrames:         false,
 		RetentionDays:      7,
 		IgnoreApps:         []string{},
-		SiteName:           "dayflow-linux",
-		MaxStorageMB:       10240,
-		AutoPauseLocked:    true,
+		SiteName:            "dayflow-linux",
+		MaxStorageMB:        10240,
+		AutoPauseLocked:     true,
+		FilterInappropriate: true,
 	}
 }
 

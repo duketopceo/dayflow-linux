@@ -51,7 +51,7 @@ func (i insights) distMaps(d []insightDist) []map[string]any {
 
 func isDistractionCategory(cat string) bool {
 	switch cat {
-	case "media", "browsing", "idle":
+	case "media", "browsing", "idle", "personal":
 		return true
 	}
 	return false

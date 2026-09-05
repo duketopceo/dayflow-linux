@@ -48,6 +48,7 @@ Control:
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
   search <query>          Search block titles, summaries, and apps
   retry                   Reset failed/dead blocks for re-summarization
+  scrub <query>           Delete blocks whose title or summary contains <query>
 
 Setup & health:
   setup                   Interactive AI-provider onboarding (OpenRouter or local endpoint)
@@ -287,6 +288,17 @@ func main() {
 			usage()
 		}
 		printSearch(args[0], jsonOut)
+
+	case "scrub":
+		if len(args) == 0 || args[0][0] == '-' {
+			usage()
+		}
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		n, err := deleteBlocksLike(db, args[0])
+		fatal(err)
+		fmt.Printf("deleted %d block(s) matching %q\n", n, args[0])
 
 	case "retry":
 		db, err := openDB()

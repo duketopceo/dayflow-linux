@@ -108,6 +108,7 @@ Panel {
       case "meetings":      return Qt.lighter(Color.accent, 1.2)
       case "design":        return Qt.lighter(Color.accent, 1.3)
       case "idle":          return Qt.darker(dayflow.foreground, 1.8)
+      case "personal":      return Color.urgent !== undefined ? Color.urgent : dayflow.foreground
       case "other":         return Qt.darker(dayflow.foreground, 1.5)
       default:              return dayflow.foreground
     }
