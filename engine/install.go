@@ -10,11 +10,14 @@ import (
 const captureService = `[Unit]
 Description=dayflow screen capture daemon
 After=graphical-session.target
+Wants=graphical-session.target
 
 [Service]
 ExecStart=%s daemon
 Restart=on-failure
 RestartSec=5
+PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
+Environment="WAYLAND_DISPLAY=wayland-1"
 
 [Install]
 WantedBy=default.target
