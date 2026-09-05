@@ -2173,6 +2173,16 @@ Panel {
   }
 
   Component {
+    id: chatTab
+    Loader {
+      width: parent.width
+      height: item ? item.implicitHeight : Style.space(460)
+      source: "ChatTab.qml"
+      property var panel: dayflow
+    }
+  }
+
+  Component {
     id: settingsTabNew
     Loader {
       width: parent.width
@@ -2363,7 +2373,7 @@ Panel {
           spacing: Style.space(6)
 
           Repeater {
-            model: ["today", "standup", "week", "settings"]
+            model: ["today", "standup", "chat", "week", "settings"]
 
             delegate: Rectangle {
               height: Style.space(28)
@@ -2435,6 +2445,7 @@ Panel {
           height: item ? item.implicitHeight : Style.space(120)
           sourceComponent: dayflow.currentTab === "today" ? todayTab
             : dayflow.currentTab === "standup" ? standupTab
+            : dayflow.currentTab === "chat" ? chatTab
             : dayflow.currentTab === "week" ? weekTab
             : settingsTabNew
         }

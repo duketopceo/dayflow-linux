@@ -54,6 +54,11 @@ var mcpTools = []map[string]any{
 	{"name": "get_insights", "description": "Focus, category, app, and distraction analytics for a range (day, week, month).",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"range": map[string]any{"type": "string", "description": "day, week, or month"}}}},
+	{"name": "chat", "description": "Ask a question about the user's work journal. Optionally continue an existing conversation.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"message":        map[string]any{"type": "string", "description": "The user's question"},
+			"conversation_id": map[string]any{"type": "integer", "description": "Optional existing conversation id"}},
+			"required": []string{"message"}}},
 }
 
 func mcpText(v any) map[string]any {
@@ -251,6 +256,21 @@ func mcpCall(db *sql.DB, cfg Config, name string, args map[string]any) (any, err
 			return nil, err
 		}
 		return in.JSON(), nil
+
+	case "chat":
+		msg, _ := args["message"].(string)
+		if msg == "" {
+			return nil, fmt.Errorf("message required")
+		}
+		convID := int64(0)
+		if v, ok := args["conversation_id"]; ok {
+			id, err := convIDFromArg(v)
+			if err != nil {
+				return nil, err
+			}
+			convID = id
+		}
+		return chatWithJournal(db, cfg, convID, msg)
 	}
 	return nil, fmt.Errorf("unknown tool %q", name)
 }

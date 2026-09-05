@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -64,6 +65,8 @@ Control:
   mcp                     Run the MCP server over stdio (for agents)
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
   search <query>          Search block titles, summaries, and apps
+  chat [message] [--conversation-id N] [--json]  Ask a question about the journal
+  conversations [--json]  List saved chat conversations
   retry                   Reset failed/dead blocks for re-summarization
   scrub <query>           Delete blocks whose title or summary contains <query>
 
@@ -442,6 +445,70 @@ func main() {
 			usage()
 		}
 		printSearch(args[0], jsonOut)
+
+	case "chat":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		var convID int64
+		if s := flagValue(args, "--conversation-id"); s != "" {
+			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				convID = n
+			}
+		}
+		var msgParts []string
+		for _, a := range args {
+			if a[0] != '-' {
+				msgParts = append(msgParts, a)
+			}
+		}
+		msg := strings.Join(msgParts, " ")
+		if msg == "" {
+			if jsonOut {
+				fatal(fmt.Errorf("interactive chat does not support --json"))
+			}
+			fmt.Println("Chat with your journal. Type 'exit' to quit.")
+			sc := bufio.NewScanner(os.Stdin)
+			for sc.Scan() {
+				line := strings.TrimSpace(sc.Text())
+				if line == "exit" {
+					break
+				}
+				if line == "" {
+					continue
+				}
+				res, err := chatWithJournal(db, cfg, convID, line)
+				fatal(err)
+				fmt.Println(res.Reply)
+				convID = res.ConversationID
+			}
+			break
+		}
+		res, err := chatWithJournal(db, cfg, convID, msg)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(res)
+		} else {
+			fmt.Println(res.Reply)
+		}
+
+	case "conversations":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		convs, err := listConversations(db, 20)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(convs)
+		} else {
+			if len(convs) == 0 {
+				fmt.Println("no conversations")
+			} else {
+				for _, c := range convs {
+					fmt.Printf("%d: %s\n", c.ID, c.Title)
+				}
+			}
+		}
 
 	case "scrub":
 		if len(args) == 0 || args[0][0] == '-' {
