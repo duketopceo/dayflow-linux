@@ -62,9 +62,15 @@ var mcpTools = []map[string]any{
 }
 
 func mcpText(v any) map[string]any {
-	b, _ := json.MarshalIndent(v, "", "  ")
+	var text string
+	if s, ok := v.(string); ok {
+		text = s
+	} else {
+		b, _ := json.MarshalIndent(v, "", "  ")
+		text = string(b)
+	}
 	return map[string]any{"content": []map[string]any{
-		{"type": "text", "text": string(b)},
+		{"type": "text", "text": text},
 	}}
 }
 
@@ -270,7 +276,11 @@ func mcpCall(db *sql.DB, cfg Config, name string, args map[string]any) (any, err
 			}
 			convID = id
 		}
-		return chatWithJournal(db, cfg, convID, msg)
+		res, err := chatWithJournal(db, cfg, convID, msg)
+		if err != nil {
+			return nil, err
+		}
+		return res.Reply, nil
 	}
 	return nil, fmt.Errorf("unknown tool %q", name)
 }

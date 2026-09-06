@@ -109,8 +109,11 @@ Flickable {
       Repeater {
         model: root.chatMessages
         delegate: Rectangle {
+          property bool showThis: modelData.role !== "tool" && !(modelData.role === "assistant" && modelData.tool_calls && modelData.tool_calls.length > 0)
+
+          visible: showThis
           width: parent.width
-          height: msgText.implicitHeight + Style.space(16)
+          height: showThis ? msgText.implicitHeight + Style.space(16) : 0
           radius: Style.cornerRadius
           color: modelData.role === "user"
             ? (dayflow ? dayflow.accentFill(0.10) : "transparent")
@@ -119,12 +122,12 @@ Flickable {
 
           Text {
             id: msgText
+            visible: parent.showThis
             anchors.fill: parent
             anchors.margins: Style.space(8)
-            text: (modelData.role === "tool"
-              ? "Tool result"
-              : (modelData.role === "assistant" ? "Assistant" : "You"))
-              + ":\n" + modelData.content
+            text: showThis
+              ? ((modelData.role === "assistant" ? "Assistant" : "You") + ":\n" + modelData.content)
+              : ""
             color: dayflow ? dayflow.foreground : Color.foreground
             font.family: dayflow ? dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
