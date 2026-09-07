@@ -30,12 +30,16 @@ Panel {
   property var configDraft: ({})
   property bool configLoaded: false
   property var standup: ({ yesterday: { date: "", total_minutes: 0, entries: [] }, today: { date: "", total_minutes: 0, entries: [] } })
+  property var draft: ({ date: "", highlights: "", tasks: "", blockers: "", priorities: "" })
+  property bool draftDirty: false
+  property var workflow: ({ date: "", slot_minutes: 15, total_minutes: 0, slots: [], categories: [] })
   property var insights: ({ total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, categories: [], apps: [], top_distractions: [], focus_blocks: [], days: 0 })
   property var weekBlocks: []
   property string weekStart: ""
   property string weekEnd: ""
   property string weekSummary: ""
   property bool weekSummaryLoading: false
+  property var weeklyPayload: ({ start: "", end: "", total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, category_donut: [], app_treemap: [], context_shifts: [], context_shift_count: 0, top_distractions: [], focus_blocks: [], highlights: [], suggestions: [], heatmap: [] })
   property var spans: []
   property int dayOffset: 0
   property bool expanded: false
@@ -65,6 +69,7 @@ Panel {
     if (!standupFetchProc.running) standupFetchProc.running = true
     if (!insightsFetchProc.running) insightsFetchProc.running = true
     if (!weekTimelineProc.running) weekTimelineProc.running = true
+    if (!weeklyProc.running) weeklyProc.running = true
     if (!configProc.running) configProc.running = true
   }
 
@@ -140,6 +145,7 @@ Panel {
   function loadTimeline() {
     timelineProc.command = ["dayflow", "timeline", "--json", dayflow.viewDateStr()]
     if (!timelineProc.running) timelineProc.running = true
+    dayflow.loadWorkflow()
   }
 
   // Merge consecutive blocks about the same thing (same title, or same
@@ -161,12 +167,14 @@ Panel {
         prev.count++
         prev.title = b.title
         prev.summary = b.summary
+        prev.productive = prev.productive || (b.productive === true)
       } else {
         spans.push({
           start: b.start, end: b.end,
           start_ts: b.start_ts, end_ts: b.end_ts,
           title: b.title, summary: b.summary,
           category: b.category, app: b.app,
+          productive: b.productive === true,
           appName: b.app_name || dayflow.appDisplayName(b.app),
           minutes: Math.round((Number(b.end_ts) - Number(b.start_ts)) / 60),
           count: 1,
@@ -176,6 +184,40 @@ Panel {
     }
     spans.reverse()
     return spans
+  }
+
+  // ---- block editing ----
+  // Pending `dayflow edit` argv arrays, run one at a time so several field
+  // changes on the same card don't race each other.
+  property var editQueue: []
+
+  // Queue one edit per changed field, then drain via editProc.
+  function saveBlockEdits(startTs, title, category, productive, orig) {
+    var q = []
+    if (title !== (orig.title || ""))
+      q.push(["dayflow", "edit", String(startTs), "title", title])
+    if (category !== (orig.category || ""))
+      q.push(["dayflow", "edit", String(startTs), "category", category])
+    if (productive !== (orig.productive === true))
+      q.push(["dayflow", "edit", String(startTs), "productive", productive ? "true" : "false"])
+    if (q.length === 0) {
+      dayflow.notice = "no changes"
+      return
+    }
+    dayflow.editQueue = q
+    dayflow.runNextEdit()
+  }
+
+  function runNextEdit() {
+    if (dayflow.editQueue.length === 0) {
+      dayflow.notice = "edits saved"
+      dayflow.loadTimeline()
+      return
+    }
+    var next = dayflow.editQueue[0]
+    dayflow.editQueue = dayflow.editQueue.slice(1)
+    editProc.command = next
+    editProc.running = true
   }
 
   function fmtDur(mins) {
@@ -231,7 +273,42 @@ Panel {
     try {
       var d = JSON.parse(raw)
       dayflow.standup = d
+      if (d.draft && !dayflow.draftDirty) {
+        dayflow.draft = d.draft
+      }
     } catch (e) {}
+  }
+
+  function applyWorkflow(raw) {
+    try {
+      var d = JSON.parse(raw)
+      dayflow.workflow = d
+    } catch (e) {
+      dayflow.workflow = ({ date: "", slot_minutes: 15, total_minutes: 0, slots: [], categories: [] })
+    }
+  }
+
+  function todayStr() {
+    var d = new Date()
+    var m = ("0" + (d.getMonth() + 1)).slice(-2)
+    var dd = ("0" + d.getDate()).slice(-2)
+    return d.getFullYear() + "-" + m + "-" + dd
+  }
+
+  function saveDraft() {
+    var d = dayflow.draft || {}
+    draftSaveProc.command = ["dayflow", "standup", "save",
+      "--date", d.date || dayflow.todayStr(),
+      "--highlights", String(d.highlights || ""),
+      "--tasks", String(d.tasks || ""),
+      "--blockers", String(d.blockers || ""),
+      "--priorities", String(d.priorities || "")]
+    if (!draftSaveProc.running) draftSaveProc.running = true
+  }
+
+  function loadWorkflow() {
+    gridProc.command = ["dayflow", "day", dayflow.viewDateStr(), "--grid", "--json"]
+    if (!gridProc.running) gridProc.running = true
   }
 
   function applyInsights(raw) {
@@ -259,6 +336,15 @@ Panel {
       dayflow.weekSummary = d.review || ""
     } catch (e) {
       dayflow.weekSummary = "Could not load weekly review."
+    }
+  }
+
+  function applyWeeklyPayload(raw) {
+    try {
+      var d = JSON.parse(raw)
+      dayflow.weeklyPayload = d
+    } catch (e) {
+      dayflow.weeklyPayload = ({ start: "", end: "", total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, category_donut: [], app_treemap: [], context_shifts: [], context_shift_count: 0, top_distractions: [], focus_blocks: [], highlights: [], suggestions: [], heatmap: [] })
     }
   }
 
@@ -478,6 +564,33 @@ Panel {
   }
 
   Process {
+    id: gridProc
+    command: ["dayflow", "day", "--grid", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyWorkflow(text)
+    }
+  }
+
+  Process {
+    id: draftSaveProc
+    command: ["dayflow", "standup", "save"]
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: { if (text.trim() !== "") dayflow.notice = text.trim() }
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        dayflow.draftDirty = false
+        dayflow.notice = "draft saved"
+        if (!standupFetchProc.running) standupFetchProc.running = true
+      } else {
+        dayflow.notice = "draft save failed"
+      }
+    }
+  }
+
+  Process {
     id: insightsFetchProc
     command: ["dayflow", "insights", "week", "--json"]
     stdout: StdioCollector {
@@ -501,6 +614,15 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyWeekReview(text)
+    }
+  }
+
+  Process {
+    id: weeklyProc
+    command: ["dayflow", "weekly", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyWeeklyPayload(text)
     }
   }
 
@@ -541,6 +663,23 @@ Panel {
     command: ["bash", "-c", "dayflow export | wl-copy"]
     onExited: function(exitCode) {
       dayflow.notice = exitCode === 0 ? "copied today's journal" : "copy failed"
+    }
+  }
+
+  Process {
+    id: editProc
+    command: ["dayflow", "edit"]
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: { if (text.trim() !== "") dayflow.notice = text.trim() }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        dayflow.editQueue = []
+        dayflow.notice = "edit failed"
+        return
+      }
+      Qt.callLater(dayflow.runNextEdit)
     }
   }
 
@@ -689,12 +828,25 @@ Panel {
           model: dayflow.spans
 
           delegate: Rectangle {
+            id: cardRoot
             width: col.width
             height: cardCol.implicitHeight + Style.space(16)
             radius: Style.cornerRadius
             color: dayflow.fgFill(0.04)
             border.color: dayflow.fgFill(0.08)
             clip: true
+
+            property bool editing: false
+            property string editTitle: ""
+            property string editCategory: ""
+            property bool editProd: false
+
+            function beginEdit() {
+              editTitle = modelData.title || ""
+              editCategory = modelData.category || ""
+              editProd = modelData.productive === true
+              editing = true
+            }
 
             // Category-colored edge so spans scan by activity type.
             Rectangle {
@@ -750,6 +902,34 @@ Panel {
                     font.pixelSize: Style.font.caption
                   }
                 }
+
+                Text {
+                  visible: modelData.productive === true
+                  text: "⚡"
+                  color: dayflow.dim
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  text: cardRoot.editing ? "close" : "edit"
+                  color: editLink.containsMouse ? dayflow.foreground : dayflow.dim
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.underline: editLink.containsMouse
+                  anchors.verticalCenter: parent.verticalCenter
+                  MouseArea {
+                    id: editLink
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      if (cardRoot.editing) cardRoot.editing = false
+                      else cardRoot.beginEdit()
+                    }
+                  }
+                }
               }
 
               Text {
@@ -772,6 +952,135 @@ Panel {
                 wrapMode: Text.WordWrap
                 maximumLineCount: 4
                 elide: Text.ElideRight
+              }
+
+              // ---- inline edit form (title, category, productive) ----
+              Column {
+                visible: cardRoot.editing
+                width: parent.width
+                spacing: Style.space(6)
+
+                Rectangle {
+                  width: parent.width
+                  height: titleEdit.implicitHeight + Style.space(8)
+                  radius: Style.cornerRadius
+                  color: dayflow.fgFill(0.06)
+                  border.color: dayflow.fgFill(0.12)
+                  clip: true
+                  TextEdit {
+                    id: titleEdit
+                    anchors.fill: parent
+                    anchors.margins: Style.space(4)
+                    text: cardRoot.editTitle
+                    color: dayflow.foreground
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: TextEdit.Wrap
+                    onTextChanged: { if (activeFocus) cardRoot.editTitle = text }
+                  }
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(6)
+
+                  Rectangle {
+                    width: parent.width - prodPill.width - Style.space(6)
+                    height: catEdit.implicitHeight + Style.space(8)
+                    radius: Style.cornerRadius
+                    color: dayflow.fgFill(0.06)
+                    border.color: dayflow.fgFill(0.12)
+                    clip: true
+                    TextEdit {
+                      id: catEdit
+                      anchors.fill: parent
+                      anchors.margins: Style.space(4)
+                      text: cardRoot.editCategory
+                      color: dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.body
+                      onTextChanged: { if (activeFocus) cardRoot.editCategory = text }
+                    }
+                  }
+
+                  Rectangle {
+                    id: prodPill
+                    height: catEdit.implicitHeight + Style.space(8)
+                    width: prodPillText.implicitWidth + Style.space(12)
+                    radius: height / 2
+                    color: cardRoot.editProd ? dayflow.accentFill(0.15) : dayflow.fgFill(0.06)
+                    border.color: cardRoot.editProd ? dayflow.accentFill(0.5) : dayflow.fgFill(0.12)
+                    Text {
+                      id: prodPillText
+                      anchors.centerIn: parent
+                      text: cardRoot.editProd ? "⚡ productive" : "not productive"
+                      color: dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                    MouseArea {
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: cardRoot.editProd = !cardRoot.editProd
+                    }
+                  }
+                }
+
+                Row {
+                  spacing: Style.space(8)
+
+                  Rectangle {
+                    height: Style.space(24)
+                    width: saveEditText.implicitWidth + Style.space(14)
+                    radius: Style.cornerRadius
+                    color: mSaveEdit.containsMouse ? dayflow.accentFill(0.12) : "transparent"
+                    border.color: dayflow.accentFill(0.5)
+                    Text {
+                      id: saveEditText
+                      anchors.centerIn: parent
+                      text: "Save"
+                      color: dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                    MouseArea {
+                      id: mSaveEdit
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: {
+                        cardRoot.editing = false
+                        dayflow.saveBlockEdits(modelData.start_ts,
+                          cardRoot.editTitle, cardRoot.editCategory,
+                          cardRoot.editProd, modelData)
+                      }
+                    }
+                  }
+
+                  Rectangle {
+                    height: Style.space(24)
+                    width: cancelEditText.implicitWidth + Style.space(14)
+                    radius: Style.cornerRadius
+                    color: mCancelEdit.containsMouse ? dayflow.fgFill(0.08) : "transparent"
+                    border.color: dayflow.fgFill(0.15)
+                    Text {
+                      id: cancelEditText
+                      anchors.centerIn: parent
+                      text: "Cancel"
+                      color: dayflow.dim
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                    MouseArea {
+                      id: mCancelEdit
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: cardRoot.editing = false
+                    }
+                  }
+                }
               }
 
               // Merged span: one row per underlying 15-min block.
@@ -810,9 +1119,162 @@ Panel {
 
   Component {
     id: standupTab
-    Column {
+    Flickable {
       width: parent.width
-      spacing: Style.space(10)
+      implicitHeight: Math.min(suCol.implicitHeight, Style.space(420))
+      height: implicitHeight
+      contentHeight: suCol.implicitHeight
+      clip: true
+
+      Column {
+        id: suCol
+        width: parent.width
+        spacing: Style.space(10)
+
+      // ---- editable standup draft ----
+      Component {
+        id: draftField
+        Column {
+          property string label: ""
+          property string field: ""
+          width: parent ? parent.width : 0
+          spacing: Style.space(2)
+
+          Text {
+            text: label
+            color: dayflow.dim
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Rectangle {
+            width: parent.width
+            height: Math.min(fEdit.implicitHeight + Style.space(8), Style.space(72))
+            radius: Style.cornerRadius
+            color: dayflow.fgFill(0.04)
+            border.color: dayflow.fgFill(0.12)
+            clip: true
+
+            TextEdit {
+              id: fEdit
+              anchors.fill: parent
+              anchors.margins: Style.space(4)
+              text: dayflow.draft[field] || ""
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: TextEdit.Wrap
+              // Only user edits (focused field) mark the draft dirty — this
+              // keeps applyStandup() refreshes from clobbering in-progress text.
+              onTextChanged: {
+                if (fEdit.activeFocus) {
+                  dayflow.draft[field] = text
+                  dayflow.draftDirty = true
+                }
+              }
+            }
+          }
+        }
+      }
+
+      Rectangle {
+        width: parent.width
+        height: draftCol.implicitHeight + Style.space(16)
+        radius: Style.cornerRadius
+        color: dayflow.fgFill(0.04)
+        border.color: dayflow.fgFill(0.08)
+
+        Column {
+          id: draftCol
+          width: parent.width - Style.space(16)
+          anchors.centerIn: parent
+          spacing: Style.space(6)
+
+          Row {
+            width: parent.width
+
+            Text {
+              text: "Standup draft" + (dayflow.draft.date ? " · " + dayflow.draft.date : "")
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Text {
+              anchors.right: parent.right
+              visible: dayflow.draftDirty
+              text: "unsaved changes"
+              color: dayflow.dim
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Loader {
+            width: parent.width
+            height: item ? item.implicitHeight : 0
+            sourceComponent: draftField
+            onLoaded: { item.label = "Highlights"; item.field = "highlights" }
+          }
+
+          Loader {
+            width: parent.width
+            height: item ? item.implicitHeight : 0
+            sourceComponent: draftField
+            onLoaded: { item.label = "Tasks"; item.field = "tasks" }
+          }
+
+          Loader {
+            width: parent.width
+            height: item ? item.implicitHeight : 0
+            sourceComponent: draftField
+            onLoaded: { item.label = "Blockers"; item.field = "blockers" }
+          }
+
+          Loader {
+            width: parent.width
+            height: item ? item.implicitHeight : 0
+            sourceComponent: draftField
+            onLoaded: { item.label = "Priorities"; item.field = "priorities" }
+          }
+
+          Rectangle {
+            height: Style.space(28)
+            width: saveDraftText.implicitWidth + Style.space(16)
+            radius: Style.cornerRadius
+            color: mSaveDraft.containsMouse
+              ? dayflow.accentFill(0.12)
+              : "transparent"
+            border.color: dayflow.accentFill(0.5)
+
+            Text {
+              id: saveDraftText
+              anchors.centerIn: parent
+              text: draftSaveProc.running ? "Saving..." : "Save draft"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              id: mSaveDraft
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: dayflow.saveDraft()
+            }
+          }
+        }
+      }
+
+      // ---- daily workflow grid ----
+      Loader {
+        width: parent.width
+        height: item ? item.implicitHeight : 0
+        source: "DailyWorkflowGrid.qml"
+        property var panel: dayflow
+      }
 
       Text {
         visible: dayflow.standup.yesterday.entries.length === 0 && dayflow.standup.today.entries.length === 0
@@ -962,8 +1424,20 @@ Panel {
 
           Text {
             width: parent.width
-            text: "Nothing flagged — fill this in when you write your update."
-            color: dayflow.dim
+            text: dayflow.draft.blockers !== ""
+              ? dayflow.draft.blockers
+              : "Nothing flagged — fill this in when you write your update."
+            color: dayflow.draft.blockers !== "" ? dayflow.foreground : dayflow.dim
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.body
+            wrapMode: Text.WordWrap
+          }
+
+          Text {
+            visible: dayflow.draft.priorities !== ""
+            width: parent.width
+            text: "Priorities: " + dayflow.draft.priorities
+            color: dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
             wrapMode: Text.WordWrap
@@ -997,6 +1471,7 @@ Panel {
           }
         }
       }
+    }
     }
   }
 
@@ -1090,6 +1565,150 @@ Panel {
                     }
                   }
                 }
+              }
+            }
+          }
+        }
+
+        Rectangle {
+          visible: dayflow.weeklyPayload.category_donut.length > 0
+          width: parent.width
+          height: chartsCol.implicitHeight + Style.space(16)
+          radius: Style.cornerRadius
+          color: dayflow.fgFill(0.04)
+          border.color: dayflow.fgFill(0.08)
+
+          Column {
+            id: chartsCol
+            width: parent.width - Style.space(16)
+            anchors.centerIn: parent
+            spacing: Style.space(10)
+
+            Text {
+              text: "Category breakdown"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Row {
+              id: donutRow
+              width: parent.width
+              height: Style.space(24)
+              spacing: 0
+
+              Repeater {
+                model: dayflow.weeklyPayload.category_donut
+                delegate: Rectangle {
+                  width: donutRow.width * (modelData.percentage / 100)
+                  height: parent.height
+                  color: dayflow.categoryColor(modelData.name)
+                }
+              }
+            }
+
+            Repeater {
+              model: dayflow.weeklyPayload.category_donut
+              delegate: Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Rectangle {
+                  width: Style.space(10)
+                  height: Style.space(10)
+                  radius: Style.space(2)
+                  color: dayflow.categoryColor(modelData.name)
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  text: (modelData.display || modelData.name) + "  " + modelData.percentage + "%"
+                  color: dayflow.foreground
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+            }
+
+            Text {
+              visible: dayflow.weeklyPayload.app_treemap.length > 0
+              text: "Top apps"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Column {
+              visible: dayflow.weeklyPayload.app_treemap.length > 0
+              width: parent.width
+              spacing: Style.space(4)
+
+              Repeater {
+                model: dayflow.weeklyPayload.app_treemap
+                delegate: Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+
+                  Rectangle {
+                    width: Math.max(Style.space(4), parent.width * (modelData.percentage / 100))
+                    height: Style.space(14)
+                    radius: Style.space(2)
+                    color: dayflow.accentFill(0.5)
+                  }
+
+                  Text {
+                    text: (modelData.display || modelData.name) + "  " + modelData.percentage + "%"
+                    color: dayflow.foreground
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: dayflow.weeklyPayload.highlights.length > 0
+              text: "Highlights"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Repeater {
+              model: dayflow.weeklyPayload.highlights
+              delegate: Text {
+                width: parent.width
+                text: "• " + modelData
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
+
+            Text {
+              visible: dayflow.weeklyPayload.suggestions.length > 0
+              text: "Suggestions"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Repeater {
+              model: dayflow.weeklyPayload.suggestions
+              delegate: Text {
+                width: parent.width
+                text: "• " + modelData
+                color: dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
               }
             }
           }
@@ -1941,6 +2560,16 @@ Panel {
   }
 
   Component {
+    id: chatTab
+    Loader {
+      width: parent.width
+      height: item ? item.implicitHeight : Style.space(460)
+      source: "ChatTab.qml"
+      property var panel: dayflow
+    }
+  }
+
+  Component {
     id: settingsTabNew
     Loader {
       width: parent.width
@@ -2131,7 +2760,7 @@ Panel {
           spacing: Style.space(6)
 
           Repeater {
-            model: ["today", "standup", "week", "settings"]
+            model: ["today", "standup", "chat", "week", "settings"]
 
             delegate: Rectangle {
               height: Style.space(28)
@@ -2203,6 +2832,7 @@ Panel {
           height: item ? item.implicitHeight : Style.space(120)
           sourceComponent: dayflow.currentTab === "today" ? todayTab
             : dayflow.currentTab === "standup" ? standupTab
+            : dayflow.currentTab === "chat" ? chatTab
             : dayflow.currentTab === "week" ? weekTab
             : settingsTabNew
         }

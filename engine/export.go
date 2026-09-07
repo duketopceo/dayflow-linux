@@ -41,7 +41,10 @@ func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
 		b.AppName = appDisplayName(b.App)
 		out = append(out, b)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return applyBlockEdits(db, out, start.Unix(), end.Unix())
 }
 
 func dayBounds(t time.Time) (time.Time, time.Time) {

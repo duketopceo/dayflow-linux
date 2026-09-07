@@ -23,7 +23,7 @@ work-journal
 ## Maintainer notes
 
 **What it does:**
-Dayflow is a private, automatic work journal for Omarchy / Hyprland. It captures a lightweight screenshot every 10 seconds, deduplicates unchanged frames, and every 15 minutes sends ~30 sampled frames to a vision model to generate a plain-language summary of what you were doing. The result is a readable timeline in the bar panel plus standup updates and focus/distraction analytics.
+Dayflow is a private, automatic work journal for Omarchy / Hyprland. It captures a lightweight screenshot every 10 seconds, deduplicates unchanged frames, and every 15 minutes sends ~30 sampled frames to a vision model to generate a plain-language summary of what you were doing. The result is a readable timeline in the bar panel plus standup updates, focus/distraction analytics, multi-provider routing, chat with your journal, inline block editing, daily workflow grid, and weekly analytics charts.
 
 **Installation:**
 ```sh

@@ -40,6 +40,8 @@ type Config struct {
 	Debug                bool       `json:"debug"`                // verbose engine log to debug.log
 	Categories           []Category `json:"categories"`
 	ClassificationPrompt string     `json:"classification_prompt"` // extra instructions for the vision model
+	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
+	Routing              Routing    `json:"routing,omitempty"`
 }
 
 // normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1
@@ -173,6 +175,7 @@ func loadConfig() (Config, error) {
 	if cfg.MaxStorageMB == 0 && !strings.Contains(string(b), "max_storage_mb") {
 		cfg.MaxStorageMB = 10240
 	}
+	migrateLegacyProviders(&cfg)
 	return cfg, nil
 }
 
@@ -272,16 +275,14 @@ func setConfigValue(key, value string) error {
 	switch key {
 	case "provider":
 		p := strings.ToLower(strings.TrimSpace(value))
-		switch p {
-		case "openrouter", "local", "custom", "mcp":
-			cfg.Provider = p
-			if p == "openrouter" {
-				cfg.APIBaseURL = ""
-			} else if p == "local" && cfg.APIBaseURL == "" {
-				cfg.APIBaseURL = "http://localhost:11434/v1"
-			}
-		default:
-			return fmt.Errorf("provider must be one of: openrouter, local, custom, mcp")
+		if !validProviderKind(p) {
+			return fmt.Errorf("provider must be one of: %s", strings.Join(providerKinds, ", "))
+		}
+		cfg.Provider = p
+		if p == "openrouter" {
+			cfg.APIBaseURL = ""
+		} else if p == "local" && cfg.APIBaseURL == "" {
+			cfg.APIBaseURL = "http://localhost:11434/v1"
 		}
 	case "model":
 		cfg.Model = value
@@ -360,5 +361,33 @@ func setConfigValue(key, value string) error {
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}
+	syncLegacyProvider(&cfg, key)
 	return writeConfig(cfg)
+}
+
+// syncLegacyProvider mirrors legacy single-provider keys into the routed
+// default provider so `config set` keeps working with multi-provider configs.
+func syncLegacyProvider(cfg *Config, key string) {
+	var field func(*Provider)
+	switch key {
+	case "provider":
+		field = func(p *Provider) { p.Kind = cfg.Provider; p.APIBaseURL = cfg.APIBaseURL }
+	case "model":
+		field = func(p *Provider) { p.Model = cfg.Model }
+	case "api_base_url":
+		field = func(p *Provider) { p.APIBaseURL = cfg.APIBaseURL }
+	case "openrouter_api_key":
+		field = func(p *Provider) { p.APIKey = cfg.OpenRouterAPIKey }
+	default:
+		return
+	}
+	for i := range cfg.Providers {
+		if cfg.Providers[i].ID == cfg.Routing.Primary {
+			field(&cfg.Providers[i])
+			return
+		}
+	}
+	if len(cfg.Providers) > 0 {
+		field(&cfg.Providers[0])
+	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -26,10 +27,13 @@ Engine:
 
 Query:
   today [--json]      Print today's timeline
-  day <YYYY-MM-DD> [--json]
+  day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
   blocks [--json]     List blocks that failed summarization
   standup [--json]    Generate a standup update from yesterday/today
+  standup draft [--date YYYY-MM-DD]   Print the saved standup draft as JSON
+  standup save [--date D] [--highlights S] [--tasks S] [--blockers S]
+               [--priorities S]       Save the editable standup draft
   insights [day|week|month] [--json]  Focus, category, app, and distraction analytics
   review [day|week|month] [--json]  AI-generated weekly review with corrections and advice
 
@@ -41,18 +45,35 @@ Control:
                           retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
                           output, capture_command, openrouter_api_key, provider,
                           filter_inappropriate, debug)
+  provider [list]       List configured providers and routing
+  provider add <id> <kind>          Add a provider (openrouter, local, custom,
+                                    gemini, chatgpt, claude, mcp)
+  provider set <id> <key> <value>   Update a provider (name, kind, api_base_url,
+                                    api_key, model, enabled, vision, chat,
+                                    title_prompt, summary_prompt,
+                                    detailed_prompt, chat_prompt)
+  provider remove <id>              Remove a provider
+  provider test <id|task>           Test a provider or a routed task (vision,
+                                    summary, detailed, chat, review, standup)
   ignore [--active|class] Add an app to the ignore list (--active = focused window)
   unignore <class>        Remove an app from the ignore list
   events [--json] [-n N]  Recent event log (captures, skips, errors, summaries)
   usage [--json]          Token usage totals from the api_calls log
   stats [--json]          Storage, block counts, date range, and API usage
   week | month [--json]   Timeline rollups
+  weekly [--json]        Weekly analytics payload (donut, treemap, context shifts, highlights)
   export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
   mcp                     Run the MCP server over stdio (for agents)
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
   search <query>          Search block titles, summaries, and apps
+  chat [message] [--conversation-id N] [--json]  Ask a question about the journal
+  conversations [--json]  List saved chat conversations
   retry                   Reset failed/dead blocks for re-summarization
   scrub <query>           Delete blocks whose title or summary contains <query>
+  edit <start> <field> <value>   Correct a block's title, category, summary,
+                          or productive flag. <start> is a Unix timestamp or
+                          "YYYY-MM-DD HH:MM" (local time)
+  edits <start> [--json]  List the edit history for a block
 
 Setup & health:
   setup                   Interactive AI-provider onboarding (OpenRouter or local endpoint)
@@ -72,6 +93,19 @@ func hasFlag(args []string, f string) bool {
 		}
 	}
 	return false
+}
+
+// flagValue returns the value following a `--name value` or `--name=value` flag.
+func flagValue(args []string, name string) string {
+	for i, a := range args {
+		if a == name && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(a, name+"=") {
+			return a[len(name)+1:]
+		}
+	}
+	return ""
 }
 
 func main() {
@@ -127,7 +161,15 @@ func main() {
 			}
 		}
 		if d.IsZero() {
-			usage()
+			if hasFlag(args, "--grid") {
+				d = time.Now()
+			} else {
+				usage()
+			}
+		}
+		if hasFlag(args, "--grid") {
+			printDailyGrid(cfg, d, jsonOut)
+			break
 		}
 		printTimeline(cfg, d, jsonOut)
 
@@ -189,6 +231,11 @@ func main() {
 		masked := cfg
 		if masked.OpenRouterAPIKey != "" {
 			masked.OpenRouterAPIKey = "***redacted***"
+		}
+		for i := range masked.Providers {
+			if masked.Providers[i].APIKey != "" {
+				masked.Providers[i].APIKey = "***redacted***"
+			}
 		}
 		if jsonOut {
 			b, _ := json.MarshalIndent(map[string]any{"path": configPath(), "config": masked}, "", "  ")
@@ -265,10 +312,66 @@ func main() {
 			fmt.Print(markdownTimeline(blocks, "dayflow "+cmd))
 		}
 
+	case "weekly":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		start, end := weekBounds(time.Now())
+		p, err := generateWeeklyPayload(db, cfg, start, end)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(p)
+		} else {
+			fmt.Print(formatWeeklyPayload(p, start, end))
+		}
+
 	case "standup":
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
+		// standup draft|save — subcommand is the first positional arg.
+		var sub string
+		var rest []string
+		for i, a := range args {
+			if i == 0 && a[0] != '-' {
+				sub = a
+			} else {
+				rest = append(rest, a)
+			}
+		}
+		today := time.Now().Format("2006-01-02")
+		switch sub {
+		case "draft", "load":
+			date := flagValue(rest, "--date")
+			if date == "" {
+				date = today
+			}
+			d, err := loadStandupDraft(db, date)
+			fatal(err)
+			json.NewEncoder(os.Stdout).Encode(d)
+			return
+		case "save":
+			date := flagValue(rest, "--date")
+			if date == "" {
+				date = today
+			}
+			fatal(saveStandupDraft(db, date,
+				flagValue(rest, "--highlights"),
+				flagValue(rest, "--tasks"),
+				flagValue(rest, "--blockers"),
+				flagValue(rest, "--priorities")))
+			if jsonOut {
+				d, _ := loadStandupDraft(db, date)
+				json.NewEncoder(os.Stdout).Encode(d)
+			} else {
+				fmt.Println("saved standup draft for", date)
+			}
+			return
+		case "":
+			// normal standup generation below
+		default:
+			usage()
+		}
 		md, j, err := generateStandup(db, cfg, jsonOut)
 		fatal(err)
 		if jsonOut {
@@ -361,6 +464,70 @@ func main() {
 		}
 		printSearch(args[0], jsonOut)
 
+	case "chat":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		var convID int64
+		if s := flagValue(args, "--conversation-id"); s != "" {
+			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				convID = n
+			}
+		}
+		var msgParts []string
+		for _, a := range args {
+			if a[0] != '-' {
+				msgParts = append(msgParts, a)
+			}
+		}
+		msg := strings.Join(msgParts, " ")
+		if msg == "" {
+			if jsonOut {
+				fatal(fmt.Errorf("interactive chat does not support --json"))
+			}
+			fmt.Println("Chat with your journal. Type 'exit' to quit.")
+			sc := bufio.NewScanner(os.Stdin)
+			for sc.Scan() {
+				line := strings.TrimSpace(sc.Text())
+				if line == "exit" {
+					break
+				}
+				if line == "" {
+					continue
+				}
+				res, err := chatWithJournal(db, cfg, convID, line)
+				fatal(err)
+				fmt.Println(res.Reply)
+				convID = res.ConversationID
+			}
+			break
+		}
+		res, err := chatWithJournal(db, cfg, convID, msg)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(res)
+		} else {
+			fmt.Println(res.Reply)
+		}
+
+	case "conversations":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		convs, err := listConversations(db, 20)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(convs)
+		} else {
+			if len(convs) == 0 {
+				fmt.Println("no conversations")
+			} else {
+				for _, c := range convs {
+					fmt.Printf("%d: %s\n", c.ID, c.Title)
+				}
+			}
+		}
+
 	case "scrub":
 		if len(args) == 0 || args[0][0] == '-' {
 			usage()
@@ -371,6 +538,62 @@ func main() {
 		n, err := deleteBlocksLike(db, args[0])
 		fatal(err)
 		fmt.Printf("deleted %d block(s) matching %q\n", n, args[0])
+
+	case "edit":
+		// edit <start_ts|"YYYY-MM-DD HH:MM"> <field> <value...>
+		var pos []string
+		for _, a := range args {
+			if a[0] != '-' {
+				pos = append(pos, a)
+			}
+		}
+		ts, rest, err := parseBlockStart(pos)
+		fatal(err)
+		if len(rest) < 2 {
+			fatal(fmt.Errorf("usage: dayflow edit <start> <title|category|summary|productive> <value>"))
+		}
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		field := rest[0]
+		value := strings.Join(rest[1:], " ")
+		fatal(saveBlockEdit(db, cfg, ts, field, value))
+		logEvent(db, "block_edited", fmt.Sprintf("%d %s", ts, field))
+		if jsonOut {
+			b, _ := loadBlockWithEdits(db, ts)
+			json.NewEncoder(os.Stdout).Encode(map[string]any{"block": b})
+		} else {
+			fmt.Printf("edited %s on block %s\n", field,
+				time.Unix(ts, 0).Local().Format("2006-01-02 15:04"))
+		}
+
+	case "edits":
+		var pos []string
+		for _, a := range args {
+			if a[0] != '-' {
+				pos = append(pos, a)
+			}
+		}
+		ts, _, err := parseBlockStart(pos)
+		fatal(err)
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		edits, err := editsForBlock(db, ts)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(edits)
+			break
+		}
+		if len(edits) == 0 {
+			fmt.Println("no edits for this block")
+			break
+		}
+		for _, e := range edits {
+			fmt.Printf("%s  %-10s %q -> %q\n",
+				time.Unix(e.EditedAt, 0).Local().Format("2006-01-02 15:04"),
+				e.Field, e.OldValue, e.NewValue)
+		}
 
 	case "retry":
 		db, err := openDB()
@@ -424,6 +647,15 @@ func main() {
 		} else {
 			fmt.Print(md)
 		}
+
+	case "provider":
+		var pargs []string
+		for _, a := range args {
+			if a[0] != '-' {
+				pargs = append(pargs, a)
+			}
+		}
+		fatal(runProvider(cfg, pargs, jsonOut))
 
 	case "mcp":
 		fatal(runMCP(cfg))
@@ -490,6 +722,38 @@ func printTimeline(cfg Config, day time.Time, asJSON bool) {
 			fmt.Printf("    • %s: %s [%s]\n", appDisplayName(a.App), a.Title, catDisplay(a.Category))
 		}
 	}
+}
+
+// printDailyGrid renders the daily workflow grid (day --grid): JSON for the
+// panel, or a compact text grid for the terminal.
+func printDailyGrid(cfg Config, day time.Time, asJSON bool) {
+	db, err := openDB()
+	fatal(err)
+	defer db.Close()
+	wf, err := generateDailyWorkflow(db, cfg, day)
+	fatal(err)
+	if asJSON {
+		json.NewEncoder(os.Stdout).Encode(wf)
+		return
+	}
+	fmt.Printf("== %s — daily workflow (%d min slots) ==\n",
+		day.Format("Monday, 2 January 2006"), wf.SlotMinutes)
+	if len(wf.Slots) == 0 {
+		fmt.Println("(no summarized blocks)")
+		return
+	}
+	for _, s := range wf.Slots {
+		if s.Category == "" {
+			fmt.Printf("%s  ·\n", s.Time)
+		} else {
+			fmt.Printf("%s  %-14s %s\n", s.Time, s.Category, s.Title)
+		}
+	}
+	fmt.Println()
+	for _, c := range wf.Categories {
+		fmt.Printf("%-14s %s\n", c.Display, fmtDur(c.Minutes))
+	}
+	fmt.Printf("total tracked: %s\n", fmtDur(wf.TotalMinutes))
 }
 
 func printStatus(cfg Config, asJSON bool) {

@@ -36,6 +36,30 @@ func solidImage(c color.RGBA) image.Image {
 	return img
 }
 
+func TestSchemaHasNewTables(t *testing.T) {
+	testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	tables := []string{
+		"chat_conversations", "chat_messages", "standup_drafts",
+		"journal_entries", "day_goals", "llm_calls", "block_edits",
+	}
+	for _, name := range tables {
+		var n int
+		err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if n != 1 {
+			t.Fatalf("expected table %s to exist, got %d", name, n)
+		}
+	}
+}
+
 func TestAhashDedup(t *testing.T) {
 	a := ahash(solidImage(color.RGBA{40, 40, 40, 255}))
 	b := ahash(solidImage(color.RGBA{42, 42, 42, 255}))
