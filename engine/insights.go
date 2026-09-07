@@ -94,13 +94,12 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 			appMins[b.App] += dur
 			appCount[b.App]++
 		}
-		if b.IsProductive() {
+		if b.Category == "idle" {
+			in.IdleMins += dur
+		} else if b.IsProductive() {
 			in.FocusMins += dur
 		} else {
 			in.DistractionMins += dur
-		}
-		if b.Category == "idle" {
-			in.IdleMins += dur
 		}
 		if dur >= 45 && b.IsProductive() {
 			in.FocusBlocks = append(in.FocusBlocks, b)
@@ -120,14 +119,15 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 	distApp := map[string]float64{}
 	distCount := map[string]int{}
 	for _, b := range blocks {
-		if !b.IsProductive() {
-			k := b.App
-			if k == "" {
-				k = b.Category
-			}
-			distApp[k] += b.End.Sub(b.Start).Minutes()
-			distCount[k]++
+		if b.Category == "idle" || b.IsProductive() {
+			continue
 		}
+		k := b.App
+		if k == "" {
+			k = b.Category
+		}
+		distApp[k] += b.End.Sub(b.Start).Minutes()
+		distCount[k]++
 	}
 	for k, v := range distApp {
 		in.TopDistractions = append(in.TopDistractions, insightDist{Name: k, Mins: v, Count: distCount[k]})
