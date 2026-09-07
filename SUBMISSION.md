@@ -14,7 +14,7 @@ Productivity
 
 ## Tags
 
-productivity, time-tracking, ai
+AI, Bar, Quickshell
 
 ## Suggested missing tag (optional)
 
