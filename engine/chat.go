@@ -351,6 +351,8 @@ func searchBlocks(db *sql.DB, query string) ([]Block, error) {
 	return out, rows.Err()
 }
 
+const finalAnswerPrompt = "Answer the user's question in plain English using the tool results above. Do not output JSON, markdown code fences, or raw structured data."
+
 // chatWithJournal sends a user message and carries out up to 3 tool turns.
 func chatWithJournal(db *sql.DB, cfg Config, conversationID int64, userMessage string) (*ChatResponse, error) {
 	if strings.TrimSpace(userMessage) == "" {
@@ -378,7 +380,8 @@ func chatWithJournal(db *sql.DB, cfg Config, conversationID int64, userMessage s
 
 	var reply string
 	var totalPT, totalCT int
-	for turn := 0; turn < 3; turn++ {
+	const maxToolTurns = 3
+	for turn := 0; turn < maxToolTurns; turn++ {
 		text, pt, ct, err := callChatModel(db, cfg, messages)
 		totalPT += pt
 		totalCT += ct
@@ -410,10 +413,27 @@ func chatWithJournal(db *sql.DB, cfg Config, conversationID int64, userMessage s
 			orMessage{Role: "assistant", Content: []orContent{{Type: "text", Text: raw}}},
 			orMessage{Role: "tool", Content: []orContent{{Type: "text", Text: string(resJSON)}}},
 		)
-		// After the last allowed turn, if the model returns another tool call,
-		// we still want to surface something. The loop will exit and reply stays empty.
-		if turn == 2 {
-			reply = raw
+		// If the model used a tool on the last allowed turn, prompt it once more
+		// for a plain-text answer instead of surfacing the tool-call JSON.
+		if turn == maxToolTurns-1 {
+			messages = append(messages, orMessage{
+				Role:    "user",
+				Content: []orContent{{Type: "text", Text: finalAnswerPrompt}},
+			})
+			text, pt, ct, err = callChatModel(db, cfg, messages)
+			totalPT += pt
+			totalCT += ct
+			if err != nil {
+				return nil, err
+			}
+			reply = text
+			if _, err := saveMessage(db, conversationID, "user", finalAnswerPrompt, ""); err != nil {
+				return nil, err
+			}
+			if _, err := saveMessage(db, conversationID, "assistant", reply, ""); err != nil {
+				return nil, err
+			}
+			break
 		}
 	}
 	conv, _ = getConversation(db, conversationID)
