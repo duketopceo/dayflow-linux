@@ -71,10 +71,6 @@ type WeekPayload struct {
 	Heatmap            []DayHeatmap     `json:"heatmap"`
 }
 
-func weekRange(now time.Time) (time.Time, time.Time) {
-	return weekBounds(now)
-}
-
 func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPayload, error) {
 	in, err := generateInsights(db, cfg, start, end)
 	if err != nil {
@@ -218,10 +214,6 @@ func buildHeatmap(blocks []Block, start time.Time) []DayHeatmap {
 		for h := 0; h < 24; h++ {
 			hs := ds.Add(time.Duration(h) * time.Hour)
 			he := hs.Add(time.Hour)
-			type catDur struct {
-				cat     string
-				minutes float64
-			}
 			best := ""
 			bestMin := 0.0
 			total := 0.0

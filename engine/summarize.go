@@ -113,14 +113,6 @@ func chatURL(cfg Config) string {
 	return openRouterURL
 }
 
-func apiKey(cfg Config) string {
-	return cfg.OpenRouterAPIKey
-}
-
-func useOpenRouterHeaders(cfg Config) bool {
-	return cfg.APIBaseURL == "" || strings.Contains(cfg.APIBaseURL, "openrouter.ai")
-}
-
 // callOpenRouter summarizes a block's frames via the provider routed for the
 // "vision" task.
 func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error) {

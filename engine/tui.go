@@ -22,7 +22,6 @@ type tuiModel struct {
 	mode      string // day|week|month|search|standup|insights
 	query     string
 	searching bool
-	status    string
 	err       error
 }
 
@@ -31,7 +30,6 @@ var (
 	tuiDim    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	tuiBold   = lipgloss.NewStyle().Bold(true)
 	tuiSel    = lipgloss.NewStyle().Background(lipgloss.Color("8")).Foreground(lipgloss.Color("15"))
-	tuiCat    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 )
 
 func (m tuiModel) loadRange() (tuiModel, tea.Cmd) {

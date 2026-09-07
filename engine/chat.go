@@ -446,11 +446,6 @@ func chatWithJournal(db *sql.DB, cfg Config, conversationID int64, userMessage s
 	}, nil
 }
 
-// mcpChatTurn is the bridge used by the MCP server.
-func mcpChatTurn(db *sql.DB, cfg Config, req ChatRequest) (*ChatResponse, error) {
-	return chatWithJournal(db, cfg, req.ConversationID, req.Message)
-}
-
 // convIDFromArg turns an MCP/float conversation id into an int64.
 func convIDFromArg(v any) (int64, error) {
 	switch x := v.(type) {
