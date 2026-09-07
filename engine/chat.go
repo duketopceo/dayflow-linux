@@ -154,7 +154,7 @@ const chatSystemPrompt = `You are a helpful assistant for the user's local work 
 The journal contains time-blocked activity records from their desktop.
 You can answer questions about what they did, how long they spent, what apps they used, and trends.
 
-You have access to these tools. To call one, reply with exactly one JSON object (no markdown, no prose) and nothing else:
+You have access to these tools. When a tool is needed, reply with exactly one JSON object and nothing else:
 {"tool":"fetchTimeline","date":"today"}
 {"tool":"getStandup"}
 {"tool":"getInsights","range":"week"}
@@ -165,7 +165,10 @@ Tool argument reference:
 - getInsights: range can be day, week, or month.
 - searchJournal: query is free text searched in titles, summaries, and app names.
 
-After you receive a tool result, answer the user in plain text. Do not make another tool call unless the user's question clearly needs it. Be concise and cite times when possible.`
+Rules:
+- If the user asks a question that can be answered from what you already know, answer in plain text. Do not call a tool.
+- After you receive a tool result, answer the user in plain English sentences. Do not output raw JSON, markdown code fences, or structured data as the final answer. Cite specific times and apps when useful.
+- Only output JSON when making a tool call. If you are not making a tool call, write plain text.`
 
 func buildChatMessages(cfg Config, conv Conversation, userMessage string) []orMessage {
 	p, _ := providerForTask(cfg, "chat")
@@ -205,18 +208,18 @@ func buildChatMessages(cfg Config, conv Conversation, userMessage string) []orMe
 	return messages
 }
 
-// parseToolCall detects a JSON tool call in model output.
+// parseToolCall detects a JSON tool call in model output. It only treats the
+// response as a tool call when the entire trimmed output is a single JSON object
+// containing a top-level "tool" key. Anything else (prose, JSON answers, code
+// fences) is left for the caller to display as plain text.
 func parseToolCall(raw string) (string, map[string]any, bool) {
 	raw = stripFences(raw)
 	raw = strings.TrimSpace(raw)
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start == -1 || end == -1 || end <= start {
+	if !strings.HasPrefix(raw, "{") || !strings.HasSuffix(raw, "}") {
 		return "", nil, false
 	}
-	candidate := raw[start : end+1]
 	var obj map[string]any
-	if err := json.Unmarshal([]byte(candidate), &obj); err != nil {
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
 		return "", nil, false
 	}
 	name, ok := obj["tool"].(string)
