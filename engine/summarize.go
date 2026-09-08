@@ -253,21 +253,36 @@ func blockStart(t time.Time, mins int) time.Time {
 }
 
 // pendingBlocks finds complete block windows (aligned to local wall clock) that
-// have frames but no summarized block yet.
+// have frames but no summarized block yet. Empty windows (no frames) are skipped
+// so idle time is not tracked.
 func pendingBlocks(db *sql.DB, cfg Config, now time.Time) ([]time.Time, error) {
-	var minTS, maxTS sql.NullInt64
-	if err := db.QueryRow(`SELECT MIN(ts), MAX(ts) FROM frames`).Scan(&minTS, &maxTS); err != nil {
+	rows, err := db.Query(`SELECT ts FROM frames`)
+	if err != nil {
 		return nil, err
 	}
-	if !minTS.Valid || !maxTS.Valid {
-		return nil, nil
-	}
-	block := time.Duration(cfg.BlockMinutes) * time.Minute
-	start := blockStart(time.Unix(minTS.Int64, 0), cfg.BlockMinutes)
-	lastComplete := blockStart(time.Unix(maxTS.Int64, 0), cfg.BlockMinutes)
+	defer rows.Close()
+
 	currentBlock := blockStart(now, cfg.BlockMinutes)
+	seen := map[time.Time]bool{}
+	var candidates []time.Time
+	for rows.Next() {
+		var ts int64
+		if err := rows.Scan(&ts); err != nil {
+			return nil, err
+		}
+		b := blockStart(time.Unix(ts, 0), cfg.BlockMinutes)
+		if !b.Before(currentBlock) || seen[b] {
+			continue
+		}
+		seen[b] = true
+		candidates = append(candidates, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	var out []time.Time
-	for b := start; b.Before(currentBlock) && !b.After(lastComplete); b = b.Add(block) {
+	for _, b := range candidates {
 		ok, err := blockExists(db, b)
 		if err != nil {
 			return nil, err

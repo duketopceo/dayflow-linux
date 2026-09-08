@@ -163,6 +163,8 @@ All query commands accept `--json`.
 - `max_storage_mb` caps the entire data directory; oldest summarized frames and then oldest journal rows are pruned and vacuumed.
 - Everything lives in `~/.local/share/dayflow/` — `rm -rf` it to wipe all data.
 
+For a plain-language summary, see [PRIVACY.md](PRIVACY.md).
+
 ## Cross-hardware / portability
 
 Capture goes through `grim` → the compositor's screencopy protocol, which is hardware-agnostic (Intel, AMD, NVIDIA, ARM). The Go binary is pure-Go + `modernc.org/sqlite` (no cgo) and builds for `amd64`, `arm64`, etc. AI can run on OpenRouter or any OpenAI-compatible local endpoint (`api_base_url` = `http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM Studio, etc.). On non-wlroots compositors (KDE, GNOME), set `capture_command` — e.g. `"gnome-screenshot -f /dev/stdout"` or a small wrapper.

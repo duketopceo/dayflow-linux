@@ -242,13 +242,13 @@ func TestSummarizeBadJSONRetried(t *testing.T) {
 	}
 }
 
-func TestSummarizeNoFramesMarksIdle(t *testing.T) {
+func TestSummarizeSkipsIdleWindows(t *testing.T) {
 	cfg := testEnv(t)
 	stubOpenRouter(t, `{"title":"x","summary":"y","category":"coding"}`)
 	db, _ := openDB()
 	defer db.Close()
-	// frames two blocks apart leave an empty block between them; it must be
-	// marked idle ("No activity") without an API call
+	// frames two blocks apart leave an empty block between them; it should
+	// not be summarized or stored as idle.
 	now := time.Now()
 	block := time.Duration(cfg.BlockMinutes) * time.Minute
 	first := blockStart(now, cfg.BlockMinutes).Add(-3 * block)
@@ -260,11 +260,11 @@ func TestSummarizeNoFramesMarksIdle(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("n=%d", n)
 	}
-	var title string
-	db.QueryRow(`SELECT title FROM blocks WHERE start_ts=?`,
-		first.Add(block).Unix()).Scan(&title)
-	if title != "No activity" {
-		t.Fatalf("empty block title=%q", title)
+	var count int
+	db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE start_ts=?`,
+		first.Add(block).Unix()).Scan(&count)
+	if count != 0 {
+		t.Fatalf("idle block should not be stored, count=%d", count)
 	}
 }
 
