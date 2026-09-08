@@ -56,7 +56,7 @@ var mcpTools = []map[string]any{
 			"range": map[string]any{"type": "string", "description": "day, week, or month"}}}},
 	{"name": "chat", "description": "Ask a question about the user's work journal. Optionally continue an existing conversation.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
-			"message":        map[string]any{"type": "string", "description": "The user's question"},
+			"message":         map[string]any{"type": "string", "description": "The user's question"},
 			"conversation_id": map[string]any{"type": "integer", "description": "Optional existing conversation id"}},
 			"required": []string{"message"}}},
 }
