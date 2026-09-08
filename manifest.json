@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.duketopceo.dayflow",
   "name": "Dayflow",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "lukedaduke",
   "license": "MIT",
   "description": "Private, automatic work journal for Omarchy and Hyprland. Records your screen, summarizes every 15-minute block with a vision model, and shows a timeline plus standup and insights in the bar panel.",

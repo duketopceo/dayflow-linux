@@ -2,3 +2,4 @@ dayflow
 *.db
 engine/dayflow
 engine/engine
+AGENTS.md
