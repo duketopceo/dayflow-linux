@@ -259,14 +259,24 @@ func main() {
 		}
 		for _, ig := range cfg.IgnoreApps {
 			if strings.EqualFold(ig, cls) {
-				fmt.Println("already ignored:", cls)
+				if jsonOut {
+					json.NewEncoder(os.Stdout).Encode(map[string]string{"already_ignored": cls})
+				} else {
+					fmt.Println("already ignored:", cls)
+				}
 				return
 			}
 		}
-		fatal(setConfigValue("ignore_apps", strings.Join(append(cfg.IgnoreApps, cls), ",")))
+		if err := setConfigValue("ignore_apps", strings.Join(append(cfg.IgnoreApps, cls), ",")); err != nil {
+			fatal(err)
+		}
 		db, _ := openDB()
 		logEvent(db, "app_ignored", cls)
-		fmt.Println("ignoring:", cls)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(map[string]string{"ignored": cls})
+		} else {
+			fmt.Println("Now ignoring:", cls)
+		}
 
 	case "unignore":
 		if len(args) == 0 {

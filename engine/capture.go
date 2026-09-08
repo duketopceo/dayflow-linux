@@ -36,8 +36,9 @@ func setPaused(p bool) {
 	}
 }
 
-// activeWindowClass returns the class of the focused window on Hyprland,
-// or "" when there is no focused window / not running under Hyprland.
+// activeWindowClass returns the class of the focused window on Hyprland.
+// It falls back to the window title when no class is reported, and returns
+// "" when there is no focused window / not running under Hyprland.
 func activeWindowClass() string {
 	out, err := exec.Command("hyprctl", "activewindow", "-j").Output()
 	if err != nil || len(out) == 0 {
@@ -46,6 +47,8 @@ func activeWindowClass() string {
 	var w struct {
 		Class        string `json:"class"`
 		InitialClass string `json:"initialClass"`
+		Title        string `json:"title"`
+		InitialTitle string `json:"initialTitle"`
 	}
 	if json.Unmarshal(out, &w) != nil {
 		return ""
@@ -53,7 +56,13 @@ func activeWindowClass() string {
 	if w.Class != "" {
 		return w.Class
 	}
-	return w.InitialClass
+	if w.InitialClass != "" {
+		return w.InitialClass
+	}
+	if w.Title != "" {
+		return w.Title
+	}
+	return w.InitialTitle
 }
 
 func isIgnored(cfg Config, class string) bool {

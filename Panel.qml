@@ -637,10 +637,26 @@ Panel {
 
   Process {
     id: ignoreProc
-    command: ["dayflow", "ignore", "--active"]
+    command: ["dayflow", "ignore", "--active", "--json"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: dayflow.notice = text.trim()
+      onStreamFinished: {
+        var raw = text.trim()
+        try {
+          var resp = JSON.parse(raw)
+          var cls = resp.ignored || resp.already_ignored || ""
+          var name = dayflow.appDisplayName(cls) || cls
+          if (resp.ignored !== undefined) {
+            dayflow.notice = "Now ignoring " + name
+          } else if (resp.already_ignored !== undefined) {
+            dayflow.notice = "Already ignoring " + name
+          } else {
+            dayflow.notice = raw
+          }
+        } catch (e) {
+          dayflow.notice = raw
+        }
+      }
     }
     stderr: StdioCollector {
       waitForEnd: true
