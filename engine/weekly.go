@@ -94,8 +94,14 @@ func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPa
 	if err != nil {
 		return WeekPayload{}, err
 	}
-	p.ContextShifts, p.ContextShiftCount = buildContextShifts(blocks)
-	p.Heatmap = buildHeatmap(blocks, start)
+	var filtered []Block
+	for _, b := range blocks {
+		if !isExcludedBlock(b) {
+			filtered = append(filtered, b)
+		}
+	}
+	p.ContextShifts, p.ContextShiftCount = buildContextShifts(filtered)
+	p.Heatmap = buildHeatmap(filtered, start)
 
 	highlights := buildHighlights(in)
 	prev, _ := previousWeekInsights(db, cfg, start)

@@ -101,7 +101,7 @@ func defaultConfig() Config {
 		JPEGQuality:          55,
 		KeepFrames:           false,
 		RetentionDays:        7,
-		IgnoreApps:           []string{"swaylock", "hyprlock", "waylock", "gtklock", "i3lock", "xscreensaver"},
+		IgnoreApps:           []string{"swaylock", "hyprlock", "waylock", "gtklock", "i3lock", "xscreensaver", "screensaver"},
 		SiteName:             "dayflow-linux",
 		MaxStorageMB:         10240,
 		AutoPauseLocked:      true,

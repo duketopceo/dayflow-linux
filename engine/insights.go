@@ -67,6 +67,26 @@ func isDistractionApp(app string) bool {
 	return false
 }
 
+// excludedApps are window classes/titles that should never appear in analytics.
+var excludedApps = []string{"swaylock", "hyprlock", "waylock", "gtklock", "i3lock", "xscreensaver", "screensaver"}
+
+func isExcludedApp(app string) bool {
+	a := strings.ToLower(app)
+	for _, e := range excludedApps {
+		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
+func isExcludedBlock(b Block) bool {
+	if strings.ToLower(b.Category) == "idle" {
+		return true
+	}
+	return isExcludedApp(b.App)
+}
+
 func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, error) {
 	blocks, err := blocksBetween(db, start, end)
 	if err != nil {
@@ -86,6 +106,9 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 	appCount := map[string]int{}
 
 	for _, b := range blocks {
+		if isExcludedBlock(b) {
+			continue
+		}
 		dur := b.End.Sub(b.Start).Minutes()
 		in.TotalMins += dur
 		catMins[b.Category] += dur
@@ -94,9 +117,7 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 			appMins[b.App] += dur
 			appCount[b.App]++
 		}
-		if b.Category == "idle" {
-			in.IdleMins += dur
-		} else if b.IsProductive() {
+		if b.IsProductive() {
 			in.FocusMins += dur
 		} else {
 			in.DistractionMins += dur
@@ -119,7 +140,7 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 	distApp := map[string]float64{}
 	distCount := map[string]int{}
 	for _, b := range blocks {
-		if b.Category == "idle" || b.IsProductive() {
+		if isExcludedBlock(b) || b.IsProductive() {
 			continue
 		}
 		k := b.App

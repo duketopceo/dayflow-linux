@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestInsightsIdleTracking(t *testing.T) {
+func TestInsightsExcludesIdleAndScreensaver(t *testing.T) {
 	cfg := testEnv(t)
 	db, err := openDB()
 	if err != nil {
@@ -16,10 +16,12 @@ func TestInsightsIdleTracking(t *testing.T) {
 	base := time.Date(2026, 9, 7, 9, 0, 0, 0, time.Local)
 	// 60 min focus block
 	upsertBlockFull(db, base, base.Add(60*time.Minute), "Coding", "Work", "coding", "neovim", "", 0, 0, "done", "", nil)
-	// 30 min idle block (nil productive falls back to not productive because category is idle)
+	// 30 min idle block — should be excluded from analytics
 	upsertBlockFull(db, base.Add(60*time.Minute), base.Add(90*time.Minute), "No activity", "Screen locked", "idle", "", "", 0, 0, "done", "", nil)
 	// 30 min distraction block
 	upsertBlockFull(db, base.Add(90*time.Minute), base.Add(120*time.Minute), "Browsing", "Social media", "browsing", "brave", "", 0, 0, "done", "", nil)
+	// 30 min screensaver block — should be excluded
+	upsertBlockFull(db, base.Add(120*time.Minute), base.Add(150*time.Minute), "Screensaver", "", "system", "xscreensaver", "", 0, 0, "done", "", nil)
 
 	start, end := dayBounds(base)
 	in, err := generateInsights(db, cfg, start, end.Add(24*time.Hour))
@@ -27,34 +29,28 @@ func TestInsightsIdleTracking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if in.TotalMins != 120 {
-		t.Fatalf("total=%f, want 120", in.TotalMins)
+	if in.TotalMins != 90 {
+		t.Fatalf("total=%f, want 90", in.TotalMins)
 	}
 	if in.FocusMins != 60 {
 		t.Fatalf("focus=%f, want 60", in.FocusMins)
 	}
-	if in.IdleMins != 30 {
-		t.Fatalf("idle=%f, want 30", in.IdleMins)
+	if in.IdleMins != 0 {
+		t.Fatalf("idle=%f, want 0", in.IdleMins)
 	}
 	if in.DistractionMins != 30 {
 		t.Fatalf("distraction=%f, want 30", in.DistractionMins)
 	}
 
-	// Idle should not appear in top distractions.
-	for _, d := range in.TopDistractions {
-		if d.Name == "idle" {
-			t.Fatalf("idle should not be listed as a top distraction: %v", in.TopDistractions)
+	for _, c := range in.Categories {
+		if c.Name == "idle" {
+			t.Fatalf("idle should not be a category: %v", in.Categories)
 		}
 	}
 
-	// Idle should still be reported as a category.
-	foundIdle := false
-	for _, c := range in.Categories {
-		if c.Name == "idle" && c.Mins == 30 {
-			foundIdle = true
+	for _, a := range in.Apps {
+		if isExcludedApp(a.Name) {
+			t.Fatalf("excluded app should not appear: %v", in.Apps)
 		}
-	}
-	if !foundIdle {
-		t.Fatalf("idle category missing or wrong minutes: %v", in.Categories)
 	}
 }
