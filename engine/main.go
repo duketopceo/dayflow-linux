@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const version = "1.0.0"
+const version = "1.0.1"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `dayflow %s — private, automatic work journal for Wayland/Omarchy
