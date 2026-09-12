@@ -1489,7 +1489,6 @@ Panel {
 
     }
     }
-    }
   }
 
   Component {
