@@ -1147,6 +1147,7 @@ Panel {
         width: parent.width
         spacing: Style.space(10)
 
+
       Component {
         id: draftField
         Column {
@@ -1486,6 +1487,7 @@ Panel {
         }
       }
 
+    }
     }
     }
   }
@@ -2870,9 +2872,7 @@ Panel {
             Text {
               id: a2
               anchors.centerIn: parent
-              text: dayflow.activeApp !== ""
-                ? "Ignore " + dayflow.appDisplayName(dayflow.activeApp)
-                : "Ignore app"
+              text: "Ignore current app"
               color: dayflow.activeApp !== "" ? dayflow.foreground : dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
