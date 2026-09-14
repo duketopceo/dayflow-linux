@@ -1,5 +1,9 @@
 # Dayflow for Omarchy / Wayland
 
+<p align="center">
+  <img src="docs/assets/social.png" alt="Dayflow for Linux" width="640" />
+</p>
+
 A private, automatic work journal for Linux — a port of [Dayflow](https://www.dayflow.so/) (macOS) built for [Omarchy](https://omarchy.org)/Hyprland and other wlroots compositors.
 
 It captures a lightweight screenshot every 10 seconds, deduplicates unchanged frames, and every 15 minutes asks a vision model (Gemma 4 via [OpenRouter](https://openrouter.ai) by default — $0.09/M tokens) to write a plain-language summary of what you were actually doing. The result is a readable timeline of your day — shown in a bar panel or from the CLI.
