@@ -71,6 +71,20 @@ func orphanFrameFiles(db *sql.DB) ([]string, error) {
 
 func quarantineDir() string { return filepath.Join(dataDir(), "quarantine") }
 
+// quarantineFiles lists regular files under quarantineDir, oldest date-dirs
+// first (lexicographic order is chronological for YYYY-MM-DD names).
+func quarantineFiles() []string {
+	var out []string
+	filepath.Walk(quarantineDir(), func(p string, fi os.FileInfo, err error) error {
+		if err == nil && fi.Mode().IsRegular() {
+			out = append(out, p)
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
 // reconcileGrace is how long a file may exist without a frames row before it
 // counts as an orphan — covers the write-then-insert window in captureOnce.
 const reconcileGrace = time.Minute

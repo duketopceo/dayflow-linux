@@ -240,22 +240,22 @@ func runRetention(db *sql.DB, cfg Config) {
 	if _, err := reconcileFrames(db, cfg, false); err != nil {
 		logEvent(db, "reconcile_error", err.Error())
 	}
-	if cfg.RetentionDays <= 0 {
-		return
+	if cfg.RetentionDays > 0 {
+		cutoff := time.Now().Add(-time.Duration(cfg.RetentionDays) * 24 * time.Hour)
+		paths, err := framesBefore(db, cutoff)
+		if err != nil {
+			logEvent(db, "retention_error", err.Error())
+		} else {
+			for _, p := range paths {
+				os.Remove(p)
+			}
+			if len(paths) > 0 {
+				logEvent(db, "retention_pruned", fmt.Sprintf("%d frames", len(paths)))
+			}
+		}
+		pruneOldEvents(db, cutoff)
 	}
-	cutoff := time.Now().Add(-time.Duration(cfg.RetentionDays) * 24 * time.Hour)
-	paths, err := framesBefore(db, cutoff)
-	if err != nil {
-		logEvent(db, "retention_error", err.Error())
-		return
-	}
-	for _, p := range paths {
-		os.Remove(p)
-	}
-	if len(paths) > 0 {
-		logEvent(db, "retention_pruned", fmt.Sprintf("%d frames", len(paths)))
-	}
-	pruneOldEvents(db, cutoff)
+	// the storage cap is independent of day retention — it always runs
 	enforceStorageCap(db, cfg)
 	// drop empty day directories
 	days, _ := filepath.Glob(filepath.Join(framesDir(), "*"))
@@ -266,9 +266,10 @@ func runRetention(db *sql.DB, cfg Config) {
 	}
 }
 
-// enforceStorageCap keeps the whole data dir (frames + db + wal) under
-// max_storage_mb. Oldest data goes first: already-summarized frames, then the
-// oldest blocks/events/api_calls rows, then a VACUUM to reclaim pages.
+// enforceStorageCap keeps the whole data dir (quarantine + frames + db + wal)
+// under max_storage_mb, deleting cheapest-to-regenerate data first:
+// quarantined orphans, then oldest already-summarized frames, then trimmed log
+// rows, then bounded chunks of the oldest blocks as a last resort.
 func enforceStorageCap(db *sql.DB, cfg Config) {
 	if cfg.MaxStorageMB <= 0 {
 		return
@@ -279,12 +280,30 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 		return
 	}
 
-	// phase 1: oldest already-summarized frames
+	// phase 0: quarantined orphans — already superseded, cheapest to drop
+	qpurged := 0
+	for _, p := range quarantineFiles() {
+		if total <= limit {
+			break
+		}
+		if fi, err := os.Stat(p); err == nil && os.Remove(p) == nil {
+			total -= fi.Size()
+			qpurged++
+		}
+	}
+	if qpurged > 0 {
+		logEvent(db, "storage_cap_quarantine", fmt.Sprintf("%d files", qpurged))
+	}
+	if total <= limit {
+		return
+	}
+
+	// phase 1: oldest already-summarized frames, stopping at the boundary
 	rows, err := db.Query(`SELECT ts, path FROM frames ORDER BY ts ASC`)
 	if err == nil {
 		var toDelete [][2]any
 		var freed int64
-		for rows.Next() && total > limit {
+		for rows.Next() && total-freed > limit {
 			var ts int64
 			var p string
 			if err := rows.Scan(&ts, &p); err != nil {
@@ -313,19 +332,40 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 		return
 	}
 
-	// phase 2: drop the oldest journal data, one chunk at a time (the cap
-	// run is hourly, so oversized dirs converge over a few passes)
+	// phase 2: trim log tables (rowid order = insertion order; immune to ts
+	// ties that would make a ts-based cutoff delete nothing) and reclaim pages
+	db.Exec(`DELETE FROM events WHERE rowid <= (
+		SELECT rowid FROM events ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
+	db.Exec(`DELETE FROM api_calls WHERE rowid <= (
+		SELECT rowid FROM api_calls ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		logEvent(db, "storage_cap_error", "checkpoint: "+err.Error())
+	}
+	if _, err := db.Exec(`VACUUM`); err != nil {
+		logEvent(db, "storage_cap_error", "vacuum: "+err.Error())
+	}
+	total = dataDirSize()
+	if total <= limit {
+		return
+	}
+
+	// phase 3: last resort — drop the oldest journal blocks, one bounded
+	// chunk per pass (the cap runs hourly, so oversized dirs converge)
 	pruned, _ := db.Exec(`DELETE FROM blocks WHERE start_ts IN (
 		SELECT start_ts FROM blocks ORDER BY start_ts ASC LIMIT 100)`)
 	pb, _ := pruned.RowsAffected()
-	db.Exec(`DELETE FROM events WHERE ts < (
-		SELECT ts FROM events ORDER BY ts DESC LIMIT 1 OFFSET 2000)`)
-	db.Exec(`DELETE FROM api_calls WHERE ts < (
-		SELECT ts FROM api_calls ORDER BY ts DESC LIMIT 1 OFFSET 2000)`)
-	// reclaim disk pages now that rows are gone
-	db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-	db.Exec(`VACUUM`)
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		logEvent(db, "storage_cap_error", "checkpoint: "+err.Error())
+	}
+	if _, err := db.Exec(`VACUUM`); err != nil {
+		logEvent(db, "storage_cap_error", "vacuum: "+err.Error())
+	}
 	logEvent(db, "storage_cap_db", fmt.Sprintf("%d oldest blocks pruned, vacuumed", pb))
+	if total = dataDirSize(); total > limit {
+		logEvent(db, "storage_cap_floor",
+			fmt.Sprintf("data dir still %dMB over cap after pruning; will retry next pass",
+				(total-limit)>>20))
+	}
 }
 
 func dataDirSize() int64 {
