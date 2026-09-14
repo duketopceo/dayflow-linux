@@ -3,6 +3,8 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"image"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +27,29 @@ func addFrameFile(t *testing.T, db *sql.DB, ts time.Time, sizeKB int) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func TestAHashCoversWholeImage(t *testing.T) {
+	// Regression: the old ahash truncated 256 bits into a uint64, so changes
+	// in the lower 3/4 of the frame were invisible to dedup. Two images that
+	// differ only in the bottom half must exceed the dedup threshold.
+	mk := func(bottomDark bool) image.Image {
+		img := image.NewRGBA(image.Rect(0, 0, 320, 200))
+		for y := 0; y < 200; y++ {
+			for x := 0; x < 320; x++ {
+				c := color.RGBA{200, 200, 200, 255}
+				if bottomDark && y >= 100 {
+					c = color.RGBA{20, 20, 20, 255}
+				}
+				img.Set(x, y, c)
+			}
+		}
+		return img
+	}
+	d := hamming(ahash(mk(false)), ahash(mk(true)))
+	if d <= dedupThreshold {
+		t.Fatalf("bottom-half change undetected: hamming=%d", d)
+	}
 }
 
 func markSummarized(t *testing.T, db *sql.DB, cfg Config, ts time.Time) {

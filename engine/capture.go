@@ -119,8 +119,11 @@ func screenLocked() bool {
 	return false
 }
 
+// frameHash is a 256-bit perceptual hash (16x16 grayscale average hash).
+type frameHash [4]uint64
+
 // ahash computes a 16x16 grayscale average-hash of the image.
-func ahash(img image.Image) uint64 {
+func ahash(img image.Image) frameHash {
 	const size = 16
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
@@ -138,21 +141,21 @@ func ahash(img image.Image) uint64 {
 		sum += uint64(v)
 	}
 	avg := uint32(sum / (size * size))
-	var hash uint64
+	var hash frameHash
 	for i, v := range px {
 		if v >= avg {
-			hash |= 1 << i
+			hash[i/64] |= 1 << (i % 64)
 		}
 	}
 	return hash
 }
 
-func hamming(a, b uint64) int {
-	d := a ^ b
+func hamming(a, b frameHash) int {
 	n := 0
-	for d != 0 {
-		n += int(d & 1)
-		d >>= 1
+	for i := range a {
+		for d := a[i] ^ b[i]; d != 0; d >>= 1 {
+			n += int(d & 1)
+		}
 	}
 	return n
 }
@@ -186,52 +189,55 @@ func grabFrame(cmdArgs []string) ([]byte, error) {
 
 const dedupThreshold = 5 // hamming distance out of 256 bits
 
-func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *uint64) error {
+// captureOnce samples the screen and stores a frame when it has changed.
+// lastHash is the previous frame's hash, or nil when no frame has been
+// sampled yet (e.g. after unlock or pause). The returned hash is the latest
+// sampled hash — unchanged on early returns.
+func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) (*frameHash, error) {
 	if paused() {
-		return nil
+		return lastHash, nil
 	}
 	cls := activeWindowClass()
 	if isIgnored(cfg, cls) {
 		logEvent(db, "capture_ignored", cls)
 		debugf(cfg, "capture: ignored app %s", cls)
-		return nil
+		return lastHash, nil
 	}
 	raw, err := grabFrame(cmdArgs)
 	if err != nil {
 		logEvent(db, "capture_error", err.Error())
 		debugf(cfg, "capture: grab failed: %v", err)
-		return fmt.Errorf("capture: %w", err)
+		return lastHash, fmt.Errorf("capture: %w", err)
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		logEvent(db, "capture_error", "decode: "+err.Error())
 		debugf(cfg, "capture: decode failed: %v", err)
-		return fmt.Errorf("decode: %w", err)
+		return lastHash, fmt.Errorf("decode: %w", err)
 	}
 	h := ahash(img)
 	if lastHash != nil && hamming(h, *lastHash) <= dedupThreshold {
 		logEvent(db, "capture_deduped", "")
 		debugf(cfg, "capture: deduped (hamming %d, app %s)", hamming(h, *lastHash), cls)
-		return nil // screen unchanged
+		return lastHash, nil // screen unchanged
 	}
-	*lastHash = h
 
 	now := time.Now()
 	dayDir := filepath.Join(framesDir(), now.Format("2006-01-02"))
 	if err := os.MkdirAll(dayDir, 0o700); err != nil {
-		return err
+		return lastHash, err
 	}
 	path := filepath.Join(dayDir, now.Format("150405")+".jpg")
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		return err
+		return lastHash, err
 	}
 	if err := insertFrameApp(db, now, path, cls); err != nil {
 		os.Remove(path)
-		return err
+		return lastHash, err
 	}
 	logEvent(db, "capture_saved", path)
 	debugf(cfg, "capture: saved %s (%d bytes, app %s)", filepath.Base(path), len(raw), cls)
-	return nil
+	return &h, nil
 }
 
 // runRetention reconciles the frames dir with the frames table, then deletes
@@ -412,8 +418,7 @@ func runDaemon(cfg Config) error {
 		}
 	}
 
-	var lastHash uint64
-	var haveHash bool
+	var lastHash *frameHash // nil = no prior sample; force first capture
 	locked := false
 	tick := time.NewTicker(time.Duration(cfg.CaptureIntervalSec) * time.Second)
 	defer tick.Stop()
@@ -428,19 +433,12 @@ func runDaemon(cfg Config) error {
 
 	capture := func() {
 		reloadIfChanged()
-		var h *uint64
-		if haveHash {
-			h = &lastHash
-		} else {
-			h = new(uint64)
-			*h = ^uint64(0) // force first frame to be saved
-		}
-		if err := captureOnce(db, cfg, cmdArgs, h); err != nil {
+		h, err := captureOnce(db, cfg, cmdArgs, lastHash)
+		if err != nil {
 			log.Printf("capture: %v", err)
 			return
 		}
-		lastHash = *h
-		haveHash = true
+		lastHash = h
 	}
 	capture()
 	runRetention(db, cfg)
@@ -449,7 +447,7 @@ func runDaemon(cfg Config) error {
 		case <-tick.C:
 			if cfg.AutoPauseLocked && locked {
 				// locked: do not capture, reset hash so we don't leak last frame
-				haveHash = false
+				lastHash = nil
 				continue
 			}
 			capture()
@@ -462,7 +460,7 @@ func runDaemon(cfg Config) error {
 			}
 			if screenLocked() && !paused() && !locked {
 				locked = true
-				haveHash = false
+				lastHash = nil
 				logEvent(db, "auto_paused", "screen locked")
 				debugf(cfg, "auto-paused: screen locked")
 			} else if !screenLocked() && locked {
