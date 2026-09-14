@@ -139,6 +139,11 @@ dayflow week | month           # multi-day rollups
 dayflow export week [--copy]   # markdown export to stdout (or clipboard)
 dayflow search <query>         # search titles, summaries, apps
 dayflow retry                  # reset failed/dead blocks for re-summarization
+dayflow reconcile [--dry-run]  # report/quarantine frame files missing from the index
+dayflow backup [dir]           # snapshot db + config (redacted) + frames
+dayflow backup-verify <dir>    # check a backup's manifest and db integrity
+dayflow restore <dir> [--force] # restore a backup (stop capture first)
+dayflow scrub <query>          # delete blocks matching a query
 dayflow tui                    # interactive terminal timeline, standup, insights
 dayflow mcp                    # MCP server for agents (stdio)
 dayflow config set <k> <v>     # live settings
@@ -168,6 +173,33 @@ All query commands accept `--json`.
 | `capture_command` | `""` | custom screenshot command (writes image to stdout) |
 | `openrouter_api_key` | `""` | API key |
 | `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
+
+## Backups
+
+`dayflow install` enables a daily `dayflow-backup.timer` that snapshots the
+database, a secret-redacted copy of the config, and any retained frames into
+`~/.local/share/dayflow-backups/dayflow-<timestamp>/` (keeps the last 7).
+Override the location with `DAYFLOW_BACKUP_DIR`.
+
+```sh
+dayflow backup                  # snapshot now (default dir)
+dayflow backup /mnt/backup      # snapshot somewhere else
+dayflow backup --no-frames      # db + config only
+dayflow backup-verify <dir>     # manifest + integrity check
+```
+
+To restore, stop capture, restore, and restart:
+
+```sh
+systemctl --user stop dayflow-capture.service dayflow-summarize.timer
+dayflow restore ~/.local/share/dayflow-backups/dayflow-<timestamp>
+systemctl --user start dayflow-capture.service dayflow-summarize.timer
+```
+
+Restore refuses to overwrite a live database without `--force` and rejects
+backups from a newer engine schema. The config file is restored manually —
+API keys are redacted from backups on purpose, so re-set them with
+`dayflow config set openrouter_api_key <key>`.
 
 ## Privacy
 

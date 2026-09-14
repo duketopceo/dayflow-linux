@@ -70,6 +70,9 @@ Control:
   conversations [--json]  List saved chat conversations
   retry                   Reset failed/dead blocks for re-summarization
   reconcile [--dry-run]   Report or quarantine frame files missing from the index
+  backup [dir] [--no-frames]  Snapshot db + config (redacted) + frames to dir
+  restore <dir> [--force] Restore a backup (stop capture service first)
+  backup-verify <dir>     Check a backup's manifest and db integrity
   scrub <query>           Delete blocks whose title or summary contains <query>
   edit <start> <field> <value>   Correct a block's title, category, summary,
                           or productive flag. <start> is a Unix timestamp or
@@ -631,6 +634,59 @@ func main() {
 		} else {
 			fmt.Printf("quarantined %d orphan(s), removed %d stale row(s), purged %d expired, skipped %d fresh\n",
 				res.Quarantined, res.StaleRows, res.Purged, res.Skipped)
+		}
+
+	case "backup":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		dest := ""
+		for _, a := range args {
+			if !strings.HasPrefix(a, "-") {
+				dest = a
+				break
+			}
+		}
+		dir, err := runBackup(db, cfg, dest, !hasFlag(args, "--no-frames"))
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(map[string]string{"backup": dir})
+		} else {
+			fmt.Printf("backup written to %s\n", dir)
+		}
+
+	case "restore":
+		dir := ""
+		for _, a := range args {
+			if !strings.HasPrefix(a, "-") {
+				dir = a
+				break
+			}
+		}
+		if dir == "" {
+			fatal(fmt.Errorf("restore requires a backup directory"))
+		}
+		fatal(runRestore(dir, hasFlag(args, "--force")))
+		fmt.Println("restored — restart dayflow-capture.service to resume")
+
+	case "backup-verify":
+		dir := ""
+		for _, a := range args {
+			if !strings.HasPrefix(a, "-") {
+				dir = a
+				break
+			}
+		}
+		if dir == "" {
+			fatal(fmt.Errorf("backup-verify requires a backup directory"))
+		}
+		m, err := backupVerify(dir)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(m)
+		} else {
+			fmt.Printf("ok  %s (engine %s, schema v%d, %d blocks, %d frames)\n",
+				dir, m.EngineVersion, m.SchemaVersion, m.Blocks, m.FramesCount)
 		}
 
 	case "export":
