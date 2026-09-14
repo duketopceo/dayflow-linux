@@ -279,7 +279,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Interval (s)"
-          value: String(dayflow.configDraft.capture_interval_sec || 10)
+          value: String(dayflow.configDraft.capture_interval_sec !== undefined ? dayflow.configDraft.capture_interval_sec : 10)
           hint: "10"
           numeric: true
           onEdited: dayflow.configDraft.capture_interval_sec = parseInt(text, 10) || 0
@@ -287,7 +287,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Block (min)"
-          value: String(dayflow.configDraft.block_minutes || 15)
+          value: String(dayflow.configDraft.block_minutes !== undefined ? dayflow.configDraft.block_minutes : 15)
           hint: "15"
           numeric: true
           onEdited: dayflow.configDraft.block_minutes = parseInt(text, 10) || 0
@@ -295,7 +295,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Frames/block"
-          value: String(dayflow.configDraft.frames_per_block || 30)
+          value: String(dayflow.configDraft.frames_per_block !== undefined ? dayflow.configDraft.frames_per_block : 30)
           hint: "30"
           numeric: true
           onEdited: dayflow.configDraft.frames_per_block = parseInt(text, 10) || 0
@@ -309,7 +309,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "JPEG quality"
-          value: String(dayflow.configDraft.jpeg_quality || 55)
+          value: String(dayflow.configDraft.jpeg_quality !== undefined ? dayflow.configDraft.jpeg_quality : 55)
           hint: "55"
           numeric: true
           onEdited: dayflow.configDraft.jpeg_quality = parseInt(text, 10) || 0
@@ -317,7 +317,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Retention (days)"
-          value: String(dayflow.configDraft.retention_days || 7)
+          value: String(dayflow.configDraft.retention_days !== undefined ? dayflow.configDraft.retention_days : 7)
           hint: "7"
           numeric: true
           onEdited: dayflow.configDraft.retention_days = parseInt(text, 10) || 0
@@ -325,7 +325,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Max storage (MB)"
-          value: String(dayflow.configDraft.max_storage_mb || 10240)
+          value: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 10240)
           hint: "10240"
           numeric: true
           onEdited: dayflow.configDraft.max_storage_mb = parseInt(text, 10) || 0

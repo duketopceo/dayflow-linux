@@ -63,15 +63,28 @@ Panel {
     return false
   }
 
+  // refreshForTab fetches only what the given tab renders — the panel no
+  // longer fires standup/insights/weekly/config on every open.
+  function refreshForTab(tab) {
+    if (tab === "standup") {
+      if (!standupFetchProc.running) standupFetchProc.running = true
+    } else if (tab === "week") {
+      if (!insightsFetchProc.running) insightsFetchProc.running = true
+      if (!weekTimelineProc.running) weekTimelineProc.running = true
+      if (!weeklyProc.running) weeklyProc.running = true
+    } else if (tab === "settings") {
+      if (!configProc.running) configProc.running = true
+    }
+    // "chat" loads its own processes when the Loader instantiates ChatTab
+  }
+
   function refreshAll() {
     dayflow.loadTimeline()
     if (!statusProc.running) statusProc.running = true
-    if (!standupFetchProc.running) standupFetchProc.running = true
-    if (!insightsFetchProc.running) insightsFetchProc.running = true
-    if (!weekTimelineProc.running) weekTimelineProc.running = true
-    if (!weeklyProc.running) weeklyProc.running = true
-    if (!configProc.running) configProc.running = true
+    refreshForTab(dayflow.currentTab)
   }
+
+  onCurrentTabChanged: refreshForTab(currentTab)
 
   function cloneConfig(obj) {
     return JSON.parse(JSON.stringify(obj || {}))
@@ -2221,7 +2234,7 @@ Panel {
                   id: ciInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.capture_interval_sec || 10)
+                  text: String(dayflow.configDraft.capture_interval_sec !== undefined ? dayflow.configDraft.capture_interval_sec : 10)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2244,7 +2257,7 @@ Panel {
                   id: bmInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.block_minutes || 15)
+                  text: String(dayflow.configDraft.block_minutes !== undefined ? dayflow.configDraft.block_minutes : 15)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2267,7 +2280,7 @@ Panel {
                   id: fpbInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.frames_per_block || 30)
+                  text: String(dayflow.configDraft.frames_per_block !== undefined ? dayflow.configDraft.frames_per_block : 30)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2295,7 +2308,7 @@ Panel {
                   id: jqInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.jpeg_quality || 55)
+                  text: String(dayflow.configDraft.jpeg_quality !== undefined ? dayflow.configDraft.jpeg_quality : 55)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2318,7 +2331,7 @@ Panel {
                   id: rdInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.retention_days || 7)
+                  text: String(dayflow.configDraft.retention_days !== undefined ? dayflow.configDraft.retention_days : 7)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2341,7 +2354,7 @@ Panel {
                   id: msInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.max_storage_mb || 10240)
+                  text: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 10240)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
