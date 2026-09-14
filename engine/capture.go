@@ -234,8 +234,12 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *uint64) err
 	return nil
 }
 
-// runRetention deletes frames and old log rows past the retention window.
+// runRetention reconciles the frames dir with the frames table, then deletes
+// frames and old log rows past the retention window.
 func runRetention(db *sql.DB, cfg Config) {
+	if _, err := reconcileFrames(db, cfg, false); err != nil {
+		logEvent(db, "reconcile_error", err.Error())
+	}
 	if cfg.RetentionDays <= 0 {
 		return
 	}

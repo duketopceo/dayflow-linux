@@ -69,6 +69,7 @@ Control:
   chat [message] [--conversation-id N] [--json]  Ask a question about the journal
   conversations [--json]  List saved chat conversations
   retry                   Reset failed/dead blocks for re-summarization
+  reconcile [--dry-run]   Report or quarantine frame files missing from the index
   scrub <query>           Delete blocks whose title or summary contains <query>
   edit <start> <field> <value>   Correct a block's title, category, summary,
                           or productive flag. <start> is a Unix timestamp or
@@ -612,6 +613,25 @@ func main() {
 		n, err := resetFailedBlocks(db)
 		fatal(err)
 		fmt.Printf("reset %d failed/dead block(s) for re-summarization\n", n)
+
+	case "reconcile":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		dry := hasFlag(args, "--dry-run")
+		res, err := reconcileFrames(db, cfg, dry)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(res)
+		} else if dry {
+			fmt.Printf("dry run: %d orphan file(s) under %s, no changes made\n", len(res.Orphans), framesDir())
+			for _, p := range res.Orphans {
+				fmt.Println(" ", p)
+			}
+		} else {
+			fmt.Printf("quarantined %d orphan(s), removed %d stale row(s), purged %d expired, skipped %d fresh\n",
+				res.Quarantined, res.StaleRows, res.Purged, res.Skipped)
+		}
 
 	case "export":
 		// export [day|YYYY-MM-DD|week|month] [--copy]
