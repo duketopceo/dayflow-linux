@@ -219,11 +219,17 @@ Capture goes through `grim` → the compositor's screencopy protocol, which is h
 ## MCP / agent access
 
 `dayflow mcp` is a stdio MCP server exposing `get_timeline`, `get_status`,
-`search_journal`, `get_events`, `get_usage`, `get_standup`, and `get_insights`.
-See [AGENTS.md](AGENTS.md) for the agent contract (read rules, schema, behavior).
+`search_journal`, `get_events`, `get_usage`, `get_stats`, `get_standup`,
+`get_insights`, and `chat`. All tools except `chat` are pure reads; `chat`
+writes conversation history and calls the configured AI provider. Use
+`--read-only` (or `DAYFLOW_MCP_READONLY=1`) to hide and block `chat`.
+See [docs/agent-contract.md](docs/agent-contract.md) for the agent contract
+(read rules, schema, Tailscale/remote access).
 
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp
+# remote over Tailscale SSH (never Funnel):
+claude mcp add dayflow-remote -- ssh <host>.<tailnet>.ts.net ~/.local/bin/dayflow mcp --read-only
 ```
 
 ## Testing

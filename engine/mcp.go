@@ -61,6 +61,25 @@ var mcpTools = []map[string]any{
 			"required": []string{"message"}}},
 }
 
+// mcpMutating tools write state or call an external provider. They are
+// blocked when the server runs with --read-only / DAYFLOW_MCP_READONLY=1.
+var mcpMutating = map[string]bool{"chat": true}
+
+// mcpToolList returns the advertised tools, minus mutating ones when the
+// server is read-only.
+func mcpToolList(readOnly bool) []map[string]any {
+	if !readOnly {
+		return mcpTools
+	}
+	out := make([]map[string]any, 0, len(mcpTools))
+	for _, t := range mcpTools {
+		if !mcpMutating[t["name"].(string)] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 func mcpText(v any) map[string]any {
 	var text string
 	if s, ok := v.(string); ok {
@@ -74,7 +93,10 @@ func mcpText(v any) map[string]any {
 	}}
 }
 
-func mcpCall(db *sql.DB, cfg Config, name string, args map[string]any) (any, error) {
+func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string]any) (any, error) {
+	if readOnly && mcpMutating[name] {
+		return nil, fmt.Errorf("tool %q is disabled in read-only mode", name)
+	}
 	switch name {
 	case "get_timeline":
 		d, _ := args["date"].(string)
@@ -285,7 +307,7 @@ func mcpCall(db *sql.DB, cfg Config, name string, args map[string]any) (any, err
 	return nil, fmt.Errorf("unknown tool %q", name)
 }
 
-func runMCP(cfg Config) error {
+func runMCP(cfg Config, readOnly bool) error {
 	db, err := openDB()
 	if err != nil {
 		return err
@@ -313,7 +335,7 @@ func runMCP(cfg Config) error {
 		case "notifications/initialized", "initialized":
 			// no response
 		case "tools/list":
-			mcpRespond(req.ID, map[string]any{"tools": mcpTools})
+			mcpRespond(req.ID, map[string]any{"tools": mcpToolList(readOnly)})
 		case "tools/call":
 			var p struct {
 				Name      string         `json:"name"`
@@ -323,7 +345,7 @@ func runMCP(cfg Config) error {
 				mcpErr(req.ID, -32602, "bad params")
 				continue
 			}
-			res, err := mcpCall(db, cfg, p.Name, p.Arguments)
+			res, err := mcpCall(db, cfg, readOnly, p.Name, p.Arguments)
 			if err != nil {
 				mcpErr(req.ID, -32000, err.Error())
 				continue

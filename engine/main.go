@@ -63,7 +63,8 @@ Control:
   week | month [--json]   Timeline rollups
   weekly [--json]        Weekly analytics payload (donut, treemap, context shifts, highlights)
   export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
-  mcp                     Run the MCP server over stdio (for agents)
+  mcp [--read-only]       Run the MCP server over stdio (for agents);
+                          --read-only hides and blocks the chat tool
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
   search <query>          Search block titles, summaries, and apps
   chat [message] [--conversation-id N] [--json]  Ask a question about the journal
@@ -744,7 +745,7 @@ func main() {
 		fatal(runProvider(cfg, pargs, jsonOut))
 
 	case "mcp":
-		fatal(runMCP(cfg))
+		fatal(runMCP(cfg, hasFlag(args, "--read-only") || os.Getenv("DAYFLOW_MCP_READONLY") == "1"))
 	case "tui":
 		fatal(runTUI(cfg))
 
