@@ -69,6 +69,7 @@ Control:
   search <query>          Search block titles, summaries, and apps
   chat [message] [--conversation-id N] [--json]  Ask a question about the journal
   conversations [--json]  List saved chat conversations
+  conversation <id> [--json]  Print one conversation's messages
   retry                   Reset failed/dead blocks for re-summarization
   reconcile [--dry-run]   Report or quarantine frame files missing from the index
   backup [dir] [--no-frames]  Snapshot db + config (redacted) + frames to dir
@@ -540,6 +541,35 @@ func main() {
 				for _, c := range convs {
 					fmt.Printf("%d: %s\n", c.ID, c.Title)
 				}
+			}
+		}
+
+	case "conversation":
+		// conversation <id> [--json] — print one thread's messages
+		var pos []string
+		for _, a := range args {
+			if a[0] != '-' {
+				pos = append(pos, a)
+			}
+		}
+		if len(pos) == 0 {
+			fatal(fmt.Errorf("conversation requires an id"))
+		}
+		convID, err := strconv.ParseInt(pos[0], 10, 64)
+		fatal(err)
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		conv, err := getConversation(db, convID)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(conv)
+		} else {
+			fmt.Printf("%s\n", conv.Title)
+			for _, m := range conv.Messages {
+				fmt.Printf("\n[%s] %s\n%s\n",
+					time.Unix(m.CreatedAt, 0).Local().Format("15:04"),
+					strings.ToUpper(m.Role), m.Content)
 			}
 		}
 

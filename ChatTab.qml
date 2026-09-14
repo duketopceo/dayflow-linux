@@ -19,6 +19,7 @@ Flickable {
   property bool chatLoading: false
   property var conversations: []
   property string chatInput: ""
+  property string lastSent: ""
 
   function applyChat(raw) {
     root.chatLoading = false
@@ -27,7 +28,9 @@ Flickable {
       root.chatMessages = d.messages || []
       root.chatConversation = Number(d.conversation_id || 0)
       if (dayflow) dayflow.notice = ""
+      conversationsProc.running = true // a new conversation may have been created
     } catch (e) {
+      root.chatInput = root.lastSent
       if (dayflow) dayflow.notice = "chat failed"
     }
   }
@@ -40,9 +43,35 @@ Flickable {
     }
   }
 
+  function applyConversation(raw) {
+    root.chatLoading = false
+    try {
+      var d = JSON.parse(raw)
+      root.chatMessages = d.messages || []
+      if (dayflow) dayflow.notice = ""
+    } catch (e) {
+      if (dayflow) dayflow.notice = "could not load conversation"
+    }
+  }
+
+  function loadConversation(id) {
+    root.chatConversation = id
+    root.chatMessages = []
+    if (id <= 0) return
+    root.chatLoading = true
+    convProc.command = ["dayflow", "conversation", String(id), "--json"]
+    convProc.running = true
+  }
+
+  function newConversation() {
+    root.chatConversation = 0
+    root.chatMessages = []
+  }
+
   function sendChat() {
     if (root.chatInput.trim() === "") return
     root.chatLoading = true
+    root.lastSent = root.chatInput
     var cmd = ["dayflow", "chat", root.chatInput, "--json"]
     if (root.chatConversation > 0) {
       cmd = ["dayflow", "chat", root.chatInput, "--conversation-id", String(root.chatConversation), "--json"]
@@ -70,6 +99,34 @@ Flickable {
       width: parent.width
       spacing: Style.space(6)
 
+      Rectangle {
+        height: Style.space(26)
+        width: newConvText.implicitWidth + Style.space(16)
+        radius: Style.cornerRadius
+        color: root.chatConversation === 0
+          ? (dayflow ? dayflow.accentFill(0.18) : "transparent")
+          : (newConvMouse.containsMouse
+              ? (dayflow ? dayflow.accentFill(0.08) : "transparent")
+              : "transparent")
+        border.color: dayflow ? dayflow.accentFill(0.45) : "transparent"
+
+        Text {
+          id: newConvText
+          anchors.centerIn: parent
+          text: "+ New"
+          color: dayflow ? dayflow.foreground : Color.foreground
+          font.family: dayflow ? dayflow.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        MouseArea {
+          id: newConvMouse
+          anchors.fill: parent
+          hoverEnabled: true
+          onClicked: root.newConversation()
+        }
+      }
+
       Repeater {
         model: root.conversations
         delegate: Rectangle {
@@ -96,7 +153,7 @@ Flickable {
             id: convMouse
             anchors.fill: parent
             hoverEnabled: true
-            onClicked: root.chatConversation = Number(modelData.id)
+            onClicked: root.loadConversation(Number(modelData.id))
           }
         }
       }
@@ -155,7 +212,12 @@ Flickable {
         font.pixelSize: Style.font.body
         wrapMode: TextEdit.Wrap
         onTextChanged: root.chatInput = text
+        enabled: !root.chatLoading
         Keys.onReturnPressed: function(event) {
+          if (event.modifiers & Qt.ShiftModifier) {
+            event.accepted = false // newline
+            return
+          }
           if (!event.isAutoRepeat) {
             event.accepted = true
             root.sendChat()
@@ -201,7 +263,22 @@ Flickable {
     onExited: function(exitCode) {
       if (exitCode !== 0) {
         root.chatLoading = false
+        root.chatInput = root.lastSent // restore for retry
         if (dayflow) dayflow.notice = "chat error"
+      }
+    }
+  }
+
+  Process {
+    id: convProc
+    command: ["dayflow", "conversation", "0", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyConversation(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.chatLoading = false
       }
     }
   }
