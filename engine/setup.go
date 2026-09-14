@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -276,10 +277,65 @@ func runDoctor(cfg Config) {
 	if hyErr != nil && len(cfg.IgnoreApps) > 0 {
 		fmt.Println("  warn hyprctl not found — ignore_apps won't work on this compositor")
 	}
+
+	fmt.Printf("  engine version: %s (schema v%d)\n", version, schemaVersion)
+	if _, err := os.Stat(dbPath()); os.IsNotExist(err) {
+		fmt.Println("  warn no database yet — capture has not run")
+	} else {
+		sv, svErr := peekSchemaVersion()
+		check("schema version", svErr == nil && sv <= schemaVersion,
+			fmt.Sprintf("database at schema v%d, binary expects v%d — upgrade the engine", sv, schemaVersion))
+		if svErr == nil && sv < schemaVersion {
+			fmt.Printf("  warn database was at schema v%d; migrated to v%d — restart dayflow-capture and any dayflow mcp clients\n", sv, schemaVersion)
+		}
+		db, err := openDB()
+		if err != nil {
+			fail++
+			fmt.Printf("  FAIL database open/migrate — %v\n", err)
+		} else {
+			defer db.Close()
+			var qc string
+			if err := db.QueryRow(`PRAGMA quick_check`).Scan(&qc); err != nil {
+				fail++
+				fmt.Printf("  FAIL sqlite integrity — %v\n", err)
+			} else {
+				check("sqlite integrity", qc == "ok", "quick_check: "+qc)
+			}
+			var fk int
+			db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk)
+			check("foreign keys", fk == 1, "foreign_keys pragma is off")
+			if orphans, err := orphanFrameFiles(db); err == nil && len(orphans) > 0 {
+				fmt.Printf("  warn %d file(s) under frames/ have no frames row — run: dayflow reconcile --dry-run\n", len(orphans))
+			}
+		}
+	}
+	if fi, err := os.Stat(dataDir()); err == nil {
+		check("data dir permissions", fi.Mode().Perm()&0o077 == 0,
+			fmt.Sprintf("%s is %04o, want 0700", dataDir(), fi.Mode().Perm()))
+	}
+	if fi, err := os.Stat(configPath()); err == nil {
+		check("config permissions", fi.Mode().Perm()&0o077 == 0,
+			fmt.Sprintf("%s is %04o, want 0600", configPath(), fi.Mode().Perm()))
+	}
 	fmt.Printf("  data: %s\n  config: %s\n", dataDir(), configPath())
 	if fail > 0 {
 		os.Exit(1)
 	}
+}
+
+// peekSchemaVersion reads the recorded schema version without running
+// migrations. Returns 0 for a database that predates schema_migrations.
+func peekSchemaVersion() (int, error) {
+	db, err := sql.Open("sqlite", dbPath()+"?_pragma=query_only(1)")
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var v int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v); err != nil {
+		return 0, nil // unversioned database
+	}
+	return v, nil
 }
 
 func fileExists(p string) bool {

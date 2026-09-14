@@ -90,6 +90,7 @@ func installUnits() error {
 	run("--user", "enable", "--now", "dayflow-summarize.timer")
 	fmt.Println("\nEnabled dayflow-summarize.timer.")
 	fmt.Println("Start capture with:  systemctl --user enable --now dayflow-capture.service")
+	fmt.Println("Already running an older build?  systemctl --user restart dayflow-capture.service")
 	fmt.Println("Set your API key in:", configPath())
 	return nil
 }

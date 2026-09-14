@@ -71,6 +71,17 @@ dayflow config set openrouter_api_key ""     # local endpoints usually need no k
 
 Dayflow uses the OpenAI-compatible `/chat/completions` endpoint. Any local server that accepts base64 `image_url` payloads works.
 
+### Upgrading the engine
+
+The panel, the engine binary, and the database schema must stay in sync. After pulling a new release:
+
+```sh
+cd engine && go build -o dayflow . && install -Dm755 dayflow ~/.local/bin/dayflow
+systemctl --user restart dayflow-capture.service
+```
+
+Then restart any long-lived `dayflow mcp` clients (editors and agents keep their own process running the old binary). `dayflow doctor` reports the engine version, the database schema version, integrity, and untracked frame files; run it after every upgrade. Migrations run automatically on the next engine start and are additive — existing journal data is preserved.
+
 ## Install the plugin
 
 ```sh
