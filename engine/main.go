@@ -45,7 +45,7 @@ Control:
                           block_minutes, frames_per_block, jpeg_quality, keep_frames,
                           retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
                           output, capture_command, openrouter_api_key, provider,
-                          filter_inappropriate, debug)
+                          filter_inappropriate, panel_expanded, debug)
   provider [list]       List configured providers and routing
   provider add <id> <kind>          Add a provider (openrouter, local, custom,
                                     gemini, chatgpt, claude, mcp)
@@ -976,6 +976,7 @@ func printStatus(cfg Config, asJSON bool) {
 			"ignored_apps":   cfg.IgnoreApps,
 			"active_app":     activeWindowClass(),
 			"configured":     cfg.OpenRouterAPIKey != "",
+			"panel_expanded": cfg.PanelExpanded,
 			"storage_bytes":  storage,
 			"storage_text":   humanBytes(storage),
 			"version":        version,

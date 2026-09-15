@@ -42,6 +42,7 @@ type Config struct {
 	ClassificationPrompt string     `json:"classification_prompt"` // extra instructions for the vision model
 	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
+	PanelExpanded        bool       `json:"panel_expanded"` // remember the panel Expand/Shrink toggle
 }
 
 // normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1
@@ -326,6 +327,12 @@ func setConfigValue(key, value string) error {
 			return fmt.Errorf("filter_inappropriate must be true or false")
 		}
 		cfg.FilterInappropriate = b
+	case "panel_expanded":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("panel_expanded must be true or false")
+		}
+		cfg.PanelExpanded = b
 	case "debug":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
