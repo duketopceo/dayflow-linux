@@ -8,6 +8,7 @@ Flickable {
   id: root
   property var dayflow: parent && parent.panel ? parent.panel : null
   property var presets: []
+  property var providers: []
   property string usageText: dayflow ? dayflow.storageText : ""
 
   width: parent ? parent.width : 0
@@ -31,6 +32,33 @@ Flickable {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyPresets(text)
+    }
+  }
+
+  Process {
+    id: providersProc
+    command: ["dayflow", "provider", "list", "--json"]
+    running: true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var d = JSON.parse(text)
+          root.providers = d.providers || []
+        } catch (e) {
+          root.providers = []
+        }
+      }
+    }
+  }
+
+  // Writes a single provider field immediately (prompt overrides bypass the
+  // configDraft save path — `provider set` writes config itself), then
+  // refreshes the provider list so redacted/parsed values come back clean.
+  Process {
+    id: providerSetProc
+    onExited: function(exitCode) {
+      if (exitCode === 0 && !providersProc.running) providersProc.running = true
     }
   }
 
@@ -492,6 +520,91 @@ Flickable {
           font.pixelSize: Style.font.body
           wrapMode: TextEdit.Wrap
           onTextChanged: dayflow.configDraft.classification_prompt = text
+        }
+      }
+
+      Text {
+        visible: root.providers.length > 0
+        width: parent.width
+        text: "Prompt overrides (advanced)"
+        color: dayflow.foreground
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+
+      Text {
+        visible: root.providers.length > 0
+        width: parent.width
+        text: "Per-provider replacements for the built-in prompts. Saved on Enter — leave blank to use the default."
+        color: dayflow.dim
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+
+      Repeater {
+        model: root.providers
+        delegate: Column {
+          id: provBlock
+          property var prov: modelData
+          width: parent.width
+          spacing: Style.space(4)
+
+          Text {
+            width: parent.width
+            text: (provBlock.prov.name || provBlock.prov.id) + "  (" + provBlock.prov.id + ")"
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+
+          Repeater {
+            model: [
+              { label: "Title prompt", key: "title_prompt", field: "title" },
+              { label: "Summary prompt", key: "summary_prompt", field: "summary" },
+              { label: "Detailed prompt", key: "detailed_prompt", field: "detailed" },
+              { label: "Chat prompt", key: "chat_prompt", field: "chat" }
+            ]
+            delegate: Column {
+              id: ovField
+              property var spec: modelData
+              width: parent.width
+              spacing: Style.space(2)
+
+              Text {
+                text: ovField.spec.label
+                color: dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Rectangle {
+                width: parent.width
+                height: ovInput.implicitHeight + Style.space(8)
+                radius: Style.cornerRadius
+                color: dayflow.fgFill(0.04)
+                border.color: dayflow.fgFill(0.12)
+
+                TextInput {
+                  id: ovInput
+                  anchors.fill: parent
+                  anchors.margins: Style.space(5)
+                  text: (provBlock.prov.prompt_overrides && provBlock.prov.prompt_overrides[ovField.spec.field]) || ""
+                  color: dayflow.foreground
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.body
+                  selectByMouse: true
+                  onEditingFinished: {
+                    providerSetProc.command = ["dayflow", "provider", "set",
+                      provBlock.prov.id, ovField.spec.key, text]
+                    providerSetProc.running = true
+                  }
+                }
+              }
+            }
+          }
         }
       }
 
