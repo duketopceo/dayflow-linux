@@ -37,7 +37,7 @@ Flickable {
       onStreamFinished: {
         try {
           root.detected = JSON.parse(text)
-          if (root.detected.ollama) root.mode = "local"
+          if (root.detected.ollama) root.mode = "ollama"
         } catch (e) {
           root.detected = {}
         }
@@ -101,9 +101,9 @@ Flickable {
       patch.provider = "openrouter"
       patch.openrouter_api_key = root.apiKey
       patch.api_base_url = ""
-    } else if (root.mode === "local") {
+    } else if (root.mode === "ollama" || root.mode === "lmstudio") {
       patch.provider = "local"
-      patch.api_base_url = root.detected.lmstudio && !root.detected.ollama
+      patch.api_base_url = root.mode === "lmstudio"
         ? "http://localhost:1234/v1" : "http://localhost:11434/v1"
       patch.openrouter_api_key = ""
     } else {
@@ -201,9 +201,10 @@ Flickable {
         Repeater {
           model: {
             var opts = [{ id: "openrouter", label: "OpenRouter (cloud)" }]
-            if (root.detected.ollama) opts.push({ id: "local", label: "Ollama (detected)" })
-            if (root.detected.lmstudio) opts.push({ id: "local", label: "LM Studio (detected)" })
-            opts.push({ id: "local", label: "Local endpoint" })
+            if (root.detected.ollama) opts.push({ id: "ollama", label: "Ollama (detected)" })
+            if (root.detected.lmstudio) opts.push({ id: "lmstudio", label: "LM Studio (detected)" })
+            if (!root.detected.ollama && !root.detected.lmstudio)
+              opts.push({ id: "ollama", label: "Local endpoint (Ollama default)" })
             opts.push({ id: "custom", label: "Custom endpoint" })
             return opts
           }

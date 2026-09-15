@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -66,28 +67,35 @@ func runBackup(db *sql.DB, cfg Config, dest string, includeFrames bool) (string,
 	}
 
 	framesCopied := 0
-	if includeFrames {
-		filepath.Walk(framesDir(), func(p string, fi os.FileInfo, err error) error {
-			if err != nil || !fi.Mode().IsRegular() {
+	if _, err := os.Stat(framesDir()); includeFrames && err == nil {
+		walkErr := filepath.Walk(framesDir(), func(p string, fi os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !fi.Mode().IsRegular() {
 				return nil
 			}
 			rel, err := filepath.Rel(framesDir(), p)
 			if err != nil {
-				return nil
+				return err
 			}
 			d := filepath.Join(tmp, "frames", rel)
 			if err := os.MkdirAll(filepath.Dir(d), 0o700); err != nil {
-				return nil
+				return err
 			}
 			if err := os.Link(p, d); err != nil {
 				if err := copyFile(p, d); err != nil {
-					return nil
+					return err
 				}
 			}
 			os.Chmod(d, 0o600)
 			framesCopied++
 			return nil
 		})
+		if walkErr != nil {
+			os.RemoveAll(tmp)
+			return "", fmt.Errorf("copy frames: %w", walkErr)
+		}
 	}
 
 	var blocks, fcount int
@@ -195,17 +203,34 @@ func runRestore(dir string, force bool) error {
 	if err != nil {
 		return err
 	}
+	// Restoring over a live capture daemon corrupts both the snapshot and
+	// the running process's open database handle. The systemd service only
+	// writes the default data dir, so scoped restores (DAYFLOW_DATA_DIR,
+	// tests) skip this check.
+	if os.Getenv("DAYFLOW_DATA_DIR") == "" &&
+		exec.Command("systemctl", "--user", "is-active", "--quiet",
+			"dayflow-capture.service").Run() == nil {
+		return fmt.Errorf("dayflow-capture is running — stop it first: systemctl --user stop dayflow-capture")
+	}
 	if _, err := os.Stat(dbPath()); err == nil && !force {
 		return fmt.Errorf("data dir already has a database — pass --force to overwrite")
 	}
 	if err := os.MkdirAll(dataDir(), 0o700); err != nil {
 		return err
 	}
+	// copy to a sibling temp file first: a partial copy must never leave a
+	// truncated dayflow.db behind
+	tmpDB := dbPath() + ".restore-tmp"
+	if err := copyFile(filepath.Join(dir, "dayflow.db"), tmpDB); err != nil {
+		os.Remove(tmpDB)
+		return fmt.Errorf("restore db: %w", err)
+	}
 	// remove a stale wal/shm from a previous db so the snapshot is authoritative
 	for _, ext := range []string{"-wal", "-shm"} {
 		os.Remove(dbPath() + ext)
 	}
-	if err := copyFile(filepath.Join(dir, "dayflow.db"), dbPath()); err != nil {
+	if err := os.Rename(tmpDB, dbPath()); err != nil {
+		os.Remove(tmpDB)
 		return fmt.Errorf("restore db: %w", err)
 	}
 	os.Chmod(dbPath(), 0o600)

@@ -379,7 +379,7 @@ func probeEndpoint(base string) bool {
 		return false
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode < 500
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
 func runDetect(jsonOut bool) {

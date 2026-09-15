@@ -53,13 +53,27 @@ Flickable {
   }
 
   // Writes a single provider field immediately (prompt overrides bypass the
-  // configDraft save path — `provider set` writes config itself). No list
-  // reload on success: reloading rebuilds every delegate and would clobber
-  // a sibling field mid-edit.
+  // configDraft save path — `provider set` writes config itself). Writes are
+  // queued: reassigning command on a running Process drops the second write.
+  property var pendingProviderWrites: []
+
+  function queueProviderWrite(cmd) {
+    root.pendingProviderWrites = root.pendingProviderWrites.concat([cmd])
+    if (!providerSetProc.running) {
+      providerSetProc.command = root.pendingProviderWrites[0]
+      providerSetProc.running = true
+    }
+  }
+
   Process {
     id: providerSetProc
     onExited: function(exitCode) {
       if (exitCode !== 0 && root.dayflow) root.dayflow.notice = "prompt override save failed"
+      root.pendingProviderWrites = root.pendingProviderWrites.slice(1)
+      if (root.pendingProviderWrites.length > 0) {
+        providerSetProc.command = root.pendingProviderWrites[0]
+        providerSetProc.running = true
+      }
     }
   }
 
@@ -598,9 +612,8 @@ Flickable {
                   font.pixelSize: Style.font.body
                   selectByMouse: true
                   onEditingFinished: {
-                    providerSetProc.command = ["dayflow", "provider", "set",
-                      provBlock.prov.id, ovField.spec.key, text]
-                    providerSetProc.running = true
+                    root.queueProviderWrite(["dayflow", "provider", "set",
+                      provBlock.prov.id, ovField.spec.key, text])
                   }
                 }
               }

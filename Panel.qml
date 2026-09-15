@@ -3061,7 +3061,7 @@ Panel {
           id: tabLoader
           width: parent.width - content.leftPadding - content.rightPadding
           height: item ? item.implicitHeight : Style.space(120)
-          sourceComponent: (dayflow.configLoaded && !dayflow.configured && !dayflow.onboardingSkipped)
+          sourceComponent: (!dayflow.configured && !dayflow.onboardingSkipped)
             ? onboardingComp
             : dayflow.currentTab === "today" ? todayTab
             : dayflow.currentTab === "standup" ? standupTab

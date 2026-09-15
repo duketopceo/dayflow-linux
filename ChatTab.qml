@@ -69,8 +69,12 @@ Flickable {
   }
 
   function loadConversation(id) {
+    // chatProc and convProc both write chatConversation/chatMessages —
+    // switching while either is active lets completions land out of order.
+    if (chatProc.running || convProc.running) return
     root.chatConversation = id
     root.chatMessages = []
+    root.chatAttribution = ""
     if (id <= 0) return
     root.chatLoading = true
     convProc.command = ["dayflow", "conversation", String(id), "--json"]
@@ -78,8 +82,10 @@ Flickable {
   }
 
   function newConversation() {
+    if (chatProc.running || convProc.running) return
     root.chatConversation = 0
     root.chatMessages = []
+    root.chatAttribution = ""
   }
 
   function sendChat() {

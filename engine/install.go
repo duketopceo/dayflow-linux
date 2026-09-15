@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const captureService = `[Unit]
@@ -97,19 +98,26 @@ func selfExe() string {
 	return p
 }
 
+// unitArg quotes a path for systemd ExecStart: quotes keep whitespace from
+// splitting arguments, and % is doubled so specifier expansion can't eat it.
+func unitArg(p string) string {
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(p, "%", "%%"), `"`, `\"`) + `"`
+}
+
 func installUnits() error {
 	dir := unitDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	exe := selfExe()
+	exe := unitArg(selfExe())
+	expDir := unitArg(exportsDir())
 	units := map[string]string{
 		"dayflow-capture.service":   fmt.Sprintf(captureService, exe),
 		"dayflow-summarize.service": fmt.Sprintf(summarizeService, exe),
 		"dayflow-summarize.timer":   summarizeTimer,
 		"dayflow-backup.service":    fmt.Sprintf(backupService, exe),
 		"dayflow-backup.timer":      backupTimer,
-		"dayflow-export.service":    fmt.Sprintf(exportService, exe, exportsDir(), exe, exportsDir()),
+		"dayflow-export.service":    fmt.Sprintf(exportService, exe, expDir, exe, expDir),
 		"dayflow-export.timer":      exportTimer,
 	}
 	for name, body := range units {

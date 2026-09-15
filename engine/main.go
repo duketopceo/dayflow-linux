@@ -351,7 +351,7 @@ func main() {
 		var sub string
 		var rest []string
 		for i, a := range args {
-			if i == 0 && a[0] != '-' {
+			if i == 0 && a != "" && a[0] != '-' {
 				sub = a
 			} else {
 				rest = append(rest, a)
@@ -406,7 +406,7 @@ func main() {
 		var sub string
 		var rest []string
 		for i, a := range args {
-			if i == 0 && a[0] != '-' {
+			if i == 0 && a != "" && a[0] != '-' {
 				sub = a
 			} else {
 				rest = append(rest, a)
@@ -791,14 +791,10 @@ func main() {
 		now := time.Now()
 		sel := "today"
 		for i, a := range args {
-			if a == "--out" {
-				i++ // skip flag value
-				continue
+			if a == "--out" || (i > 0 && args[i-1] == "--out") {
+				continue // flag or flag value, not a range
 			}
-			if i > 0 && args[i-1] == "--out" {
-				continue // flag value, not a range
-			}
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				sel = a
 			}
 		}

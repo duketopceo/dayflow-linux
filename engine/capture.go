@@ -308,8 +308,8 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 	rows, err := db.Query(`SELECT ts, path FROM frames ORDER BY ts ASC`)
 	if err == nil {
 		var toDelete [][2]any
-		var freed int64
-		for rows.Next() && total-freed > limit {
+		var planned int64
+		for rows.Next() && total-planned > limit {
 			var ts int64
 			var p string
 			if err := rows.Scan(&ts, &p); err != nil {
@@ -320,13 +320,17 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 				continue
 			}
 			if fi, err := os.Stat(p); err == nil {
-				freed += fi.Size()
+				planned += fi.Size()
 			}
 			toDelete = append(toDelete, [2]any{ts, p})
 		}
 		rows.Close()
+		var freed int64
 		for _, d := range toDelete {
-			os.Remove(d[1].(string))
+			p := d[1].(string)
+			if fi, err := os.Stat(p); err == nil && os.Remove(p) == nil {
+				freed += fi.Size()
+			}
 			db.Exec(`DELETE FROM frames WHERE ts=? AND path=?`, d[0], d[1])
 		}
 		total -= freed
@@ -348,7 +352,10 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 		logEvent(db, "storage_cap_error", "checkpoint: "+err.Error())
 	}
 	if _, err := db.Exec(`VACUUM`); err != nil {
+		// Another process holds the DB — deleting journal blocks here would
+		// destroy data without reclaiming pages. Try again next pass.
 		logEvent(db, "storage_cap_error", "vacuum: "+err.Error())
+		return
 	}
 	total = dataDirSize()
 	if total <= limit {
@@ -357,8 +364,12 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 
 	// phase 3: last resort — drop the oldest journal blocks, one bounded
 	// chunk per pass (the cap runs hourly, so oversized dirs converge)
-	pruned, _ := db.Exec(`DELETE FROM blocks WHERE start_ts IN (
+	pruned, err := db.Exec(`DELETE FROM blocks WHERE start_ts IN (
 		SELECT start_ts FROM blocks ORDER BY start_ts ASC LIMIT 100)`)
+	if err != nil {
+		logEvent(db, "storage_cap_error", "block prune: "+err.Error())
+		return
+	}
 	pb, _ := pruned.RowsAffected()
 	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 		logEvent(db, "storage_cap_error", "checkpoint: "+err.Error())

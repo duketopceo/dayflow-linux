@@ -2,16 +2,16 @@
 artifact_contract: ce-unified-plan/v1
 execution: code
 product_contract_source: ce-plan-bootstrap
-title: "Dayflow Linux parity tranche: week charts, chat polish, day goals, prompt overrides, onboarding, and hermes export"
+title: "Dayflow Linux parity tranche: week charts, chat polish, day goals, prompt overrides, onboarding, and SSH export feed"
 date: 2026-09-14
 plan_type: feat
 ---
 
-# Dayflow Linux parity tranche: week charts, chat polish, day goals, prompt overrides, onboarding, and hermes export
+# Dayflow Linux parity tranche: week charts, chat polish, day goals, prompt overrides, onboarding, and SSH export feed
 
 ## Goal Capsule
 
-- **Objective:** the panel renders the weekly analytics the engine already computes (heatmap, context shifts), chat reads like a real conversation UI, users can set and review a daily goal, provider prompt overrides are editable in Settings, a first-run onboarding wizard exists, and hermes can pull a week-timeline markdown export from this machine over SSH.
+- **Objective:** the panel renders the weekly analytics the engine already computes (heatmap, context shifts), chat reads like a real conversation UI, users can set and review a daily goal, provider prompt overrides are editable in Settings, a first-run onboarding wizard exists, and remote agents can pull a week-timeline markdown export from this machine over SSH.
 - **Means:** extend the existing Go engine + Quickshell plugin in place — no standalone GUI, no web view — plus one new systemd user timer for the export feed (KTD1).
 - **Authority:** this plan's Product Contract and Planning Contract govern; the audit-hardening plan (docs/plans/2026-09-14-0313) governs data-integrity behavior where they overlap.
 - **Stop conditions:** do not add a webview for charts; do not build Agents/Fable recap or frame playback; do not touch Flow/account features.
@@ -23,19 +23,19 @@ plan_type: feat
 
 ### Summary
 
-The 2026-09-05 parity roadmap landed the engine capabilities (chat, provider routing, weekly analytics payload, daily grid, edits). What remains is mostly *rendering and wiring*: the `weekly` payload's heatmap and context-shift data are unrendered, chat is plain-text-only, `day_goals` is a dead table, and provider prompt overrides have no UI. This tranche closes those gaps plus a first-run onboarding wizard, and adds an SSH-consumable markdown export feed for hermes (a separate device).
+The 2026-09-05 parity roadmap landed the engine capabilities (chat, provider routing, weekly analytics payload, daily grid, edits). What remains is mostly *rendering and wiring*: the `weekly` payload's heatmap and context-shift data are unrendered, chat is plain-text-only, `day_goals` is a dead table, and provider prompt overrides have no UI. This tranche closes those gaps plus a first-run onboarding wizard, and adds an SSH-consumable markdown export feed for remote consumers.
 
 ### Problem Frame
 
-The Week tab fetches `weekly --json` — a payload containing `heatmap` (7×24 hour buckets) and `context_shifts` — but draws only donut-bars, a treemap list, and text highlights. Chat works but lacks markdown, suggested prompts, and provider attribution. Day goals exist in schema (schema v2, `day_goals`) with no writer or reader. Settings has no prompt-override fields despite `provider set <id> prompt.<field>` existing in the CLI. There is no onboarding UI — first-run is `dayflow setup` on a terminal. And hermes, running on a separate device, needs a stable file (or command) to consume the week timeline over Tailscale SSH.
+The Week tab fetches `weekly --json` — a payload containing `heatmap` (7×24 hour buckets) and `context_shifts` — but draws only donut-bars, a treemap list, and text highlights. Chat works but lacks markdown, suggested prompts, and provider attribution. Day goals exist in schema (schema v2, `day_goals`) with no writer or reader. Settings has no prompt-override fields despite `provider set <id> prompt.<field>` existing in the CLI. There is no onboarding UI — first-run is `dayflow setup` on a terminal. And a remote agent, running on a separate device, needs a stable file (or command) to consume the week timeline over Tailscale SSH.
 
 ### Requirements
 
-**Hermes export (engine, not plugin)**
+**Remote export feed (engine, not plugin)**
 
 - R1. `dayflow export <range> --out <path>` writes the markdown atomically (tmp + rename) instead of only to stdout.
 - R2. A `dayflow-export` systemd user timer refreshes `~/.local/share/dayflow/exports/week.md` (and `today.md`) on a daily cadence, written by `dayflow install`.
-- R3. Hermes access path is Tailscale SSH only — either `ssh <host> dayflow export week` on demand or `scp`/`ssh cat` of the stable file. No network listener is added.
+- R3. Remote access path is Tailscale SSH only — either `ssh <host> dayflow export week` on demand or `scp`/`ssh cat` of the stable file. No network listener is added.
 
 **Week tab charts (plugin)**
 
@@ -63,8 +63,8 @@ The Week tab fetches `weekly --json` — a payload containing `heatmap` (7×24 h
 
 ### Key Decisions
 
-- **Scope = four tractable parity gaps + onboarding + hermes feed** (session-settled: user-directed — chose all four tractable items and onboarding; declined frame playback, Agents recap). Governs R4–R12.
-- **Hermes consumes via SSH, not a served endpoint** (session-settled: user-directed — "hermes is on separate device. ssh ig"). Governs R1–R3.
+- **Scope = four tractable parity gaps + onboarding + remote export feed** (session-settled: user-directed — chose all four tractable items and onboarding; declined frame playback, Agents recap). Governs R4–R12.
+- **Remote consumers pull via SSH, not a served endpoint** (session-settled: user-directed — remote device consumes over SSH). Governs R1–R3.
 - **QML-native rendering, no webview** — carried from the 2026-09-05 roadmap (KTD5 there); charts draw as Canvas/Rectangles fed by the existing JSON payload.
 
 ### Scope Boundaries
@@ -106,12 +106,12 @@ flowchart TB
   subgraph systemd
     TM[dayflow-export.timer] --> E1
   end
-  H[hermes, separate device] -->|Tailscale SSH: cat or dayflow export| F1
+  H[remote agent device] -->|Tailscale SSH: cat or dayflow export| F1
 ```
 
 ### Assumptions
 
-- Hermes can reach this host via Tailscale SSH (already verified active) and will pull rather than push.
+- Remote agents reach this host via Tailscale SSH and pull rather than push.
 - `exports/` files are small (~5-20KB); storing them inside the data dir is fine and they count toward `max_storage_mb` harmlessly.
 - The Onboarding wizard is functional, not pixel-finished — first-run detection + working steps is the bar.
 
@@ -119,9 +119,9 @@ flowchart TB
 
 ## Implementation Units
 
-### U1. Hermes export feed (`export --out` + export timer)
+### U1. Remote export feed (`export --out` + export timer)
 
-**Goal:** stable markdown files hermes can pull over SSH.
+**Goal:** stable markdown files a remote agent can pull over SSH.
 
 **Requirements:** R1, R2, R3
 
@@ -297,7 +297,7 @@ flowchart TB
 - `qmllint` on touched QML files produces no new errors (pre-existing unresolved `qs.*` module warnings are expected).
 - Live checks: `dayflow export week --out`, `dayflow goal` round-trip, `dayflow doctor --json`, `dayflow detect --json`, `systemctl --user list-timers dayflow-*`.
 - Panel reload after each QML unit; verify on the user's display (3456×2160 @ scale 1.5, eDP-1).
-- Hermes pull verified once with a real `ssh`/`scp` command, not just the file existing.
+- Remote pull verified once with a real `ssh`/`scp` command, not just the file existing.
 
 ## Definition of Done
 

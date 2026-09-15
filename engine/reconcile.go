@@ -122,6 +122,13 @@ func reconcileFrames(db *sql.DB, cfg Config, dryRun bool) (reconcileResult, erro
 			rel = filepath.Base(p)
 		}
 		dst := filepath.Join(quarantineDir(), rel)
+		// A repeated orphan path must not clobber earlier quarantined evidence.
+		for i := 2; ; i++ {
+			if _, err := os.Stat(dst); os.IsNotExist(err) {
+				break
+			}
+			dst = fmt.Sprintf("%s.%d", filepath.Join(quarantineDir(), rel), i)
+		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			logEvent(db, "reconcile_error", err.Error())
 			continue

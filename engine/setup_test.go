@@ -10,7 +10,7 @@ import (
 
 func TestProbeEndpoint(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/models" {
+		if r.URL.Path == "/v1/models" {
 			w.Write([]byte(`{"data":[]}`))
 			return
 		}
@@ -20,6 +20,9 @@ func TestProbeEndpoint(t *testing.T) {
 
 	if !probeEndpoint(up.URL + "/v1") {
 		t.Fatal("expected probe to succeed against live endpoint")
+	}
+	if probeEndpoint(up.URL + "/wrong") {
+		t.Fatal("404 endpoint must not count as detected")
 	}
 
 	dead := httptest.NewServer(nil)

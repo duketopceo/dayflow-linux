@@ -308,7 +308,13 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 }
 
 func runMCP(cfg Config, readOnly bool) error {
-	db, err := openDB()
+	var db *sql.DB
+	var err error
+	if readOnly {
+		db, err = openDBReadOnly()
+	} else {
+		db, err = openDB()
+	}
 	if err != nil {
 		return err
 	}

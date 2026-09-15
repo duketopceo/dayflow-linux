@@ -270,6 +270,16 @@ func openDB() (*sql.DB, error) {
 	return db, nil
 }
 
+// openDBReadOnly opens the database without creating dirs or running
+// migrations — used by `mcp --read-only` so a read-only agent session can
+// never write, even via schema changes. Errors if the database is missing.
+func openDBReadOnly() (*sql.DB, error) {
+	if _, err := os.Stat(dbPath()); err != nil {
+		return nil, err
+	}
+	return sql.Open("sqlite", "file:"+dbPath()+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+}
+
 func insertFrame(db *sql.DB, ts time.Time, path string) error {
 	_, err := db.Exec(`INSERT INTO frames(ts, path) VALUES(?, ?)`, ts.Unix(), path)
 	return err
