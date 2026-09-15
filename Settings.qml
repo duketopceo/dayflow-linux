@@ -53,12 +53,13 @@ Flickable {
   }
 
   // Writes a single provider field immediately (prompt overrides bypass the
-  // configDraft save path — `provider set` writes config itself), then
-  // refreshes the provider list so redacted/parsed values come back clean.
+  // configDraft save path — `provider set` writes config itself). No list
+  // reload on success: reloading rebuilds every delegate and would clobber
+  // a sibling field mid-edit.
   Process {
     id: providerSetProc
     onExited: function(exitCode) {
-      if (exitCode === 0 && !providersProc.running) providersProc.running = true
+      if (exitCode !== 0 && root.dayflow) root.dayflow.notice = "prompt override save failed"
     }
   }
 

@@ -76,9 +76,6 @@ Flickable {
             }
             root.testResult = "Failing checks: " + bad.join(", ")
           }
-          if (d.configured) {
-            root.detected.configuredNow = true
-          }
         } catch (e) {
           root.testResult = "doctor did not return JSON"
         }
