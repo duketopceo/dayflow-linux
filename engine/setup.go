@@ -250,16 +250,30 @@ func listModels(cfg Config) {
 	}
 }
 
-func runDoctor(cfg Config) {
+// doctorCheck is one doctor result; status is "ok", "warn", or "fail".
+type doctorCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// collectDoctorChecks runs every check and returns results plus the failure
+// count. Rendering (text or JSON) happens in runDoctor.
+func collectDoctorChecks(cfg Config) ([]doctorCheck, int) {
+	var checks []doctorCheck
 	fail := 0
 	check := func(name string, ok bool, hint string) {
 		if ok {
-			fmt.Printf("  ok   %s\n", name)
+			checks = append(checks, doctorCheck{Name: name, Status: "ok"})
 		} else {
 			fail++
-			fmt.Printf("  FAIL %s — %s\n", name, hint)
+			checks = append(checks, doctorCheck{Name: name, Status: "fail", Detail: hint})
 		}
 	}
+	warn := func(name, detail string) {
+		checks = append(checks, doctorCheck{Name: name, Status: "warn", Detail: detail})
+	}
+
 	check("wayland session", os.Getenv("WAYLAND_DISPLAY") != "", "not running under Wayland")
 	_, grimErr := exec.LookPath("grim")
 	check("grim installed", grimErr == nil || cfg.CaptureCommand != "", "install grim or set capture_command")
@@ -267,37 +281,37 @@ func runDoctor(cfg Config) {
 	check("api reachable", cfg.OpenRouterAPIKey != "" || cfg.APIBaseURL != "", "run: dayflow setup")
 	vis, reachable := isVisionModel(cfg, cfg.Model)
 	if !reachable && cfg.APIBaseURL == "" {
-		fmt.Printf("  warn model %s — couldn't verify vision support (offline?)\n", cfg.Model)
+		warn("model vision support", cfg.Model+" — couldn't verify vision support (offline?)")
 	} else if cfg.APIBaseURL != "" {
-		fmt.Printf("  ok   using custom endpoint %s — vision support not verified\n", cfg.APIBaseURL)
+		checks = append(checks, doctorCheck{Name: "custom endpoint", Status: "ok",
+			Detail: cfg.APIBaseURL + " — vision support not verified"})
 	} else {
 		check("model is vision-capable", vis, cfg.Model+" cannot read images: dayflow config set model google/gemma-4-31b-it")
 	}
 	_, hyErr := exec.LookPath("hyprctl")
 	if hyErr != nil && len(cfg.IgnoreApps) > 0 {
-		fmt.Println("  warn hyprctl not found — ignore_apps won't work on this compositor")
+		warn("hyprctl", "hyprctl not found — ignore_apps won't work on this compositor")
 	}
 
-	fmt.Printf("  engine version: %s (schema v%d)\n", version, schemaVersion)
 	if _, err := os.Stat(dbPath()); os.IsNotExist(err) {
-		fmt.Println("  warn no database yet — capture has not run")
+		warn("database", "no database yet — capture has not run")
 	} else {
 		sv, svErr := peekSchemaVersion()
 		check("schema version", svErr == nil && sv <= schemaVersion,
 			fmt.Sprintf("database at schema v%d, binary expects v%d — upgrade the engine", sv, schemaVersion))
 		if svErr == nil && sv < schemaVersion {
-			fmt.Printf("  warn database was at schema v%d; migrated to v%d — restart dayflow-capture and any dayflow mcp clients\n", sv, schemaVersion)
+			warn("schema migration", fmt.Sprintf("database was at schema v%d; migrated to v%d — restart dayflow-capture and any dayflow mcp clients", sv, schemaVersion))
 		}
 		db, err := openDB()
 		if err != nil {
 			fail++
-			fmt.Printf("  FAIL database open/migrate — %v\n", err)
+			checks = append(checks, doctorCheck{Name: "database open/migrate", Status: "fail", Detail: err.Error()})
 		} else {
 			defer db.Close()
 			var qc string
 			if err := db.QueryRow(`PRAGMA quick_check`).Scan(&qc); err != nil {
 				fail++
-				fmt.Printf("  FAIL sqlite integrity — %v\n", err)
+				checks = append(checks, doctorCheck{Name: "sqlite integrity", Status: "fail", Detail: err.Error()})
 			} else {
 				check("sqlite integrity", qc == "ok", "quick_check: "+qc)
 			}
@@ -305,7 +319,7 @@ func runDoctor(cfg Config) {
 			db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk)
 			check("foreign keys", fk == 1, "foreign_keys pragma is off")
 			if orphans, err := orphanFrameFiles(db); err == nil && len(orphans) > 0 {
-				fmt.Printf("  warn %d file(s) under frames/ have no frames row — run: dayflow reconcile --dry-run\n", len(orphans))
+				warn("orphan frames", fmt.Sprintf("%d file(s) under frames/ have no frames row — run: dayflow reconcile --dry-run", len(orphans)))
 			}
 		}
 	}
@@ -317,10 +331,78 @@ func runDoctor(cfg Config) {
 		check("config permissions", fi.Mode().Perm()&0o077 == 0,
 			fmt.Sprintf("%s is %04o, want 0600", configPath(), fi.Mode().Perm()))
 	}
-	fmt.Printf("  data: %s\n  config: %s\n", dataDir(), configPath())
+	return checks, fail
+}
+
+func runDoctor(cfg Config, jsonOut bool) {
+	checks, fail := collectDoctorChecks(cfg)
+	if jsonOut {
+		out := map[string]interface{}{
+			"checks":         checks,
+			"failures":       fail,
+			"version":        version,
+			"schema_version": schemaVersion,
+			"configured":     fileExists(configPath()) && (cfg.OpenRouterAPIKey != "" || cfg.APIBaseURL != ""),
+			"data_dir":       dataDir(),
+			"config_path":    configPath(),
+		}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(b))
+	} else {
+		for _, c := range checks {
+			switch c.Status {
+			case "ok":
+				if c.Detail != "" {
+					fmt.Printf("  ok   %s — %s\n", c.Name, c.Detail)
+				} else {
+					fmt.Printf("  ok   %s\n", c.Name)
+				}
+			case "warn":
+				fmt.Printf("  warn %s — %s\n", c.Name, c.Detail)
+			default:
+				fmt.Printf("  FAIL %s — %s\n", c.Name, c.Detail)
+			}
+		}
+		fmt.Printf("  engine version: %s (schema v%d)\n", version, schemaVersion)
+		fmt.Printf("  data: %s\n  config: %s\n", dataDir(), configPath())
+	}
 	if fail > 0 {
 		os.Exit(1)
 	}
+}
+
+// probeEndpoint reports whether a local inference endpoint answers /models.
+func probeEndpoint(base string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(strings.TrimSuffix(base, "/") + "/models")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode < 500
+}
+
+func runDetect(jsonOut bool) {
+	type detected struct {
+		Ollama   bool          `json:"ollama"`
+		LMStudio bool          `json:"lmstudio"`
+		Presets  []ModelPreset `json:"presets"`
+	}
+	d := detected{
+		Ollama:   probeEndpoint("http://localhost:11434/v1"),
+		LMStudio: probeEndpoint("http://localhost:1234/v1"),
+		Presets:  modelPresets(),
+	}
+	if jsonOut {
+		b, _ := json.MarshalIndent(d, "", "  ")
+		fmt.Println(string(b))
+		return
+	}
+	fmt.Printf("ollama:   %v\nlmstudio: %v\n", d.Ollama, d.LMStudio)
+	if d.Ollama || d.LMStudio {
+		fmt.Println("local endpoint found — a local model works without an API key")
+	}
+	printModelPresets()
 }
 
 // peekSchemaVersion reads the recorded schema version without running

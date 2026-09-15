@@ -85,7 +85,8 @@ Control:
 Setup & health:
   setup                   Interactive AI-provider onboarding (OpenRouter or local endpoint)
   models                  List vision-capable models on your OpenRouter account
-  doctor                  Check session, grim, key, model, and endpoint support
+  doctor [--json]         Check session, grim, key, model, and endpoint support
+  detect [--json]         Probe for local model endpoints (Ollama, LM Studio)
 
 Config: %s
 Data:   %s
@@ -858,7 +859,9 @@ func main() {
 	case "setup":
 		fatal(runSetup())
 	case "doctor":
-		runDoctor(cfg)
+		runDoctor(cfg, jsonOut)
+	case "detect":
+		runDetect(jsonOut)
 	case "models":
 		if len(args) >= 1 && args[0] == "--json" {
 			printModelPresets()

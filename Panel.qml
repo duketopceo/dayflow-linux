@@ -17,6 +17,7 @@ Panel {
   property string dateLabel: ""
   property bool paused: false
   property bool configured: true
+  property bool onboardingSkipped: false
   property string errorText: ""
   property string modelName: ""
   property string activeApp: ""
@@ -2796,6 +2797,19 @@ Panel {
     }
   }
 
+  Component {
+    id: onboardingComp
+    Loader {
+      width: parent.width
+      height: item ? item.implicitHeight : Style.space(460)
+      source: "Onboarding.qml"
+      property var panel: dayflow
+      onLoaded: {
+        if (item) item.dismissed.connect(function() { dayflow.onboardingSkipped = true })
+      }
+    }
+  }
+
   // ---- helpers ----
   Component {
     id: sectionList
@@ -3047,7 +3061,9 @@ Panel {
           id: tabLoader
           width: parent.width - content.leftPadding - content.rightPadding
           height: item ? item.implicitHeight : Style.space(120)
-          sourceComponent: dayflow.currentTab === "today" ? todayTab
+          sourceComponent: (dayflow.configLoaded && !dayflow.configured && !dayflow.onboardingSkipped)
+            ? onboardingComp
+            : dayflow.currentTab === "today" ? todayTab
             : dayflow.currentTab === "standup" ? standupTab
             : dayflow.currentTab === "chat" ? chatTab
             : dayflow.currentTab === "week" ? weekTab
