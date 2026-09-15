@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const captureService = `[Unit]
@@ -42,6 +43,45 @@ Persistent=true
 WantedBy=timers.target
 `
 
+const backupService = `[Unit]
+Description=dayflow backup snapshot
+
+[Service]
+Type=oneshot
+ExecStart=%s backup
+`
+
+const backupTimer = `[Unit]
+Description=dayflow daily backup timer
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+`
+
+const exportService = `[Unit]
+Description=dayflow markdown export refresh
+
+[Service]
+Type=oneshot
+ExecStart=%s export week --out %s/week.md
+ExecStart=%s export today --out %s/today.md
+`
+
+const exportTimer = `[Unit]
+Description=dayflow daily export refresh timer
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+`
+
 func unitDir() string {
 	d, err := os.UserConfigDir()
 	if err != nil {
@@ -58,16 +98,27 @@ func selfExe() string {
 	return p
 }
 
+// unitArg quotes a path for systemd ExecStart: quotes keep whitespace from
+// splitting arguments, and % is doubled so specifier expansion can't eat it.
+func unitArg(p string) string {
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(p, "%", "%%"), `"`, `\"`) + `"`
+}
+
 func installUnits() error {
 	dir := unitDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	exe := selfExe()
+	exe := unitArg(selfExe())
+	expDir := unitArg(exportsDir())
 	units := map[string]string{
 		"dayflow-capture.service":   fmt.Sprintf(captureService, exe),
 		"dayflow-summarize.service": fmt.Sprintf(summarizeService, exe),
 		"dayflow-summarize.timer":   summarizeTimer,
+		"dayflow-backup.service":    fmt.Sprintf(backupService, exe),
+		"dayflow-backup.timer":      backupTimer,
+		"dayflow-export.service":    fmt.Sprintf(exportService, exe, expDir, exe, expDir),
+		"dayflow-export.timer":      exportTimer,
 	}
 	for name, body := range units {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
@@ -88,8 +139,11 @@ func installUnits() error {
 	}
 	run("--user", "daemon-reload")
 	run("--user", "enable", "--now", "dayflow-summarize.timer")
-	fmt.Println("\nEnabled dayflow-summarize.timer.")
+	run("--user", "enable", "--now", "dayflow-backup.timer")
+	run("--user", "enable", "--now", "dayflow-export.timer")
+	fmt.Println("\nEnabled dayflow-summarize.timer, dayflow-backup.timer (daily snapshot, keeps last 7), dayflow-export.timer (daily markdown export).")
 	fmt.Println("Start capture with:  systemctl --user enable --now dayflow-capture.service")
+	fmt.Println("Already running an older build?  systemctl --user restart dayflow-capture.service")
 	fmt.Println("Set your API key in:", configPath())
 	return nil
 }
@@ -100,8 +154,8 @@ func uninstallUnits() error {
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
 		c.Run()
 	}
-	run("--user", "disable", "--now", "dayflow-summarize.timer", "dayflow-capture.service")
-	for _, name := range []string{"dayflow-capture.service", "dayflow-summarize.service", "dayflow-summarize.timer"} {
+	run("--user", "disable", "--now", "dayflow-summarize.timer", "dayflow-capture.service", "dayflow-backup.timer", "dayflow-export.timer")
+	for _, name := range []string{"dayflow-capture.service", "dayflow-summarize.service", "dayflow-summarize.timer", "dayflow-backup.service", "dayflow-backup.timer", "dayflow-export.service", "dayflow-export.timer"} {
 		os.Remove(filepath.Join(unitDir(), name))
 	}
 	run("--user", "daemon-reload")

@@ -119,8 +119,11 @@ func screenLocked() bool {
 	return false
 }
 
+// frameHash is a 256-bit perceptual hash (16x16 grayscale average hash).
+type frameHash [4]uint64
+
 // ahash computes a 16x16 grayscale average-hash of the image.
-func ahash(img image.Image) uint64 {
+func ahash(img image.Image) frameHash {
 	const size = 16
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
@@ -138,21 +141,21 @@ func ahash(img image.Image) uint64 {
 		sum += uint64(v)
 	}
 	avg := uint32(sum / (size * size))
-	var hash uint64
+	var hash frameHash
 	for i, v := range px {
 		if v >= avg {
-			hash |= 1 << i
+			hash[i/64] |= 1 << (i % 64)
 		}
 	}
 	return hash
 }
 
-func hamming(a, b uint64) int {
-	d := a ^ b
+func hamming(a, b frameHash) int {
 	n := 0
-	for d != 0 {
-		n += int(d & 1)
-		d >>= 1
+	for i := range a {
+		for d := a[i] ^ b[i]; d != 0; d >>= 1 {
+			n += int(d & 1)
+		}
 	}
 	return n
 }
@@ -186,72 +189,79 @@ func grabFrame(cmdArgs []string) ([]byte, error) {
 
 const dedupThreshold = 5 // hamming distance out of 256 bits
 
-func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *uint64) error {
+// captureOnce samples the screen and stores a frame when it has changed.
+// lastHash is the previous frame's hash, or nil when no frame has been
+// sampled yet (e.g. after unlock or pause). The returned hash is the latest
+// sampled hash — unchanged on early returns.
+func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) (*frameHash, error) {
 	if paused() {
-		return nil
+		return lastHash, nil
 	}
 	cls := activeWindowClass()
 	if isIgnored(cfg, cls) {
 		logEvent(db, "capture_ignored", cls)
 		debugf(cfg, "capture: ignored app %s", cls)
-		return nil
+		return lastHash, nil
 	}
 	raw, err := grabFrame(cmdArgs)
 	if err != nil {
 		logEvent(db, "capture_error", err.Error())
 		debugf(cfg, "capture: grab failed: %v", err)
-		return fmt.Errorf("capture: %w", err)
+		return lastHash, fmt.Errorf("capture: %w", err)
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		logEvent(db, "capture_error", "decode: "+err.Error())
 		debugf(cfg, "capture: decode failed: %v", err)
-		return fmt.Errorf("decode: %w", err)
+		return lastHash, fmt.Errorf("decode: %w", err)
 	}
 	h := ahash(img)
 	if lastHash != nil && hamming(h, *lastHash) <= dedupThreshold {
 		logEvent(db, "capture_deduped", "")
 		debugf(cfg, "capture: deduped (hamming %d, app %s)", hamming(h, *lastHash), cls)
-		return nil // screen unchanged
+		return lastHash, nil // screen unchanged
 	}
-	*lastHash = h
 
 	now := time.Now()
 	dayDir := filepath.Join(framesDir(), now.Format("2006-01-02"))
 	if err := os.MkdirAll(dayDir, 0o700); err != nil {
-		return err
+		return lastHash, err
 	}
 	path := filepath.Join(dayDir, now.Format("150405")+".jpg")
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		return err
+		return lastHash, err
 	}
 	if err := insertFrameApp(db, now, path, cls); err != nil {
 		os.Remove(path)
-		return err
+		return lastHash, err
 	}
 	logEvent(db, "capture_saved", path)
 	debugf(cfg, "capture: saved %s (%d bytes, app %s)", filepath.Base(path), len(raw), cls)
-	return nil
+	return &h, nil
 }
 
-// runRetention deletes frames and old log rows past the retention window.
+// runRetention reconciles the frames dir with the frames table, then deletes
+// frames and old log rows past the retention window.
 func runRetention(db *sql.DB, cfg Config) {
-	if cfg.RetentionDays <= 0 {
-		return
+	if _, err := reconcileFrames(db, cfg, false); err != nil {
+		logEvent(db, "reconcile_error", err.Error())
 	}
-	cutoff := time.Now().Add(-time.Duration(cfg.RetentionDays) * 24 * time.Hour)
-	paths, err := framesBefore(db, cutoff)
-	if err != nil {
-		logEvent(db, "retention_error", err.Error())
-		return
+	if cfg.RetentionDays > 0 {
+		cutoff := time.Now().Add(-time.Duration(cfg.RetentionDays) * 24 * time.Hour)
+		paths, err := framesBefore(db, cutoff)
+		if err != nil {
+			logEvent(db, "retention_error", err.Error())
+		} else {
+			for _, p := range paths {
+				os.Remove(p)
+			}
+			if len(paths) > 0 {
+				logEvent(db, "retention_pruned", fmt.Sprintf("%d frames", len(paths)))
+			}
+		}
+		pruneOldEvents(db, cutoff)
 	}
-	for _, p := range paths {
-		os.Remove(p)
-	}
-	if len(paths) > 0 {
-		logEvent(db, "retention_pruned", fmt.Sprintf("%d frames", len(paths)))
-	}
-	pruneOldEvents(db, cutoff)
+	// the storage cap is independent of day retention — it always runs
 	enforceStorageCap(db, cfg)
 	// drop empty day directories
 	days, _ := filepath.Glob(filepath.Join(framesDir(), "*"))
@@ -262,9 +272,10 @@ func runRetention(db *sql.DB, cfg Config) {
 	}
 }
 
-// enforceStorageCap keeps the whole data dir (frames + db + wal) under
-// max_storage_mb. Oldest data goes first: already-summarized frames, then the
-// oldest blocks/events/api_calls rows, then a VACUUM to reclaim pages.
+// enforceStorageCap keeps the whole data dir (quarantine + frames + db + wal)
+// under max_storage_mb, deleting cheapest-to-regenerate data first:
+// quarantined orphans, then oldest already-summarized frames, then trimmed log
+// rows, then bounded chunks of the oldest blocks as a last resort.
 func enforceStorageCap(db *sql.DB, cfg Config) {
 	if cfg.MaxStorageMB <= 0 {
 		return
@@ -275,12 +286,30 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 		return
 	}
 
-	// phase 1: oldest already-summarized frames
+	// phase 0: quarantined orphans — already superseded, cheapest to drop
+	qpurged := 0
+	for _, p := range quarantineFiles() {
+		if total <= limit {
+			break
+		}
+		if fi, err := os.Stat(p); err == nil && os.Remove(p) == nil {
+			total -= fi.Size()
+			qpurged++
+		}
+	}
+	if qpurged > 0 {
+		logEvent(db, "storage_cap_quarantine", fmt.Sprintf("%d files", qpurged))
+	}
+	if total <= limit {
+		return
+	}
+
+	// phase 1: oldest already-summarized frames, stopping at the boundary
 	rows, err := db.Query(`SELECT ts, path FROM frames ORDER BY ts ASC`)
 	if err == nil {
 		var toDelete [][2]any
-		var freed int64
-		for rows.Next() && total > limit {
+		var planned int64
+		for rows.Next() && total-planned > limit {
 			var ts int64
 			var p string
 			if err := rows.Scan(&ts, &p); err != nil {
@@ -291,13 +320,17 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 				continue
 			}
 			if fi, err := os.Stat(p); err == nil {
-				freed += fi.Size()
+				planned += fi.Size()
 			}
 			toDelete = append(toDelete, [2]any{ts, p})
 		}
 		rows.Close()
+		var freed int64
 		for _, d := range toDelete {
-			os.Remove(d[1].(string))
+			p := d[1].(string)
+			if fi, err := os.Stat(p); err == nil && os.Remove(p) == nil {
+				freed += fi.Size()
+			}
 			db.Exec(`DELETE FROM frames WHERE ts=? AND path=?`, d[0], d[1])
 		}
 		total -= freed
@@ -309,19 +342,47 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 		return
 	}
 
-	// phase 2: drop the oldest journal data, one chunk at a time (the cap
-	// run is hourly, so oversized dirs converge over a few passes)
-	pruned, _ := db.Exec(`DELETE FROM blocks WHERE start_ts IN (
+	// phase 2: trim log tables (rowid order = insertion order; immune to ts
+	// ties that would make a ts-based cutoff delete nothing) and reclaim pages
+	db.Exec(`DELETE FROM events WHERE rowid <= (
+		SELECT rowid FROM events ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
+	db.Exec(`DELETE FROM api_calls WHERE rowid <= (
+		SELECT rowid FROM api_calls ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		logEvent(db, "storage_cap_error", "checkpoint: "+err.Error())
+	}
+	if _, err := db.Exec(`VACUUM`); err != nil {
+		// Another process holds the DB — deleting journal blocks here would
+		// destroy data without reclaiming pages. Try again next pass.
+		logEvent(db, "storage_cap_error", "vacuum: "+err.Error())
+		return
+	}
+	total = dataDirSize()
+	if total <= limit {
+		return
+	}
+
+	// phase 3: last resort — drop the oldest journal blocks, one bounded
+	// chunk per pass (the cap runs hourly, so oversized dirs converge)
+	pruned, err := db.Exec(`DELETE FROM blocks WHERE start_ts IN (
 		SELECT start_ts FROM blocks ORDER BY start_ts ASC LIMIT 100)`)
+	if err != nil {
+		logEvent(db, "storage_cap_error", "block prune: "+err.Error())
+		return
+	}
 	pb, _ := pruned.RowsAffected()
-	db.Exec(`DELETE FROM events WHERE ts < (
-		SELECT ts FROM events ORDER BY ts DESC LIMIT 1 OFFSET 2000)`)
-	db.Exec(`DELETE FROM api_calls WHERE ts < (
-		SELECT ts FROM api_calls ORDER BY ts DESC LIMIT 1 OFFSET 2000)`)
-	// reclaim disk pages now that rows are gone
-	db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-	db.Exec(`VACUUM`)
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		logEvent(db, "storage_cap_error", "checkpoint: "+err.Error())
+	}
+	if _, err := db.Exec(`VACUUM`); err != nil {
+		logEvent(db, "storage_cap_error", "vacuum: "+err.Error())
+	}
 	logEvent(db, "storage_cap_db", fmt.Sprintf("%d oldest blocks pruned, vacuumed", pb))
+	if total = dataDirSize(); total > limit {
+		logEvent(db, "storage_cap_floor",
+			fmt.Sprintf("data dir still %dMB over cap after pruning; will retry next pass",
+				(total-limit)>>20))
+	}
 }
 
 func dataDirSize() int64 {
@@ -368,8 +429,7 @@ func runDaemon(cfg Config) error {
 		}
 	}
 
-	var lastHash uint64
-	var haveHash bool
+	var lastHash *frameHash // nil = no prior sample; force first capture
 	locked := false
 	tick := time.NewTicker(time.Duration(cfg.CaptureIntervalSec) * time.Second)
 	defer tick.Stop()
@@ -384,19 +444,12 @@ func runDaemon(cfg Config) error {
 
 	capture := func() {
 		reloadIfChanged()
-		var h *uint64
-		if haveHash {
-			h = &lastHash
-		} else {
-			h = new(uint64)
-			*h = ^uint64(0) // force first frame to be saved
-		}
-		if err := captureOnce(db, cfg, cmdArgs, h); err != nil {
+		h, err := captureOnce(db, cfg, cmdArgs, lastHash)
+		if err != nil {
 			log.Printf("capture: %v", err)
 			return
 		}
-		lastHash = *h
-		haveHash = true
+		lastHash = h
 	}
 	capture()
 	runRetention(db, cfg)
@@ -405,7 +458,7 @@ func runDaemon(cfg Config) error {
 		case <-tick.C:
 			if cfg.AutoPauseLocked && locked {
 				// locked: do not capture, reset hash so we don't leak last frame
-				haveHash = false
+				lastHash = nil
 				continue
 			}
 			capture()
@@ -418,7 +471,7 @@ func runDaemon(cfg Config) error {
 			}
 			if screenLocked() && !paused() && !locked {
 				locked = true
-				haveHash = false
+				lastHash = nil
 				logEvent(db, "auto_paused", "screen locked")
 				debugf(cfg, "auto-paused: screen locked")
 			} else if !screenLocked() && locked {

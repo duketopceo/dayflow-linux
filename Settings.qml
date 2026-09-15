@@ -8,6 +8,7 @@ Flickable {
   id: root
   property var dayflow: parent && parent.panel ? parent.panel : null
   property var presets: []
+  property var providers: []
   property string usageText: dayflow ? dayflow.storageText : ""
 
   width: parent ? parent.width : 0
@@ -31,6 +32,48 @@ Flickable {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyPresets(text)
+    }
+  }
+
+  Process {
+    id: providersProc
+    command: ["dayflow", "provider", "list", "--json"]
+    running: true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var d = JSON.parse(text)
+          root.providers = d.providers || []
+        } catch (e) {
+          root.providers = []
+        }
+      }
+    }
+  }
+
+  // Writes a single provider field immediately (prompt overrides bypass the
+  // configDraft save path — `provider set` writes config itself). Writes are
+  // queued: reassigning command on a running Process drops the second write.
+  property var pendingProviderWrites: []
+
+  function queueProviderWrite(cmd) {
+    root.pendingProviderWrites = root.pendingProviderWrites.concat([cmd])
+    if (!providerSetProc.running) {
+      providerSetProc.command = root.pendingProviderWrites[0]
+      providerSetProc.running = true
+    }
+  }
+
+  Process {
+    id: providerSetProc
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && root.dayflow) root.dayflow.notice = "prompt override save failed"
+      root.pendingProviderWrites = root.pendingProviderWrites.slice(1)
+      if (root.pendingProviderWrites.length > 0) {
+        providerSetProc.command = root.pendingProviderWrites[0]
+        providerSetProc.running = true
+      }
     }
   }
 
@@ -279,7 +322,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Interval (s)"
-          value: String(dayflow.configDraft.capture_interval_sec || 10)
+          value: String(dayflow.configDraft.capture_interval_sec !== undefined ? dayflow.configDraft.capture_interval_sec : 10)
           hint: "10"
           numeric: true
           onEdited: dayflow.configDraft.capture_interval_sec = parseInt(text, 10) || 0
@@ -287,7 +330,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Block (min)"
-          value: String(dayflow.configDraft.block_minutes || 15)
+          value: String(dayflow.configDraft.block_minutes !== undefined ? dayflow.configDraft.block_minutes : 15)
           hint: "15"
           numeric: true
           onEdited: dayflow.configDraft.block_minutes = parseInt(text, 10) || 0
@@ -295,7 +338,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Frames/block"
-          value: String(dayflow.configDraft.frames_per_block || 30)
+          value: String(dayflow.configDraft.frames_per_block !== undefined ? dayflow.configDraft.frames_per_block : 30)
           hint: "30"
           numeric: true
           onEdited: dayflow.configDraft.frames_per_block = parseInt(text, 10) || 0
@@ -309,7 +352,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "JPEG quality"
-          value: String(dayflow.configDraft.jpeg_quality || 55)
+          value: String(dayflow.configDraft.jpeg_quality !== undefined ? dayflow.configDraft.jpeg_quality : 55)
           hint: "55"
           numeric: true
           onEdited: dayflow.configDraft.jpeg_quality = parseInt(text, 10) || 0
@@ -317,7 +360,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Retention (days)"
-          value: String(dayflow.configDraft.retention_days || 7)
+          value: String(dayflow.configDraft.retention_days !== undefined ? dayflow.configDraft.retention_days : 7)
           hint: "7"
           numeric: true
           onEdited: dayflow.configDraft.retention_days = parseInt(text, 10) || 0
@@ -325,7 +368,7 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Max storage (MB)"
-          value: String(dayflow.configDraft.max_storage_mb || 10240)
+          value: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 10240)
           hint: "10240"
           numeric: true
           onEdited: dayflow.configDraft.max_storage_mb = parseInt(text, 10) || 0
@@ -492,6 +535,90 @@ Flickable {
           font.pixelSize: Style.font.body
           wrapMode: TextEdit.Wrap
           onTextChanged: dayflow.configDraft.classification_prompt = text
+        }
+      }
+
+      Text {
+        visible: root.providers.length > 0
+        width: parent.width
+        text: "Prompt overrides (advanced)"
+        color: dayflow.foreground
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+
+      Text {
+        visible: root.providers.length > 0
+        width: parent.width
+        text: "Per-provider replacements for the built-in prompts. Saved on Enter — leave blank to use the default."
+        color: dayflow.dim
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+
+      Repeater {
+        model: root.providers
+        delegate: Column {
+          id: provBlock
+          property var prov: modelData
+          width: parent.width
+          spacing: Style.space(4)
+
+          Text {
+            width: parent.width
+            text: (provBlock.prov.name || provBlock.prov.id) + "  (" + provBlock.prov.id + ")"
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+
+          Repeater {
+            model: [
+              { label: "Title prompt", key: "title_prompt", field: "title" },
+              { label: "Summary prompt", key: "summary_prompt", field: "summary" },
+              { label: "Detailed prompt", key: "detailed_prompt", field: "detailed" },
+              { label: "Chat prompt", key: "chat_prompt", field: "chat" }
+            ]
+            delegate: Column {
+              id: ovField
+              property var spec: modelData
+              width: parent.width
+              spacing: Style.space(2)
+
+              Text {
+                text: ovField.spec.label
+                color: dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Rectangle {
+                width: parent.width
+                height: ovInput.implicitHeight + Style.space(8)
+                radius: Style.cornerRadius
+                color: dayflow.fgFill(0.04)
+                border.color: dayflow.fgFill(0.12)
+
+                TextInput {
+                  id: ovInput
+                  anchors.fill: parent
+                  anchors.margins: Style.space(5)
+                  text: (provBlock.prov.prompt_overrides && provBlock.prov.prompt_overrides[ovField.spec.field]) || ""
+                  color: dayflow.foreground
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.body
+                  selectByMouse: true
+                  onEditingFinished: {
+                    root.queueProviderWrite(["dayflow", "provider", "set",
+                      provBlock.prov.id, ovField.spec.key, text])
+                  }
+                }
+              }
+            }
+          }
         }
       }
 

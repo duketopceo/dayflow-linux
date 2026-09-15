@@ -17,6 +17,7 @@ Panel {
   property string dateLabel: ""
   property bool paused: false
   property bool configured: true
+  property bool onboardingSkipped: false
   property string errorText: ""
   property string modelName: ""
   property string activeApp: ""
@@ -30,6 +31,7 @@ Panel {
   property var configDraft: ({})
   property bool configLoaded: false
   property var standup: ({ yesterday: { date: "", total_minutes: 0, entries: [] }, today: { date: "", total_minutes: 0, entries: [] } })
+  property var dayGoal: ({ date: "", goal: "", completed: false })
   property var draft: ({ date: "", highlights: "", tasks: "", blockers: "", priorities: "" })
   property bool draftDirty: false
   property var workflow: ({ date: "", slot_minutes: 15, total_minutes: 0, slots: [], categories: [] })
@@ -63,15 +65,29 @@ Panel {
     return false
   }
 
+  // refreshForTab fetches only what the given tab renders — the panel no
+  // longer fires standup/insights/weekly/config on every open.
+  function refreshForTab(tab) {
+    if (tab === "standup") {
+      if (!standupFetchProc.running) standupFetchProc.running = true
+      if (!goalProc.running) goalProc.running = true
+    } else if (tab === "week") {
+      if (!insightsFetchProc.running) insightsFetchProc.running = true
+      if (!weekTimelineProc.running) weekTimelineProc.running = true
+      if (!weeklyProc.running) weeklyProc.running = true
+    } else if (tab === "settings") {
+      if (!configProc.running) configProc.running = true
+    }
+    // "chat" loads its own processes when the Loader instantiates ChatTab
+  }
+
   function refreshAll() {
     dayflow.loadTimeline()
     if (!statusProc.running) statusProc.running = true
-    if (!standupFetchProc.running) standupFetchProc.running = true
-    if (!insightsFetchProc.running) insightsFetchProc.running = true
-    if (!weekTimelineProc.running) weekTimelineProc.running = true
-    if (!weeklyProc.running) weeklyProc.running = true
-    if (!configProc.running) configProc.running = true
+    refreshForTab(dayflow.currentTab)
   }
+
+  onCurrentTabChanged: refreshForTab(currentTab)
 
   function cloneConfig(obj) {
     return JSON.parse(JSON.stringify(obj || {}))
@@ -266,6 +282,12 @@ Panel {
       dayflow.framesToday = Number(s.frames_today || 0)
       dayflow.blocksPending = Number(s.blocks_pending || 0)
       dayflow.storageText = s.storage_text || ""
+    } catch (e) {}
+  }
+
+  function applyGoal(raw) {
+    try {
+      dayflow.dayGoal = JSON.parse(raw)
     } catch (e) {}
   }
 
@@ -551,6 +573,23 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyStatus(text)
+    }
+  }
+
+  Process {
+    id: goalProc
+    command: ["dayflow", "goal", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyGoal(text)
+    }
+  }
+
+  Process {
+    id: goalSetProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyGoal(text)
     }
   }
 
@@ -1193,6 +1232,76 @@ Panel {
         }
       }
 
+      // ---- day goal ----
+      Rectangle {
+        width: parent.width
+        height: goalRow.implicitHeight + Style.space(12)
+        radius: Style.cornerRadius
+        color: dayflow.fgFill(0.04)
+        border.color: dayflow.fgFill(0.08)
+
+        Row {
+          id: goalRow
+          width: parent.width - Style.space(12)
+          anchors.centerIn: parent
+          spacing: Style.space(8)
+
+          Rectangle {
+            width: Style.space(18)
+            height: Style.space(18)
+            radius: Style.space(4)
+            color: dayflow.dayGoal.completed ? dayflow.accentFill(0.4) : "transparent"
+            border.color: dayflow.accentFill(0.6)
+            anchors.verticalCenter: parent.verticalCenter
+
+            Text {
+              anchors.centerIn: parent
+              visible: dayflow.dayGoal.completed
+              text: "✓"
+              color: dayflow.foreground
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              enabled: dayflow.dayGoal.goal !== ""
+              onClicked: {
+                goalSetProc.command = ["dayflow", "goal",
+                  dayflow.dayGoal.completed ? "clear" : "done", "--json"]
+                goalSetProc.running = true
+              }
+            }
+          }
+
+          TextInput {
+            width: parent.width - Style.space(30)
+            text: dayflow.dayGoal.goal
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.body
+            clip: true
+            selectByMouse: true
+            anchors.verticalCenter: parent.verticalCenter
+            Keys.onReturnPressed: function(event) {
+              goalSetProc.command = ["dayflow", "goal", "set", text, "--json"]
+              goalSetProc.running = true
+              focus = false
+            }
+          }
+
+          Text {
+            visible: dayflow.dayGoal.goal === ""
+            text: "Today's goal…"
+            color: dayflow.dim
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            anchors.verticalCenter: parent.verticalCenter
+            // overlaps the empty TextInput — clicks pass to it via z-order
+            z: -1
+          }
+        }
+      }
+
       // ---- daily workflow grid ----
       Loader {
         width: parent.width
@@ -1681,6 +1790,99 @@ Panel {
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
                     anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: dayflow.weeklyPayload.heatmap.length > 0
+              text: "Focus heatmap"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Column {
+              visible: dayflow.weeklyPayload.heatmap.length > 0
+              width: parent.width
+              spacing: 2
+
+              Repeater {
+                model: dayflow.weeklyPayload.heatmap
+                delegate: Row {
+                  id: heatRow
+                  property var dayData: modelData
+                  width: parent.width
+                  spacing: 2
+
+                  Text {
+                    width: Style.space(28)
+                    text: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][heatRow.dayData.day] || ""
+                    color: dayflow.dim
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Row {
+                    width: heatRow.width - Style.space(28) - parent.spacing
+                    spacing: 1
+
+                    Repeater {
+                      model: heatRow.dayData.hours || []
+                      delegate: Rectangle {
+                        width: (heatRow.width - Style.space(28) - 2 - 23) / 24
+                        height: Style.space(12)
+                        radius: 2
+                        color: modelData.category !== "" && modelData.minutes > 0
+                          ? Qt.rgba(
+                              dayflow.categoryColor(modelData.category).r,
+                              dayflow.categoryColor(modelData.category).g,
+                              dayflow.categoryColor(modelData.category).b,
+                              0.15 + 0.85 * Math.min(1, modelData.minutes / 60))
+                          : dayflow.fgFill(0.03)
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: dayflow.weeklyPayload.context_shifts.length > 0
+              text: "Context shifts"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Column {
+              visible: dayflow.weeklyPayload.context_shifts.length > 0
+              width: parent.width
+              spacing: Style.space(4)
+
+              Repeater {
+                model: dayflow.weeklyPayload.context_shifts.slice(0, 6)
+                delegate: Row {
+                  width: parent.width
+                  spacing: Style.space(6)
+
+                  Text {
+                    text: (modelData.source || "?") + " → " + (modelData.target || "?")
+                    color: dayflow.foreground
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    text: modelData.count + "×"
+                    color: dayflow.dim
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
                   }
                 }
               }
@@ -2221,7 +2423,7 @@ Panel {
                   id: ciInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.capture_interval_sec || 10)
+                  text: String(dayflow.configDraft.capture_interval_sec !== undefined ? dayflow.configDraft.capture_interval_sec : 10)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2244,7 +2446,7 @@ Panel {
                   id: bmInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.block_minutes || 15)
+                  text: String(dayflow.configDraft.block_minutes !== undefined ? dayflow.configDraft.block_minutes : 15)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2267,7 +2469,7 @@ Panel {
                   id: fpbInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.frames_per_block || 30)
+                  text: String(dayflow.configDraft.frames_per_block !== undefined ? dayflow.configDraft.frames_per_block : 30)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2295,7 +2497,7 @@ Panel {
                   id: jqInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.jpeg_quality || 55)
+                  text: String(dayflow.configDraft.jpeg_quality !== undefined ? dayflow.configDraft.jpeg_quality : 55)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2318,7 +2520,7 @@ Panel {
                   id: rdInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.retention_days || 7)
+                  text: String(dayflow.configDraft.retention_days !== undefined ? dayflow.configDraft.retention_days : 7)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2341,7 +2543,7 @@ Panel {
                   id: msInput
                   anchors.fill: parent
                   anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.max_storage_mb || 10240)
+                  text: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 10240)
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
@@ -2592,6 +2794,19 @@ Panel {
       height: item ? item.implicitHeight : Style.space(460)
       source: "Settings.qml"
       property var panel: dayflow
+    }
+  }
+
+  Component {
+    id: onboardingComp
+    Loader {
+      width: parent.width
+      height: item ? item.implicitHeight : Style.space(460)
+      source: "Onboarding.qml"
+      property var panel: dayflow
+      onLoaded: {
+        if (item) item.dismissed.connect(function() { dayflow.onboardingSkipped = true })
+      }
     }
   }
 
@@ -2846,7 +3061,9 @@ Panel {
           id: tabLoader
           width: parent.width - content.leftPadding - content.rightPadding
           height: item ? item.implicitHeight : Style.space(120)
-          sourceComponent: dayflow.currentTab === "today" ? todayTab
+          sourceComponent: (!dayflow.configured && !dayflow.onboardingSkipped)
+            ? onboardingComp
+            : dayflow.currentTab === "today" ? todayTab
             : dayflow.currentTab === "standup" ? standupTab
             : dayflow.currentTab === "chat" ? chatTab
             : dayflow.currentTab === "week" ? weekTab

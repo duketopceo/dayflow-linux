@@ -71,6 +71,17 @@ dayflow config set openrouter_api_key ""     # local endpoints usually need no k
 
 Dayflow uses the OpenAI-compatible `/chat/completions` endpoint. Any local server that accepts base64 `image_url` payloads works.
 
+### Upgrading the engine
+
+The panel, the engine binary, and the database schema must stay in sync. After pulling a new release:
+
+```sh
+cd engine && go build -o dayflow . && install -Dm755 dayflow ~/.local/bin/dayflow
+systemctl --user restart dayflow-capture.service
+```
+
+Then restart any long-lived `dayflow mcp` clients (editors and agents keep their own process running the old binary). `dayflow doctor` reports the engine version, the database schema version, integrity, and untracked frame files; run it after every upgrade. Migrations run automatically on the next engine start and are additive — existing journal data is preserved.
+
 ## Install the plugin
 
 ```sh
@@ -126,8 +137,14 @@ dayflow usage                  # token totals across all API calls
 dayflow blocks                 # failed summaries (auto-retried)
 dayflow week | month           # multi-day rollups
 dayflow export week [--copy]   # markdown export to stdout (or clipboard)
+dayflow export week --out <path> # atomic file export (0600; used by dayflow-export.timer)
 dayflow search <query>         # search titles, summaries, apps
 dayflow retry                  # reset failed/dead blocks for re-summarization
+dayflow reconcile [--dry-run]  # report/quarantine frame files missing from the index
+dayflow backup [dir]           # snapshot db + config (redacted) + frames
+dayflow backup-verify <dir>    # check a backup's manifest and db integrity
+dayflow restore <dir> [--force] # restore a backup (stop capture first)
+dayflow scrub <query>          # delete blocks matching a query
 dayflow tui                    # interactive terminal timeline, standup, insights
 dayflow mcp                    # MCP server for agents (stdio)
 dayflow config set <k> <v>     # live settings
@@ -158,6 +175,33 @@ All query commands accept `--json`.
 | `openrouter_api_key` | `""` | API key |
 | `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
 
+## Backups
+
+`dayflow install` enables a daily `dayflow-backup.timer` that snapshots the
+database, a secret-redacted copy of the config, and any retained frames into
+`~/.local/share/dayflow-backups/dayflow-<timestamp>/` (keeps the last 7).
+Override the location with `DAYFLOW_BACKUP_DIR`.
+
+```sh
+dayflow backup                  # snapshot now (default dir)
+dayflow backup /mnt/backup      # snapshot somewhere else
+dayflow backup --no-frames      # db + config only
+dayflow backup-verify <dir>     # manifest + integrity check
+```
+
+To restore, stop capture, restore, and restart:
+
+```sh
+systemctl --user stop dayflow-capture.service dayflow-summarize.timer
+dayflow restore ~/.local/share/dayflow-backups/dayflow-<timestamp>
+systemctl --user start dayflow-capture.service dayflow-summarize.timer
+```
+
+Restore refuses to overwrite a live database without `--force` and rejects
+backups from a newer engine schema. The config file is restored manually —
+API keys are redacted from backups on purpose, so re-set them with
+`dayflow config set openrouter_api_key <key>`.
+
 ## Privacy
 
 - `dayflow pause` (or right-click the bar widget) drops a flag file the daemon checks before every capture.
@@ -176,11 +220,17 @@ Capture goes through `grim` → the compositor's screencopy protocol, which is h
 ## MCP / agent access
 
 `dayflow mcp` is a stdio MCP server exposing `get_timeline`, `get_status`,
-`search_journal`, `get_events`, `get_usage`, `get_standup`, and `get_insights`.
-See [AGENTS.md](AGENTS.md) for the agent contract (read rules, schema, behavior).
+`search_journal`, `get_events`, `get_usage`, `get_stats`, `get_standup`,
+`get_insights`, and `chat`. All tools except `chat` are pure reads; `chat`
+writes conversation history and calls the configured AI provider. Use
+`--read-only` (or `DAYFLOW_MCP_READONLY=1`) to hide and block `chat`.
+See [docs/agent-contract.md](docs/agent-contract.md) for the agent contract
+(read rules, schema, Tailscale/remote access).
 
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp
+# remote over Tailscale SSH (never Funnel):
+claude mcp add dayflow-remote -- ssh <host>.<tailnet>.ts.net ~/.local/bin/dayflow mcp --read-only
 ```
 
 ## Testing

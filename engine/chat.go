@@ -41,6 +41,8 @@ type ChatResponse struct {
 	Messages         []Message `json:"messages,omitempty"`
 	PromptTokens     int       `json:"prompt_tokens"`
 	CompletionTokens int       `json:"completion_tokens"`
+	Provider         string    `json:"provider"`
+	Model            string    `json:"model"`
 }
 
 // createConversation starts a new conversation with the given title.
@@ -437,13 +439,18 @@ func chatWithJournal(db *sql.DB, cfg Config, conversationID int64, userMessage s
 		}
 	}
 	conv, _ = getConversation(db, conversationID)
-	return &ChatResponse{
+	resp := &ChatResponse{
 		ConversationID:   conversationID,
 		Reply:            reply,
 		Messages:         conv.Messages,
 		PromptTokens:     totalPT,
 		CompletionTokens: totalCT,
-	}, nil
+	}
+	if p, err := providerForTask(cfg, "chat"); err == nil {
+		resp.Provider = p.ID
+		resp.Model = p.Model
+	}
+	return resp, nil
 }
 
 // convIDFromArg turns an MCP/float conversation id into an int64.

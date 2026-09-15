@@ -34,6 +34,7 @@ Query:
   standup draft [--date YYYY-MM-DD]   Print the saved standup draft as JSON
   standup save [--date D] [--highlights S] [--tasks S] [--blockers S]
                [--priorities S]       Save the editable standup draft
+  goal [set <text>|done|clear] [--date D] [--json]   Today's day goal
   insights [day|week|month] [--json]  Focus, category, app, and distraction analytics
   review [day|week|month] [--json]  AI-generated weekly review with corrections and advice
 
@@ -63,12 +64,18 @@ Control:
   week | month [--json]   Timeline rollups
   weekly [--json]        Weekly analytics payload (donut, treemap, context shifts, highlights)
   export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
-  mcp                     Run the MCP server over stdio (for agents)
+  mcp [--read-only]       Run the MCP server over stdio (for agents);
+                          --read-only hides and blocks the chat tool
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
   search <query>          Search block titles, summaries, and apps
   chat [message] [--conversation-id N] [--json]  Ask a question about the journal
   conversations [--json]  List saved chat conversations
+  conversation <id> [--json]  Print one conversation's messages
   retry                   Reset failed/dead blocks for re-summarization
+  reconcile [--dry-run]   Report or quarantine frame files missing from the index
+  backup [dir] [--no-frames]  Snapshot db + config (redacted) + frames to dir
+  restore <dir> [--force] Restore a backup (stop capture service first)
+  backup-verify <dir>     Check a backup's manifest and db integrity
   scrub <query>           Delete blocks whose title or summary contains <query>
   edit <start> <field> <value>   Correct a block's title, category, summary,
                           or productive flag. <start> is a Unix timestamp or
@@ -78,7 +85,8 @@ Control:
 Setup & health:
   setup                   Interactive AI-provider onboarding (OpenRouter or local endpoint)
   models                  List vision-capable models on your OpenRouter account
-  doctor                  Check session, grim, key, model, and endpoint support
+  doctor [--json]         Check session, grim, key, model, and endpoint support
+  detect [--json]         Probe for local model endpoints (Ollama, LM Studio)
 
 Config: %s
 Data:   %s
@@ -343,7 +351,7 @@ func main() {
 		var sub string
 		var rest []string
 		for i, a := range args {
-			if i == 0 && a[0] != '-' {
+			if i == 0 && a != "" && a[0] != '-' {
 				sub = a
 			} else {
 				rest = append(rest, a)
@@ -388,6 +396,65 @@ func main() {
 			json.NewEncoder(os.Stdout).Encode(j)
 		} else {
 			fmt.Print(md)
+		}
+
+	case "goal":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		// goal [set <text>|done|clear] [--date YYYY-MM-DD]
+		var sub string
+		var rest []string
+		for i, a := range args {
+			if i == 0 && a != "" && a[0] != '-' {
+				sub = a
+			} else {
+				rest = append(rest, a)
+			}
+		}
+		date := flagValue(rest, "--date")
+		if date == "" {
+			date = time.Now().Format("2006-01-02")
+		}
+		switch sub {
+		case "set":
+			text := ""
+			for i := 0; i < len(rest); i++ {
+				a := rest[i]
+				if a == "--date" {
+					i++
+					continue
+				}
+				if a[0] != '-' {
+					text = a
+					break
+				}
+			}
+			if text == "" {
+				fatal(fmt.Errorf("goal set requires text: dayflow goal set \"...\" [--date D]"))
+			}
+			fatal(setGoal(db, date, text))
+		case "done":
+			fatal(completeGoal(db, date, true))
+		case "clear":
+			fatal(completeGoal(db, date, false))
+		case "":
+			// show
+		default:
+			usage()
+		}
+		g, err := getGoal(db, date)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(g)
+		} else if g.Goal == "" {
+			fmt.Println("no goal set for", date)
+		} else {
+			mark := " "
+			if g.Completed {
+				mark = "✓"
+			}
+			fmt.Printf("[%s] %s — %s\n", mark, date, g.Goal)
 		}
 
 	case "insights":
@@ -538,6 +605,35 @@ func main() {
 			}
 		}
 
+	case "conversation":
+		// conversation <id> [--json] — print one thread's messages
+		var pos []string
+		for _, a := range args {
+			if a[0] != '-' {
+				pos = append(pos, a)
+			}
+		}
+		if len(pos) == 0 {
+			fatal(fmt.Errorf("conversation requires an id"))
+		}
+		convID, err := strconv.ParseInt(pos[0], 10, 64)
+		fatal(err)
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		conv, err := getConversation(db, convID)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(conv)
+		} else {
+			fmt.Printf("%s\n", conv.Title)
+			for _, m := range conv.Messages {
+				fmt.Printf("\n[%s] %s\n%s\n",
+					time.Unix(m.CreatedAt, 0).Local().Format("15:04"),
+					strings.ToUpper(m.Role), m.Content)
+			}
+		}
+
 	case "scrub":
 		if len(args) == 0 || args[0][0] == '-' {
 			usage()
@@ -613,6 +709,78 @@ func main() {
 		fatal(err)
 		fmt.Printf("reset %d failed/dead block(s) for re-summarization\n", n)
 
+	case "reconcile":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		dry := hasFlag(args, "--dry-run")
+		res, err := reconcileFrames(db, cfg, dry)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(res)
+		} else if dry {
+			fmt.Printf("dry run: %d orphan file(s) under %s, no changes made\n", len(res.Orphans), framesDir())
+			for _, p := range res.Orphans {
+				fmt.Println(" ", p)
+			}
+		} else {
+			fmt.Printf("quarantined %d orphan(s), removed %d stale row(s), purged %d expired, skipped %d fresh\n",
+				res.Quarantined, res.StaleRows, res.Purged, res.Skipped)
+		}
+
+	case "backup":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		dest := ""
+		for _, a := range args {
+			if !strings.HasPrefix(a, "-") {
+				dest = a
+				break
+			}
+		}
+		dir, err := runBackup(db, cfg, dest, !hasFlag(args, "--no-frames"))
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(map[string]string{"backup": dir})
+		} else {
+			fmt.Printf("backup written to %s\n", dir)
+		}
+
+	case "restore":
+		dir := ""
+		for _, a := range args {
+			if !strings.HasPrefix(a, "-") {
+				dir = a
+				break
+			}
+		}
+		if dir == "" {
+			fatal(fmt.Errorf("restore requires a backup directory"))
+		}
+		fatal(runRestore(dir, hasFlag(args, "--force")))
+		fmt.Println("restored — restart dayflow-capture.service to resume")
+
+	case "backup-verify":
+		dir := ""
+		for _, a := range args {
+			if !strings.HasPrefix(a, "-") {
+				dir = a
+				break
+			}
+		}
+		if dir == "" {
+			fatal(fmt.Errorf("backup-verify requires a backup directory"))
+		}
+		m, err := backupVerify(dir)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(m)
+		} else {
+			fmt.Printf("ok  %s (engine %s, schema v%d, %d blocks, %d frames)\n",
+				dir, m.EngineVersion, m.SchemaVersion, m.Blocks, m.FramesCount)
+		}
+
 	case "export":
 		// export [day|YYYY-MM-DD|week|month] [--copy]
 		db, err := openDB()
@@ -622,8 +790,11 @@ func main() {
 		label := "dayflow"
 		now := time.Now()
 		sel := "today"
-		for _, a := range args {
-			if a[0] != '-' {
+		for i, a := range args {
+			if a == "--out" || (i > 0 && args[i-1] == "--out") {
+				continue // flag or flag value, not a range
+			}
+			if a != "" && a[0] != '-' {
 				sel = a
 			}
 		}
@@ -649,7 +820,16 @@ func main() {
 		blocks, err := blocksBetween(db, start, end)
 		fatal(err)
 		md := markdownTimeline(blocks, label)
-		if hasFlag(args, "--copy") {
+		out := ""
+		for i, a := range args {
+			if a == "--out" && i+1 < len(args) {
+				out = args[i+1]
+			}
+		}
+		if out != "" {
+			fatal(writeExportFile(out, []byte(md)))
+			fmt.Println("wrote", out)
+		} else if hasFlag(args, "--copy") {
 			c := exec.Command("wl-copy")
 			c.Stdin = strings.NewReader(md)
 			fatal(c.Run())
@@ -668,14 +848,16 @@ func main() {
 		fatal(runProvider(cfg, pargs, jsonOut))
 
 	case "mcp":
-		fatal(runMCP(cfg))
+		fatal(runMCP(cfg, hasFlag(args, "--read-only") || os.Getenv("DAYFLOW_MCP_READONLY") == "1"))
 	case "tui":
 		fatal(runTUI(cfg))
 
 	case "setup":
 		fatal(runSetup())
 	case "doctor":
-		runDoctor(cfg)
+		runDoctor(cfg, jsonOut)
+	case "detect":
+		runDetect(jsonOut)
 	case "models":
 		if len(args) >= 1 && args[0] == "--json" {
 			printModelPresets()

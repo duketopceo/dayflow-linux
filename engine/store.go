@@ -3,12 +3,18 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
+// schemaVersion is the highest migration this binary knows how to apply.
+// Bump it and add an applyMigration case when the schema changes.
+const schemaVersion = 2
+
+// schema is the base (v1) schema: capture and journal tables only.
 const schema = `
 CREATE TABLE IF NOT EXISTS frames (
   id   INTEGER PRIMARY KEY,
@@ -53,7 +59,11 @@ CREATE TABLE IF NOT EXISTS api_calls (
   error             TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS api_calls_ts ON api_calls(ts);
+`
 
+// schemaV2 is migration version 2: chat, standup, journal, goals, LLM-call
+// logging, and block-edit overlay tables.
+const schemaV2 = `
 -- Conversations for the chat-with-your-journal feature.
 CREATE TABLE IF NOT EXISTS chat_conversations (
   id         INTEGER PRIMARY KEY,
@@ -129,35 +139,145 @@ CREATE TABLE IF NOT EXISTS block_edits (
 CREATE INDEX IF NOT EXISTS block_edits_start_ts ON block_edits(start_ts);
 `
 
-// migrations adds columns to existing databases; each is ignored if already applied.
-var migrations = []string{
-	`ALTER TABLE frames ADD COLUMN app TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE blocks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
-	`ALTER TABLE blocks ADD COLUMN app TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE blocks ADD COLUMN activities TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE blocks ADD COLUMN productive INTEGER DEFAULT NULL`,
+// columnPatches adds columns to databases created before the columns existed.
+// Each is applied only when the column is actually missing.
+var columnPatches = []struct {
+	table, column, ddl string
+}{
+	{"frames", "app", `ALTER TABLE frames ADD COLUMN app TEXT NOT NULL DEFAULT ''`},
+	{"blocks", "attempts", `ALTER TABLE blocks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`},
+	{"blocks", "app", `ALTER TABLE blocks ADD COLUMN app TEXT NOT NULL DEFAULT ''`},
+	{"blocks", "activities", `ALTER TABLE blocks ADD COLUMN activities TEXT NOT NULL DEFAULT ''`},
+	{"blocks", "productive", `ALTER TABLE blocks ADD COLUMN productive INTEGER DEFAULT NULL`},
 }
 
-func migrate(db *sql.DB) {
-	for _, m := range migrations {
-		db.Exec(m) // duplicate-column errors are expected and ignored
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
 	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func applyColumnPatches(db *sql.DB) error {
+	for _, p := range columnPatches {
+		has, err := hasColumn(db, p.table, p.column)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := db.Exec(p.ddl); err != nil {
+			return fmt.Errorf("add column %s.%s: %w", p.table, p.column, err)
+		}
+	}
+	return nil
+}
+
+// applyMigration runs one schema version's statements plus its version stamp
+// in a single transaction.
+func applyMigration(db *sql.DB, v int) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	switch v {
+	case 2:
+		if _, err := tx.Exec(schemaV2); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("no migration defined for schema version %d", v)
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, v, time.Now().Unix()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// migrate brings the database to schemaVersion. It never drops data and
+// returns the first real error rather than continuing on a partial schema.
+func migrate(db *sql.DB) error {
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
+		return err
+	}
+	var cur int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&cur); err != nil {
+		return err
+	}
+	if cur > schemaVersion {
+		return fmt.Errorf("database schema v%d is newer than this binary supports (v%d)", cur, schemaVersion)
+	}
+	// Column patches are idempotent (guarded by hasColumn) and cheap; run them
+	// on every open so any pre-versioning install converges.
+	if err := applyColumnPatches(db); err != nil {
+		return err
+	}
+	if cur == 0 {
+		// Unversioned install (fresh or pre-1.0.1): the base schema plus
+		// column patches above constitute v1.
+		if _, err := db.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)`, time.Now().Unix()); err != nil {
+			return err
+		}
+		cur = 1
+	}
+	for v := cur + 1; v <= schemaVersion; v++ {
+		if err := applyMigration(db, v); err != nil {
+			return fmt.Errorf("migration to schema v%d: %w", v, err)
+		}
+	}
+	return nil
+}
+
+// dbSchemaVersion reports the recorded schema version, or 0 when the database
+// has never been versioned (unmigrated or absent).
+func dbSchemaVersion(db *sql.DB) int {
+	var v int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v); err != nil {
+		return 0
+	}
+	return v
 }
 
 func openDB() (*sql.DB, error) {
 	if err := os.MkdirAll(dataDir(), 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbPath()+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", dbPath()+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
 	}
-	migrate(db)
 	return db, nil
+}
+
+// openDBReadOnly opens the database without creating dirs or running
+// migrations — used by `mcp --read-only` so a read-only agent session can
+// never write, even via schema changes. Errors if the database is missing.
+func openDBReadOnly() (*sql.DB, error) {
+	if _, err := os.Stat(dbPath()); err != nil {
+		return nil, err
+	}
+	return sql.Open("sqlite", "file:"+dbPath()+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 }
 
 func insertFrame(db *sql.DB, ts time.Time, path string) error {
