@@ -30,6 +30,7 @@ Panel {
   property var configDraft: ({})
   property bool configLoaded: false
   property var standup: ({ yesterday: { date: "", total_minutes: 0, entries: [] }, today: { date: "", total_minutes: 0, entries: [] } })
+  property var dayGoal: ({ date: "", goal: "", completed: false })
   property var draft: ({ date: "", highlights: "", tasks: "", blockers: "", priorities: "" })
   property bool draftDirty: false
   property var workflow: ({ date: "", slot_minutes: 15, total_minutes: 0, slots: [], categories: [] })
@@ -68,6 +69,7 @@ Panel {
   function refreshForTab(tab) {
     if (tab === "standup") {
       if (!standupFetchProc.running) standupFetchProc.running = true
+      if (!goalProc.running) goalProc.running = true
     } else if (tab === "week") {
       if (!insightsFetchProc.running) insightsFetchProc.running = true
       if (!weekTimelineProc.running) weekTimelineProc.running = true
@@ -279,6 +281,12 @@ Panel {
       dayflow.framesToday = Number(s.frames_today || 0)
       dayflow.blocksPending = Number(s.blocks_pending || 0)
       dayflow.storageText = s.storage_text || ""
+    } catch (e) {}
+  }
+
+  function applyGoal(raw) {
+    try {
+      dayflow.dayGoal = JSON.parse(raw)
     } catch (e) {}
   }
 
@@ -564,6 +572,23 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyStatus(text)
+    }
+  }
+
+  Process {
+    id: goalProc
+    command: ["dayflow", "goal", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyGoal(text)
+    }
+  }
+
+  Process {
+    id: goalSetProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.applyGoal(text)
     }
   }
 
@@ -1202,6 +1227,76 @@ Panel {
                 }
               }
             }
+          }
+        }
+      }
+
+      // ---- day goal ----
+      Rectangle {
+        width: parent.width
+        height: goalRow.implicitHeight + Style.space(12)
+        radius: Style.cornerRadius
+        color: dayflow.fgFill(0.04)
+        border.color: dayflow.fgFill(0.08)
+
+        Row {
+          id: goalRow
+          width: parent.width - Style.space(12)
+          anchors.centerIn: parent
+          spacing: Style.space(8)
+
+          Rectangle {
+            width: Style.space(18)
+            height: Style.space(18)
+            radius: Style.space(4)
+            color: dayflow.dayGoal.completed ? dayflow.accentFill(0.4) : "transparent"
+            border.color: dayflow.accentFill(0.6)
+            anchors.verticalCenter: parent.verticalCenter
+
+            Text {
+              anchors.centerIn: parent
+              visible: dayflow.dayGoal.completed
+              text: "✓"
+              color: dayflow.foreground
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              enabled: dayflow.dayGoal.goal !== ""
+              onClicked: {
+                goalSetProc.command = ["dayflow", "goal",
+                  dayflow.dayGoal.completed ? "clear" : "done", "--json"]
+                goalSetProc.running = true
+              }
+            }
+          }
+
+          TextInput {
+            width: parent.width - Style.space(30)
+            text: dayflow.dayGoal.goal
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.body
+            clip: true
+            selectByMouse: true
+            anchors.verticalCenter: parent.verticalCenter
+            Keys.onReturnPressed: function(event) {
+              goalSetProc.command = ["dayflow", "goal", "set", text, "--json"]
+              goalSetProc.running = true
+              focus = false
+            }
+          }
+
+          Text {
+            visible: dayflow.dayGoal.goal === ""
+            text: "Today's goal…"
+            color: dayflow.dim
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            anchors.verticalCenter: parent.verticalCenter
+            // overlaps the empty TextInput — clicks pass to it via z-order
+            z: -1
           }
         }
       }

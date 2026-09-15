@@ -34,6 +34,7 @@ Query:
   standup draft [--date YYYY-MM-DD]   Print the saved standup draft as JSON
   standup save [--date D] [--highlights S] [--tasks S] [--blockers S]
                [--priorities S]       Save the editable standup draft
+  goal [set <text>|done|clear] [--date D] [--json]   Today's day goal
   insights [day|week|month] [--json]  Focus, category, app, and distraction analytics
   review [day|week|month] [--json]  AI-generated weekly review with corrections and advice
 
@@ -394,6 +395,65 @@ func main() {
 			json.NewEncoder(os.Stdout).Encode(j)
 		} else {
 			fmt.Print(md)
+		}
+
+	case "goal":
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		// goal [set <text>|done|clear] [--date YYYY-MM-DD]
+		var sub string
+		var rest []string
+		for i, a := range args {
+			if i == 0 && a[0] != '-' {
+				sub = a
+			} else {
+				rest = append(rest, a)
+			}
+		}
+		date := flagValue(rest, "--date")
+		if date == "" {
+			date = time.Now().Format("2006-01-02")
+		}
+		switch sub {
+		case "set":
+			text := ""
+			for i := 0; i < len(rest); i++ {
+				a := rest[i]
+				if a == "--date" {
+					i++
+					continue
+				}
+				if a[0] != '-' {
+					text = a
+					break
+				}
+			}
+			if text == "" {
+				fatal(fmt.Errorf("goal set requires text: dayflow goal set \"...\" [--date D]"))
+			}
+			fatal(setGoal(db, date, text))
+		case "done":
+			fatal(completeGoal(db, date, true))
+		case "clear":
+			fatal(completeGoal(db, date, false))
+		case "":
+			// show
+		default:
+			usage()
+		}
+		g, err := getGoal(db, date)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(g)
+		} else if g.Goal == "" {
+			fmt.Println("no goal set for", date)
+		} else {
+			mark := " "
+			if g.Completed {
+				mark = "✓"
+			}
+			fmt.Printf("[%s] %s — %s\n", mark, date, g.Goal)
 		}
 
 	case "insights":
