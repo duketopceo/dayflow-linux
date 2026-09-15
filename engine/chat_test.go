@@ -100,6 +100,25 @@ func TestChatWithJournalPlainText(t *testing.T) {
 	}
 }
 
+func TestChatResponseCarriesProviderAttribution(t *testing.T) {
+	srv, _ := chatTestServer([]string{"Done."})
+	defer srv.Close()
+	cfg := chatTestConfig(t, srv)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	res, err := chatWithJournal(db, cfg, 0, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Provider != "test" || res.Model != "test-model" {
+		t.Fatalf("attribution = %q/%q, want test/test-model", res.Provider, res.Model)
+	}
+}
+
 func TestChatWithJournalFetchTimeline(t *testing.T) {
 	srv, bodies := chatTestServer([]string{
 		`{"tool":"fetchTimeline","date":"today"}`,

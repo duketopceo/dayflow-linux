@@ -20,6 +20,19 @@ Flickable {
   property var conversations: []
   property string chatInput: ""
   property string lastSent: ""
+  property string chatAttribution: ""
+
+  // Lightweight markdown-ish formatting for assistant replies: bold, inline
+  // code, and "- " bullets. Input is HTML-escaped first.
+  function fmtMsg(s) {
+    var esc = String(s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    esc = esc.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    esc = esc.replace(/`([^`]+)`/g, "<font face=\"monospace\">$1</font>")
+    esc = esc.replace(/\n- /g, "<br/>• ").replace(/^- /g, "• ")
+    esc = esc.replace(/\n/g, "<br/>")
+    return esc
+  }
 
   function applyChat(raw) {
     root.chatLoading = false
@@ -27,6 +40,7 @@ Flickable {
       var d = JSON.parse(raw)
       root.chatMessages = d.messages || []
       root.chatConversation = Number(d.conversation_id || 0)
+      root.chatAttribution = d.provider ? d.provider + " · " + (d.model || "") : ""
       if (dayflow) dayflow.notice = ""
       conversationsProc.running = true // a new conversation may have been created
     } catch (e) {
@@ -182,13 +196,68 @@ Flickable {
             visible: parent.showThis
             anchors.fill: parent
             anchors.margins: Style.space(8)
+            textFormat: Text.RichText
             text: showThis
-              ? ((modelData.role === "assistant" ? "Assistant" : "You") + ":\n" + modelData.content)
+              ? (modelData.role === "assistant"
+                  ? "<b>Assistant</b>:<br/>" + root.fmtMsg(modelData.content)
+                  : "<b>You</b>:<br/>" + root.fmtMsg(modelData.content))
               : ""
             color: dayflow ? dayflow.foreground : Color.foreground
             font.family: dayflow ? dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
+          }
+        }
+      }
+    }
+
+    Text {
+      visible: root.chatAttribution !== ""
+      width: parent.width
+      text: "via " + root.chatAttribution
+      color: dayflow ? dayflow.dim : Color.dim
+      font.family: dayflow ? dayflow.fontFamily : Style.font.family
+      font.pixelSize: Style.font.caption
+    }
+
+    Flow {
+      visible: root.chatMessages.length === 0 && !root.chatLoading
+      width: parent.width
+      spacing: Style.space(6)
+
+      Repeater {
+        model: [
+          "What did I work on yesterday?",
+          "Draft my standup",
+          "Where did I lose focus this week?",
+          "Summarize today"
+        ]
+        delegate: Rectangle {
+          height: Style.space(26)
+          width: chipText.implicitWidth + Style.space(16)
+          radius: Style.cornerRadius
+          color: chipMouse.containsMouse
+            ? (dayflow ? dayflow.accentFill(0.10) : "transparent")
+            : (dayflow ? dayflow.fgFill(0.04) : "transparent")
+          border.color: dayflow ? dayflow.fgFill(0.12) : "transparent"
+
+          Text {
+            id: chipText
+            anchors.centerIn: parent
+            text: modelData
+            color: dayflow ? dayflow.dim : Color.dim
+            font.family: dayflow ? dayflow.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          MouseArea {
+            id: chipMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: {
+              root.chatInput = modelData
+              root.sendChat()
+            }
           }
         }
       }
