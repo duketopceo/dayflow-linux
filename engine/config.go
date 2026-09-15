@@ -81,9 +81,10 @@ func dataDir() string {
 	return filepath.Join(d, ".local", "share", "dayflow")
 }
 
-func framesDir() string { return filepath.Join(dataDir(), "frames") }
-func dbPath() string    { return filepath.Join(dataDir(), "dayflow.db") }
-func pausePath() string { return filepath.Join(dataDir(), "PAUSED") }
+func framesDir() string  { return filepath.Join(dataDir(), "frames") }
+func exportsDir() string { return filepath.Join(dataDir(), "exports") }
+func dbPath() string     { return filepath.Join(dataDir(), "dayflow.db") }
+func pausePath() string  { return filepath.Join(dataDir(), "PAUSED") }
 func configPath() string {
 	if p := os.Getenv("DAYFLOW_CONFIG"); p != "" {
 		return p

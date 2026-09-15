@@ -51,6 +51,17 @@ ssh <host>.<tailnet>.ts.net dayflow today
 ssh <host>.<tailnet>.ts.net dayflow status
 ```
 
+Pull a markdown week/day timeline over SSH (good for agents on other
+devices, e.g. feeding a work journal to another machine):
+
+```sh
+ssh <host>.<tailnet>.ts.net dayflow export week          # on-demand, always fresh
+ssh <host>.<tailnet>.ts.net cat ~/.local/share/dayflow/exports/week.md   # cached, refreshed daily by dayflow-export.timer
+```
+
+The export file is written `0600` under `0700` `exports/` and contains
+journal text — treat it with the same care as the database.
+
 MCP over SSH stdio (launches `dayflow mcp` on the remote host; recommend
 `--read-only` for untrusted or automation clients):
 

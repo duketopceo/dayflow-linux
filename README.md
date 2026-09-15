@@ -137,6 +137,7 @@ dayflow usage                  # token totals across all API calls
 dayflow blocks                 # failed summaries (auto-retried)
 dayflow week | month           # multi-day rollups
 dayflow export week [--copy]   # markdown export to stdout (or clipboard)
+dayflow export week --out <path> # atomic file export (0600; used by dayflow-export.timer)
 dayflow search <query>         # search titles, summaries, apps
 dayflow retry                  # reset failed/dead blocks for re-summarization
 dayflow reconcile [--dry-run]  # report/quarantine frame files missing from the index

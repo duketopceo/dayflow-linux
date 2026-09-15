@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -117,6 +119,25 @@ func mergeCards(blocks []Block) []Card {
 		})
 	}
 	return out
+}
+
+// writeExportFile writes markdown to path atomically (tmp + rename), creating
+// parent dirs at 0700 and the file at 0600 — the export carries journal text.
+func writeExportFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // markdownTimeline renders merged activity cards grouped by day as markdown.

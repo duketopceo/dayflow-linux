@@ -729,7 +729,14 @@ func main() {
 		label := "dayflow"
 		now := time.Now()
 		sel := "today"
-		for _, a := range args {
+		for i, a := range args {
+			if a == "--out" {
+				i++ // skip flag value
+				continue
+			}
+			if i > 0 && args[i-1] == "--out" {
+				continue // flag value, not a range
+			}
 			if a[0] != '-' {
 				sel = a
 			}
@@ -756,7 +763,16 @@ func main() {
 		blocks, err := blocksBetween(db, start, end)
 		fatal(err)
 		md := markdownTimeline(blocks, label)
-		if hasFlag(args, "--copy") {
+		out := ""
+		for i, a := range args {
+			if a == "--out" && i+1 < len(args) {
+				out = args[i+1]
+			}
+		}
+		if out != "" {
+			fatal(writeExportFile(out, []byte(md)))
+			fmt.Println("wrote", out)
+		} else if hasFlag(args, "--copy") {
 			c := exec.Command("wl-copy")
 			c.Stdin = strings.NewReader(md)
 			fatal(c.Run())
