@@ -39,11 +39,14 @@ type SankeyLink struct {
 // both names without duplicating the structure.
 type ContextShift = SankeyLink
 
-// HourHeatmap is one hour bucket in the week heatmap.
+// HourHeatmap is one hour bucket in the week heatmap. Color follows the
+// configured category color (falls back to the default palette) so the
+// panel doesn't re-derive colors from a hardcoded list.
 type HourHeatmap struct {
 	Hour     int     `json:"hour"`
 	Category string  `json:"category"`
 	Minutes  float64 `json:"minutes"`
+	Color    string  `json:"color"`
 }
 
 // DayHeatmap is one day bucket in the week heatmap.
@@ -101,7 +104,7 @@ func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPa
 		}
 	}
 	p.ContextShifts, p.ContextShiftCount = buildContextShifts(filtered)
-	p.Heatmap = buildHeatmap(filtered, start)
+	p.Heatmap = buildHeatmap(filtered, start, cfg)
 
 	highlights := buildHighlights(in)
 	prev, _ := previousWeekInsights(db, cfg, start)
@@ -212,7 +215,7 @@ func buildContextShifts(blocks []Block) ([]ContextShift, int) {
 	return out, total
 }
 
-func buildHeatmap(blocks []Block, start time.Time) []DayHeatmap {
+func buildHeatmap(blocks []Block, start time.Time, cfg Config) []DayHeatmap {
 	var days []DayHeatmap
 	for d := 0; d < 7; d++ {
 		ds := start.Add(time.Duration(d) * 24 * time.Hour)
@@ -245,7 +248,11 @@ func buildHeatmap(blocks []Block, start time.Time) []DayHeatmap {
 					best = b.Category
 				}
 			}
-			hours = append(hours, HourHeatmap{Hour: h, Category: best, Minutes: round1(total)})
+			col := ""
+			if best != "" {
+				col = categoryColorHex(best, cfg)
+			}
+			hours = append(hours, HourHeatmap{Hour: h, Category: best, Minutes: round1(total), Color: col})
 		}
 		days = append(days, DayHeatmap{Day: d, Hours: hours})
 	}
