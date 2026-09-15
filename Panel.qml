@@ -1700,6 +1700,99 @@ Panel {
             }
 
             Text {
+              visible: dayflow.weeklyPayload.heatmap.length > 0
+              text: "Focus heatmap"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Column {
+              visible: dayflow.weeklyPayload.heatmap.length > 0
+              width: parent.width
+              spacing: 2
+
+              Repeater {
+                model: dayflow.weeklyPayload.heatmap
+                delegate: Row {
+                  id: heatRow
+                  property var dayData: modelData
+                  width: parent.width
+                  spacing: 2
+
+                  Text {
+                    width: Style.space(28)
+                    text: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][heatRow.dayData.day] || ""
+                    color: dayflow.dim
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Row {
+                    width: heatRow.width - Style.space(28) - parent.spacing
+                    spacing: 1
+
+                    Repeater {
+                      model: heatRow.dayData.hours || []
+                      delegate: Rectangle {
+                        width: (heatRow.width - Style.space(28) - 2 - 23) / 24
+                        height: Style.space(12)
+                        radius: 2
+                        color: modelData.category !== "" && modelData.minutes > 0
+                          ? Qt.rgba(
+                              dayflow.categoryColor(modelData.category).r,
+                              dayflow.categoryColor(modelData.category).g,
+                              dayflow.categoryColor(modelData.category).b,
+                              0.15 + 0.85 * Math.min(1, modelData.minutes / 60))
+                          : dayflow.fgFill(0.03)
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: dayflow.weeklyPayload.context_shifts.length > 0
+              text: "Context shifts"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Column {
+              visible: dayflow.weeklyPayload.context_shifts.length > 0
+              width: parent.width
+              spacing: Style.space(4)
+
+              Repeater {
+                model: dayflow.weeklyPayload.context_shifts.slice(0, 6)
+                delegate: Row {
+                  width: parent.width
+                  spacing: Style.space(6)
+
+                  Text {
+                    text: (modelData.source || "?") + " → " + (modelData.target || "?")
+                    color: dayflow.foreground
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    text: modelData.count + "×"
+                    color: dayflow.dim
+                    font.family: dayflow.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+              }
+            }
+
+            Text {
               visible: dayflow.weeklyPayload.highlights.length > 0
               text: "Highlights"
               color: dayflow.foreground
