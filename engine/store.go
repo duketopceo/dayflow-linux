@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS blocks (
   created_at  INTEGER NOT NULL,
   productive  INTEGER DEFAULT NULL
 );
+CREATE INDEX IF NOT EXISTS blocks_status ON blocks(status);
 
 -- Full audit log: every capture decision, pause change, summarizer run, error.
 CREATE TABLE IF NOT EXISTS events (

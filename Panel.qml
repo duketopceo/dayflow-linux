@@ -41,6 +41,7 @@ Panel {
   property string weekEnd: ""
   property string weekSummary: ""
   property bool weekSummaryLoading: false
+  property bool timelineLoading: false
   property var weeklyPayload: ({ start: "", end: "", total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, category_donut: [], app_treemap: [], context_shifts: [], context_shift_count: 0, top_distractions: [], focus_blocks: [], highlights: [], suggestions: [], heatmap: [] })
   property var spans: []
   property int dayOffset: 0
@@ -160,6 +161,7 @@ Panel {
 
   function loadTimeline() {
     timelineProc.command = ["dayflow", "timeline", "--json", dayflow.viewDateStr()]
+    dayflow.timelineLoading = true
     if (!timelineProc.running) timelineProc.running = true
     dayflow.loadWorkflow()
   }
@@ -258,6 +260,7 @@ Panel {
   }
 
   function applyTimeline(raw) {
+    dayflow.timelineLoading = false
     try {
       var d = JSON.parse(raw)
       dayflow.blocks = d.blocks || []
@@ -509,6 +512,21 @@ Panel {
     return Qt.rgba(c.r, c.g, c.b, 0.15)
   }
 
+  // payloadColor prefers the engine-emitted hex (which honors custom category
+  // colors) and falls back to the hardcoded name palette.
+  function payloadColor(hex, name) {
+    if (hex && hex !== "") {
+      var rgb = dayflow._rgb(hex)
+      return Qt.rgba(rgb[0], rgb[1], rgb[2], 1.0)
+    }
+    return dayflow.categoryColor(name)
+  }
+
+  function payloadFill(hex, name, alpha) {
+    var c = dayflow.payloadColor(hex, name)
+    return Qt.rgba(c.r, c.g, c.b, alpha)
+  }
+
   function _rgb(c) {
     if (typeof c === "string") {
       var h = c.charAt(0) === "#" ? c.substring(1) : c
@@ -583,6 +601,9 @@ Panel {
       waitForEnd: true
       onStreamFinished: dayflow.applyGoal(text)
     }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) dayflow.notice = "goal load failed"
+    }
   }
 
   Process {
@@ -590,6 +611,9 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyGoal(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) dayflow.notice = "goal save failed"
     }
   }
 
@@ -600,6 +624,9 @@ Panel {
       waitForEnd: true
       onStreamFinished: dayflow.applyStandup(text)
     }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) dayflow.notice = "standup load failed"
+    }
   }
 
   Process {
@@ -608,6 +635,9 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyWorkflow(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) dayflow.notice = "grid load failed"
     }
   }
 
@@ -636,6 +666,9 @@ Panel {
       waitForEnd: true
       onStreamFinished: dayflow.applyInsights(text)
     }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) dayflow.notice = "insights load failed"
+    }
   }
 
   Process {
@@ -644,6 +677,9 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyWeekTimeline(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) dayflow.notice = "week timeline load failed"
     }
   }
 
@@ -654,6 +690,12 @@ Panel {
       waitForEnd: true
       onStreamFinished: dayflow.applyWeekReview(text)
     }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        dayflow.weekSummaryLoading = false
+        dayflow.notice = "weekly review failed"
+      }
+    }
   }
 
   Process {
@@ -662,6 +704,9 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyWeeklyPayload(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) dayflow.notice = "weekly stats load failed"
     }
   }
 
@@ -747,14 +792,6 @@ Panel {
   }
 
   Process {
-    id: insightsProc
-    command: ["bash", "-c", "dayflow insights | wl-copy"]
-    onExited: function(exitCode) {
-      dayflow.notice = exitCode === 0 ? "copied daily insights" : "insights copy failed"
-    }
-  }
-
-  Process {
     id: configProc
     command: ["dayflow", "config", "--json"]
     stdout: StdioCollector {
@@ -790,6 +827,12 @@ Panel {
         id: col
         width: parent.width
         spacing: Style.space(10)
+
+        BusyBar {
+          width: parent.width
+          dayflow: dayflow
+          active: dayflow.timelineLoading
+        }
 
         // ---- day switcher ----
         Row {
@@ -1186,6 +1229,11 @@ Panel {
         width: parent.width
         spacing: Style.space(10)
 
+        BusyBar {
+          width: parent.width
+          dayflow: dayflow
+          active: standupFetchProc.running || goalProc.running
+        }
 
       Component {
         id: draftField
@@ -1614,8 +1662,15 @@ Panel {
         width: parent.width
         spacing: Style.space(10)
 
+        BusyBar {
+          width: parent.width
+          dayflow: dayflow
+          active: weeklyProc.running || weekTimelineProc.running || insightsFetchProc.running
+        }
+
         Text {
           visible: dayflow.insights.total_minutes === 0
+            && !weeklyProc.running && !weekTimelineProc.running && !insightsFetchProc.running
           width: parent.width
           text: "No weekly data yet."
           color: dayflow.dim
@@ -1728,7 +1783,7 @@ Panel {
                 delegate: Rectangle {
                   width: donutRow.width * (modelData.percentage / 100)
                   height: parent.height
-                  color: dayflow.categoryColor(modelData.name)
+                  color: dayflow.payloadColor(modelData.color, modelData.name)
                 }
               }
             }
@@ -1743,7 +1798,7 @@ Panel {
                   width: Style.space(10)
                   height: Style.space(10)
                   radius: Style.space(2)
-                  color: dayflow.categoryColor(modelData.name)
+                  color: dayflow.payloadColor(modelData.color, modelData.name)
                   anchors.verticalCenter: parent.verticalCenter
                 }
 
@@ -1837,10 +1892,7 @@ Panel {
                         height: Style.space(12)
                         radius: 2
                         color: modelData.category !== "" && modelData.minutes > 0
-                          ? Qt.rgba(
-                              dayflow.categoryColor(modelData.category).r,
-                              dayflow.categoryColor(modelData.category).g,
-                              dayflow.categoryColor(modelData.category).b,
+                          ? dayflow.payloadFill(modelData.color, modelData.category,
                               0.15 + 0.85 * Math.min(1, modelData.minutes / 60))
                           : dayflow.fgFill(0.03)
                       }
@@ -2280,501 +2332,6 @@ Panel {
 
   ListModel {
     id: settingsCatModel
-  }
-
-  Component {
-    id: settingsTab
-    Flickable {
-      width: parent.width
-      implicitHeight: Math.min(scol.implicitHeight + Style.space(10), Style.space(420))
-      height: implicitHeight
-      contentHeight: scol.implicitHeight + Style.space(10)
-      clip: true
-
-      Column {
-        id: scol
-        width: parent.width
-        spacing: Style.space(12)
-
-        Text {
-          visible: !dayflow.configLoaded
-          width: parent.width
-          text: "Loading settings..."
-          color: dayflow.dim
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.body
-        }
-
-        Column {
-          visible: dayflow.configLoaded
-          width: parent.width
-          spacing: Style.space(10)
-
-          Text {
-            width: parent.width
-            text: "AI provider"
-            color: dayflow.foreground
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-
-          Rectangle {
-            width: parent.width
-            height: pInput.implicitHeight + Style.space(8)
-            radius: Style.cornerRadius
-            color: dayflow.fgFill(0.04)
-            border.color: dayflow.fgFill(0.12)
-
-            TextInput {
-              id: pInput
-              anchors.fill: parent
-              anchors.margins: Style.space(6)
-              text: dayflow.configDraft.provider || "openrouter"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              onTextChanged: dayflow.configDraft.provider = text
-            }
-          }
-
-          Rectangle {
-            width: parent.width
-            height: mInput.implicitHeight + Style.space(8)
-            radius: Style.cornerRadius
-            color: dayflow.fgFill(0.04)
-            border.color: dayflow.fgFill(0.12)
-
-            TextInput {
-              id: mInput
-              anchors.fill: parent
-              anchors.margins: Style.space(6)
-              text: dayflow.configDraft.model || ""
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              onTextChanged: dayflow.configDraft.model = text
-            }
-          }
-
-          Rectangle {
-            width: parent.width
-            height: keyInput.implicitHeight + Style.space(8)
-            radius: Style.cornerRadius
-            color: dayflow.fgFill(0.04)
-            border.color: dayflow.fgFill(0.12)
-
-            TextInput {
-              id: keyInput
-              anchors.fill: parent
-              anchors.margins: Style.space(6)
-              text: dayflow.configDraft.openrouter_api_key || ""
-              echoMode: TextInput.Password
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              onTextChanged: dayflow.configDraft.openrouter_api_key = text
-            }
-          }
-
-          Rectangle {
-            width: parent.width
-            height: urlInput.implicitHeight + Style.space(8)
-            radius: Style.cornerRadius
-            color: dayflow.fgFill(0.04)
-            border.color: dayflow.fgFill(0.12)
-
-            TextInput {
-              id: urlInput
-              anchors.fill: parent
-              anchors.margins: Style.space(6)
-              text: dayflow.configDraft.api_base_url || ""
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              onTextChanged: dayflow.configDraft.api_base_url = text
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: "Capture"
-            color: dayflow.foreground
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-
-          Row {
-            width: parent.width
-            spacing: Style.space(6)
-
-            Column {
-              width: (parent.width - 2 * parent.spacing) / 3
-              spacing: Style.space(2)
-              Text { text: "Interval (s)"; color: dayflow.dim; font.family: dayflow.fontFamily; font.pixelSize: Style.font.caption }
-              Rectangle {
-                width: parent.width
-                height: ciInput.implicitHeight + Style.space(6)
-                radius: Style.cornerRadius
-                color: dayflow.fgFill(0.04)
-                border.color: dayflow.fgFill(0.12)
-                TextInput {
-                  id: ciInput
-                  anchors.fill: parent
-                  anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.capture_interval_sec !== undefined ? dayflow.configDraft.capture_interval_sec : 10)
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.body
-                  inputMethodHints: Qt.ImhDigitsOnly
-                  onTextChanged: dayflow.configDraft.capture_interval_sec = parseInt(text, 10) || 0
-                }
-              }
-            }
-            Column {
-              width: (parent.width - 2 * parent.spacing) / 3
-              spacing: Style.space(2)
-              Text { text: "Block (min)"; color: dayflow.dim; font.family: dayflow.fontFamily; font.pixelSize: Style.font.caption }
-              Rectangle {
-                width: parent.width
-                height: bmInput.implicitHeight + Style.space(6)
-                radius: Style.cornerRadius
-                color: dayflow.fgFill(0.04)
-                border.color: dayflow.fgFill(0.12)
-                TextInput {
-                  id: bmInput
-                  anchors.fill: parent
-                  anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.block_minutes !== undefined ? dayflow.configDraft.block_minutes : 15)
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.body
-                  inputMethodHints: Qt.ImhDigitsOnly
-                  onTextChanged: dayflow.configDraft.block_minutes = parseInt(text, 10) || 0
-                }
-              }
-            }
-            Column {
-              width: (parent.width - 2 * parent.spacing) / 3
-              spacing: Style.space(2)
-              Text { text: "Frames/block"; color: dayflow.dim; font.family: dayflow.fontFamily; font.pixelSize: Style.font.caption }
-              Rectangle {
-                width: parent.width
-                height: fpbInput.implicitHeight + Style.space(6)
-                radius: Style.cornerRadius
-                color: dayflow.fgFill(0.04)
-                border.color: dayflow.fgFill(0.12)
-                TextInput {
-                  id: fpbInput
-                  anchors.fill: parent
-                  anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.frames_per_block !== undefined ? dayflow.configDraft.frames_per_block : 30)
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.body
-                  inputMethodHints: Qt.ImhDigitsOnly
-                  onTextChanged: dayflow.configDraft.frames_per_block = parseInt(text, 10) || 0
-                }
-              }
-            }
-          }
-
-          Row {
-            width: parent.width
-            spacing: Style.space(6)
-            Column {
-              width: (parent.width - 2 * parent.spacing) / 3
-              spacing: Style.space(2)
-              Text { text: "JPEG quality"; color: dayflow.dim; font.family: dayflow.fontFamily; font.pixelSize: Style.font.caption }
-              Rectangle {
-                width: parent.width
-                height: jqInput.implicitHeight + Style.space(6)
-                radius: Style.cornerRadius
-                color: dayflow.fgFill(0.04)
-                border.color: dayflow.fgFill(0.12)
-                TextInput {
-                  id: jqInput
-                  anchors.fill: parent
-                  anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.jpeg_quality !== undefined ? dayflow.configDraft.jpeg_quality : 55)
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.body
-                  inputMethodHints: Qt.ImhDigitsOnly
-                  onTextChanged: dayflow.configDraft.jpeg_quality = parseInt(text, 10) || 0
-                }
-              }
-            }
-            Column {
-              width: (parent.width - 2 * parent.spacing) / 3
-              spacing: Style.space(2)
-              Text { text: "Retention (days)"; color: dayflow.dim; font.family: dayflow.fontFamily; font.pixelSize: Style.font.caption }
-              Rectangle {
-                width: parent.width
-                height: rdInput.implicitHeight + Style.space(6)
-                radius: Style.cornerRadius
-                color: dayflow.fgFill(0.04)
-                border.color: dayflow.fgFill(0.12)
-                TextInput {
-                  id: rdInput
-                  anchors.fill: parent
-                  anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.retention_days !== undefined ? dayflow.configDraft.retention_days : 7)
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.body
-                  inputMethodHints: Qt.ImhDigitsOnly
-                  onTextChanged: dayflow.configDraft.retention_days = parseInt(text, 10) || 0
-                }
-              }
-            }
-            Column {
-              width: (parent.width - 2 * parent.spacing) / 3
-              spacing: Style.space(2)
-              Text { text: "Max storage (MB)"; color: dayflow.dim; font.family: dayflow.fontFamily; font.pixelSize: Style.font.caption }
-              Rectangle {
-                width: parent.width
-                height: msInput.implicitHeight + Style.space(6)
-                radius: Style.cornerRadius
-                color: dayflow.fgFill(0.04)
-                border.color: dayflow.fgFill(0.12)
-                TextInput {
-                  id: msInput
-                  anchors.fill: parent
-                  anchors.margins: Style.space(4)
-                  text: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 10240)
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.body
-                  inputMethodHints: Qt.ImhDigitsOnly
-                  onTextChanged: dayflow.configDraft.max_storage_mb = parseInt(text, 10) || 0
-                }
-              }
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: "Category buckets"
-            color: dayflow.foreground
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-
-          Text {
-            width: parent.width
-            text: "The model uses these descriptions to classify activity."
-            color: dayflow.dim
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-
-          Repeater {
-            model: settingsCatModel
-            delegate: Column {
-              width: parent.width
-              spacing: Style.space(4)
-
-              Row {
-                width: parent.width
-                spacing: Style.space(6)
-
-                Rectangle {
-                  width: parent.width * 0.28
-                  height: catName.implicitHeight + Style.space(6)
-                  radius: Style.cornerRadius
-                  color: dayflow.fgFill(0.04)
-                  border.color: dayflow.fgFill(0.12)
-                  TextInput {
-                    id: catName
-                    anchors.fill: parent
-                    anchors.margins: Style.space(4)
-                    text: model.name
-                    color: dayflow.foreground
-                    font.family: dayflow.fontFamily
-                    font.pixelSize: Style.font.body
-                    onEditingFinished: settingsCatModel.setProperty(model.index, "name", text)
-                  }
-                }
-
-                Rectangle {
-                  width: parent.width - parent.width * 0.28 - remBtn.width - 2 * parent.spacing
-                  height: catDesc.implicitHeight + Style.space(6)
-                  radius: Style.cornerRadius
-                  color: dayflow.fgFill(0.04)
-                  border.color: dayflow.fgFill(0.12)
-                  TextInput {
-                    id: catDesc
-                    anchors.fill: parent
-                    anchors.margins: Style.space(4)
-                    text: model.description
-                    color: dayflow.foreground
-                    font.family: dayflow.fontFamily
-                    font.pixelSize: Style.font.body
-                    onEditingFinished: settingsCatModel.setProperty(model.index, "description", text)
-                  }
-                }
-
-                Rectangle {
-                  id: remBtn
-                  width: delText.implicitWidth + Style.space(12)
-                  height: catName.height
-                  radius: Style.cornerRadius
-                  color: dayflow.btnBg(maDel.containsMouse)
-                  border.color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
-
-                  Text {
-                    id: delText
-                    anchors.centerIn: parent
-                    text: "×"
-                    color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
-                    font.family: dayflow.fontFamily
-                    font.pixelSize: Style.font.body
-                  }
-                  MouseArea {
-                    id: maDel
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    onClicked: settingsCatModel.remove(model.index)
-                  }
-                }
-              }
-            }
-          }
-
-          Rectangle {
-            width: addBtnText.implicitWidth + Style.space(16)
-            height: addBtnText.implicitHeight + Style.space(8)
-            radius: Style.cornerRadius
-            color: dayflow.btnBg(addMa.containsMouse)
-            border.color: dayflow.accentFill(0.5)
-
-            Text {
-              id: addBtnText
-              anchors.centerIn: parent
-              text: "+ Add category"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-            }
-            MouseArea {
-              id: addMa
-              anchors.fill: parent
-              hoverEnabled: true
-              onClicked: settingsCatModel.append({ name: "", description: "" })
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: "LLM classification instructions"
-            color: dayflow.foreground
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-
-          Text {
-            width: parent.width
-            text: "Extra instructions appended to every summarization prompt."
-            color: dayflow.dim
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-
-          Rectangle {
-            width: parent.width
-            height: Math.min(promptBox.implicitHeight + Style.space(10), Style.space(120))
-            radius: Style.cornerRadius
-            color: dayflow.fgFill(0.04)
-            border.color: dayflow.fgFill(0.12)
-
-            TextEdit {
-              id: promptBox
-              anchors.fill: parent
-              anchors.margins: Style.space(6)
-              text: dayflow.configDraft.classification_prompt || ""
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              wrapMode: TextEdit.Wrap
-              onTextChanged: dayflow.configDraft.classification_prompt = text
-            }
-          }
-
-          Row {
-            width: parent.width
-            spacing: Style.space(6)
-
-            Rectangle {
-              width: saveText.implicitWidth + Style.space(16)
-              height: saveText.implicitHeight + Style.space(8)
-              radius: Style.cornerRadius
-              color: dayflow.accentFill(0.16)
-              border.color: dayflow.accentFill(0.5)
-
-              Text {
-                id: saveText
-                anchors.centerIn: parent
-                text: "Save settings"
-                color: dayflow.foreground
-                font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.body
-                font.bold: true
-              }
-              MouseArea {
-                anchors.fill: parent
-                onClicked: dayflow.saveConfig()
-              }
-            }
-
-            Rectangle {
-              width: resetText.implicitWidth + Style.space(16)
-              height: resetText.implicitHeight + Style.space(8)
-              radius: Style.cornerRadius
-              color: dayflow.btnBg(resetMa.containsMouse)
-              border.color: dayflow.fgFill(0.12)
-
-              Text {
-                id: resetText
-                anchors.centerIn: parent
-                text: "Reload"
-                color: dayflow.foreground
-                font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.body
-              }
-              MouseArea {
-                id: resetMa
-                anchors.fill: parent
-                hoverEnabled: true
-                onClicked: {
-                  dayflow.configDraft = dayflow.cloneConfig(dayflow.config)
-                  settingsCatModel.clear()
-                  for (var i = 0; i < (dayflow.config.categories || []).length; i++) {
-                    var c = dayflow.config.categories[i]
-                    settingsCatModel.append({ name: c.name || "", description: c.description || "", color: c.color || "" })
-                  }
-                }
-              }
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: dayflow.notice
-            color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-            visible: text !== ""
-          }
-        }
-      }
-    }
   }
 
   Component {

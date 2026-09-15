@@ -255,8 +255,15 @@ func blockStart(t time.Time, mins int) time.Time {
 // pendingBlocks finds complete block windows (aligned to local wall clock) that
 // have frames but no summarized block yet. Empty windows (no frames) are skipped
 // so idle time is not tracked.
+//
+// The scan is bucketed: GROUP BY ts/seconds yields one row per bucket instead
+// of one per frame, so status polls stay cheap as the frames table grows.
+// MIN(ts)/MAX(ts) per bucket cover every block window the bucket overlaps —
+// a same-length window offset from the bucket boundary contains at least one
+// of the bucket's extreme frame timestamps.
 func pendingBlocks(db *sql.DB, cfg Config, now time.Time) ([]time.Time, error) {
-	rows, err := db.Query(`SELECT ts FROM frames`)
+	secs := int64(cfg.BlockMinutes) * 60
+	rows, err := db.Query(`SELECT MIN(ts), MAX(ts) FROM frames GROUP BY ts/?`, secs)
 	if err != nil {
 		return nil, err
 	}
@@ -266,16 +273,18 @@ func pendingBlocks(db *sql.DB, cfg Config, now time.Time) ([]time.Time, error) {
 	seen := map[time.Time]bool{}
 	var candidates []time.Time
 	for rows.Next() {
-		var ts int64
-		if err := rows.Scan(&ts); err != nil {
+		var lo, hi int64
+		if err := rows.Scan(&lo, &hi); err != nil {
 			return nil, err
 		}
-		b := blockStart(time.Unix(ts, 0), cfg.BlockMinutes)
-		if !b.Before(currentBlock) || seen[b] {
-			continue
+		for _, ts := range []int64{lo, hi} {
+			b := blockStart(time.Unix(ts, 0), cfg.BlockMinutes)
+			if !b.Before(currentBlock) || seen[b] {
+				continue
+			}
+			seen[b] = true
+			candidates = append(candidates, b)
 		}
-		seen[b] = true
-		candidates = append(candidates, b)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

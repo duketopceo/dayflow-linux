@@ -106,6 +106,12 @@ Flickable {
     width: parent.width
     spacing: Style.space(10)
 
+    BusyBar {
+      width: parent.width
+      dayflow: root.dayflow
+      active: root.chatLoading
+    }
+
     Text {
       width: parent.width
       text: "Conversations"
@@ -354,6 +360,7 @@ Flickable {
     onExited: function(exitCode) {
       if (exitCode !== 0) {
         root.chatLoading = false
+        if (dayflow) dayflow.notice = "could not load conversation"
       }
     }
   }

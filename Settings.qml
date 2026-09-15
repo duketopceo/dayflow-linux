@@ -87,6 +87,12 @@ Flickable {
     width: parent.width
     spacing: Style.space(14)
 
+    BusyBar {
+      width: parent.width
+      dayflow: root.dayflow
+      active: modelsProc.running || providersProc.running
+    }
+
     Text {
       visible: !dayflow || !dayflow.configLoaded
       width: parent.width
