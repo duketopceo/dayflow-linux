@@ -429,6 +429,38 @@ Panel {
     return order
   }
 
+  // ---- calendar picker state + helpers ----
+  property bool showCalendar: false
+  property int calYear: new Date().getFullYear()
+  property int calMonth: new Date().getMonth()
+
+  function calShift(delta) {
+    var d = new Date(dayflow.calYear, dayflow.calMonth + delta, 1)
+    dayflow.calYear = d.getFullYear()
+    dayflow.calMonth = d.getMonth()
+  }
+
+  function calCells() {
+    var first = new Date(dayflow.calYear, dayflow.calMonth, 1)
+    var lead = (first.getDay() + 6) % 7           // Mon=0 blanks before day 1
+    var dim = new Date(dayflow.calYear, dayflow.calMonth + 1, 0).getDate()
+    var cells = []
+    for (var i = 0; i < lead; i++) cells.push(0)
+    for (i = 1; i <= dim; i++) cells.push(i)
+    while (cells.length % 7 !== 0) cells.push(0)
+    return cells
+  }
+
+  function calPick(day) {
+    if (day <= 0) return
+    var sel = new Date(dayflow.calYear, dayflow.calMonth, day)
+    var today = new Date()
+    today.setHours(0, 0, 0, 0)
+    dayflow.dayOffset = Math.round((sel - today) / 86400000)
+    dayflow.showCalendar = false
+    dayflow.loadTimeline()
+  }
+
   function weekDayBlocks(dayIndex) {
     if (!dayflow.weekBlocks.length) return []
     var dayStart = dayflow.weekStartDate().getTime() + dayIndex * 86400000
@@ -975,6 +1007,115 @@ Panel {
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onClicked: { dayflow.dayOffset = 0; dayflow.loadTimeline() }
+            }
+          }
+
+          Rectangle {
+            height: Style.space(28)
+            width: calLbl.implicitWidth + Style.space(14)
+            radius: Style.cornerRadius
+            color: dayflow.showCalendar ? dayflow.accentFill(0.15) : dayflow.fgFill(0.04)
+            border.color: dayflow.accentFill(0.4)
+            Text {
+              id: calLbl
+              anchors.centerIn: parent
+              text: "Cal"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: dayflow.showCalendar = !dayflow.showCalendar
+            }
+          }
+        }
+
+        // ---- calendar picker ----
+        Column {
+          visible: dayflow.showCalendar
+          width: parent.width
+          spacing: Style.space(4)
+
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+            Text {
+              text: "<"
+              color: dayflow.foreground
+              font.pixelSize: Style.font.body
+              anchors.verticalCenter: parent.verticalCenter
+              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: dayflow.calShift(-1) }
+            }
+            Text {
+              text: Qt.formatDate(new Date(dayflow.calYear, dayflow.calMonth, 1), "MMMM yyyy")
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+              anchors.verticalCenter: parent.verticalCenter
+            }
+            Text {
+              text: ">"
+              color: dayflow.foreground
+              font.pixelSize: Style.font.body
+              anchors.verticalCenter: parent.verticalCenter
+              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: dayflow.calShift(1) }
+            }
+          }
+
+          Grid {
+            width: parent.width
+            columns: 7
+            Repeater {
+              model: ["M", "T", "W", "T", "F", "S", "S"]
+              delegate: Text {
+                width: parent.width / 7
+                horizontalAlignment: Text.AlignHCenter
+                text: modelData
+                color: dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+
+          Grid {
+            width: parent.width
+            columns: 7
+            Repeater {
+              model: dayflow.calCells()
+              delegate: Rectangle {
+                width: parent.width / 7
+                height: Style.space(24)
+                radius: Style.cornerRadius
+                property int dayNum: modelData
+                property bool isToday: dayNum === new Date().getDate()
+                  && dayflow.calMonth === new Date().getMonth()
+                  && dayflow.calYear === new Date().getFullYear()
+                property bool isFuture: dayNum > 0 &&
+                  new Date(dayflow.calYear, dayflow.calMonth, dayNum) > new Date()
+                color: isToday ? dayflow.accentFill(0.18)
+                  : (dayMa.containsMouse && dayNum > 0 && !isFuture ? dayflow.accentFill(0.08) : "transparent")
+                border.color: isToday ? dayflow.accentFill(0.5) : "transparent"
+                Text {
+                  anchors.centerIn: parent
+                  text: dayNum > 0 ? dayNum : ""
+                  color: isFuture ? dayflow.dim : dayflow.foreground
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                MouseArea {
+                  id: dayMa
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  enabled: dayNum > 0 && !isFuture
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: dayflow.calPick(dayNum)
+                }
+              }
             }
           }
         }

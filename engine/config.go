@@ -151,6 +151,11 @@ func loadConfig() (Config, error) {
 	if cfg.OpenRouterAPIKey == "" {
 		cfg.OpenRouterAPIKey = openRouterKeysFallback()
 	}
+	if cfg.OpenRouterAPIKey == "" && keyringAvailable() {
+		if k, err := keyringGet("openrouter"); err == nil {
+			cfg.OpenRouterAPIKey = k
+		}
+	}
 	if cfg.CaptureIntervalSec <= 0 {
 		cfg.CaptureIntervalSec = 10
 	}

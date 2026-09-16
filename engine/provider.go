@@ -141,16 +141,17 @@ func providerUsesOpenRouterHeaders(p Provider) bool {
 
 // callProviderChat posts an OpenAI-compatible chat request to provider p.
 func callProviderChat(cfg Config, p Provider, messages []orMessage) (string, int, int, error) {
-	if providerNeedsAuth(p) && p.APIKey == "" && p.APIBaseURL == "" {
-		return "", 0, 0, fmt.Errorf("no API key for provider %q: set its api_key or openrouter_api_key in %s or OPENROUTER_API_KEY", p.ID, configPath())
+	apiKey := resolveProviderKey(p)
+	if providerNeedsAuth(p) && apiKey == "" && p.APIBaseURL == "" {
+		return "", 0, 0, fmt.Errorf("no API key for provider %q: set its api_key in %s, OPENROUTER_API_KEY, or `dayflow key set %s`", p.ID, configPath(), p.ID)
 	}
 	reqBody, _ := json.Marshal(orRequest{Model: p.Model, Messages: messages})
 	req, err := http.NewRequest("POST", providerChatURL(p), bytes.NewReader(reqBody))
 	if err != nil {
 		return "", 0, 0, err
 	}
-	if providerNeedsAuth(p) && p.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	if providerNeedsAuth(p) && apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if providerUsesOpenRouterHeaders(p) {
