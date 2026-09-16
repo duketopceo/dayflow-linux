@@ -178,6 +178,13 @@ Panel {
     if (!uiLogProc.running) uiLogProc.running = true
   }
 
+  function procByName(n) {
+    return n === "copyProc" ? copyProc
+      : n === "copyWeekProc" ? copyWeekProc
+      : n === "copyMiniProc" ? copyMiniProc
+      : copyWeekMiniProc
+  }
+
   function loadTimeline() {
     dayflow.uilog("timeline load " + dayflow.viewDateStr())
     timelineProc.command = ["dayflow", "timeline", "--json", dayflow.viewDateStr()]
@@ -839,7 +846,7 @@ Panel {
     id: copyProc
     command: ["bash", "-c", "dayflow export today | wl-copy"]
     onExited: function(exitCode) {
-      dayflow.notice = exitCode === 0 ? "copied today (markdown)" : "copy failed"
+      dayflow.notice = exitCode === 0 ? "copied day (markdown)" : "copy failed"
     }
   }
 
@@ -855,7 +862,7 @@ Panel {
     id: copyMiniProc
     command: ["bash", "-c", "dayflow export today --brief | wl-copy"]
     onExited: function(exitCode) {
-      dayflow.notice = exitCode === 0 ? "copied today (mini)" : "copy failed"
+      dayflow.notice = exitCode === 0 ? "copied day (mini)" : "copy failed"
     }
   }
 
@@ -1042,6 +1049,48 @@ Panel {
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onClicked: { dayflow.showCalendar = !dayflow.showCalendar; dayflow.uilog("calendar " + (dayflow.showCalendar ? "open" : "close")) }
+            }
+          }
+        }
+
+        // ---- copy actions for the viewed day ----
+        Flow {
+          width: parent.width
+          spacing: Style.space(6)
+
+          Repeater {
+            // Copies the currently viewed day, not always today.
+            model: [
+              { label: "Copy day · md", proc: "copyProc", logName: "copy day md", extra: "" },
+              { label: "Copy day · mini", proc: "copyMiniProc", logName: "copy day mini", extra: " --brief" }
+            ]
+            delegate: Rectangle {
+              height: Style.space(22)
+              width: dayCopyLbl.implicitWidth + Style.space(12)
+              radius: Style.cornerRadius
+              color: dayflow.btnBg(dayCopyMa.containsMouse)
+              border.color: dayflow.fgFill(0.2)
+              Text {
+                id: dayCopyLbl
+                anchors.centerIn: parent
+                text: dayflow.procByName(modelData.proc).running ? "Copying…" : modelData.label
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              MouseArea {
+                id: dayCopyMa
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  dayflow.uilog(modelData.logName + " " + dayflow.viewDateStr())
+                  var p = dayflow.procByName(modelData.proc)
+                  p.command = ["bash", "-c",
+                    "dayflow export " + dayflow.viewDateStr() + modelData.extra + " | wl-copy"]
+                  if (!p.running) p.running = true
+                }
+              }
             }
           }
         }
@@ -1928,6 +1977,44 @@ Panel {
           active: weeklyProc.running || weekTimelineProc.running || insightsFetchProc.running
         }
 
+        Flow {
+          width: parent.width
+          spacing: Style.space(6)
+
+          Repeater {
+            model: [
+              { label: "Copy week · md", proc: "copyWeekProc", logName: "copy week md" },
+              { label: "Copy week · mini", proc: "copyWeekMiniProc", logName: "copy week mini" }
+            ]
+            delegate: Rectangle {
+              height: Style.space(22)
+              width: weekCopyLbl.implicitWidth + Style.space(12)
+              radius: Style.cornerRadius
+              color: dayflow.btnBg(weekCopyMa.containsMouse)
+              border.color: dayflow.fgFill(0.2)
+              Text {
+                id: weekCopyLbl
+                anchors.centerIn: parent
+                text: dayflow.procByName(modelData.proc).running ? "Copying…" : modelData.label
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              MouseArea {
+                id: weekCopyMa
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  dayflow.uilog(modelData.logName)
+                  var p = dayflow.procByName(modelData.proc)
+                  if (!p.running) p.running = true
+                }
+              }
+            }
+          }
+        }
+
         Text {
           visible: dayflow.insights.total_minutes === 0
             && !weeklyProc.running && !weekTimelineProc.running && !insightsFetchProc.running
@@ -2018,85 +2105,57 @@ Panel {
           color: dayflow.fgFill(0.04)
           border.color: dayflow.fgFill(0.08)
 
-          Column {
+          Flow {
             id: chartsCol
             width: parent.width - Style.space(16)
             anchors.centerIn: parent
             spacing: Style.space(10)
 
-            Text {
-              text: "Category breakdown"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-            }
+            // Expanded mode splits the charts into two columns.
+            property real colW: dayflow.expanded
+              ? (chartsCol.width - chartsCol.spacing) / 2
+              : chartsCol.width
 
-            Row {
-              id: donutRow
-              width: parent.width
-              height: Style.space(24)
-              spacing: 0
+            Column {
+              width: chartsCol.colW
+              spacing: Style.space(10)
+
+              Text {
+                text: "Category breakdown"
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+
+              Row {
+                id: donutRow
+                width: parent.width
+                height: Style.space(24)
+                spacing: 0
+
+                Repeater {
+                  model: dayflow.weeklyPayload.category_donut
+                  delegate: Rectangle {
+                    width: donutRow.width * (modelData.percentage / 100)
+                    height: parent.height
+                    color: dayflow.payloadColor(modelData.color, modelData.name)
+                  }
+                }
+              }
 
               Repeater {
                 model: dayflow.weeklyPayload.category_donut
-                delegate: Rectangle {
-                  width: donutRow.width * (modelData.percentage / 100)
-                  height: parent.height
-                  color: dayflow.payloadColor(modelData.color, modelData.name)
-                }
-              }
-            }
-
-            Repeater {
-              model: dayflow.weeklyPayload.category_donut
-              delegate: Row {
-                width: parent.width
-                spacing: Style.space(8)
-
-                Rectangle {
-                  width: Style.space(10)
-                  height: Style.space(10)
-                  radius: Style.space(2)
-                  color: dayflow.payloadColor(modelData.color, modelData.name)
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Text {
-                  text: (modelData.display || modelData.name) + "  " + modelData.percentage + "%"
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.caption
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-              }
-            }
-
-            Text {
-              visible: dayflow.weeklyPayload.app_treemap.length > 0
-              text: "Top apps"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-            }
-
-            Column {
-              visible: dayflow.weeklyPayload.app_treemap.length > 0
-              width: parent.width
-              spacing: Style.space(4)
-
-              Repeater {
-                model: dayflow.weeklyPayload.app_treemap
                 delegate: Row {
                   width: parent.width
                   spacing: Style.space(8)
 
                   Rectangle {
-                    width: Math.max(Style.space(4), parent.width * (modelData.percentage / 100))
-                    height: Style.space(14)
+                    width: Style.space(10)
+                    height: Style.space(10)
                     radius: Style.space(2)
-                    color: dayflow.accentFill(0.5)
+                    color: dayflow.payloadColor(modelData.color, modelData.name)
+                    anchors.verticalCenter: parent.verticalCenter
                   }
 
                   Text {
@@ -2108,137 +2167,181 @@ Panel {
                   }
                 }
               }
+
+              Text {
+                visible: dayflow.weeklyPayload.app_treemap.length > 0
+                text: "Top apps"
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
             }
 
-            Text {
-              visible: dayflow.weeklyPayload.heatmap.length > 0
-              text: "Focus heatmap"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
+            Column {
+              visible: dayflow.weeklyPayload.app_treemap.length > 0
+              width: parent.width
+                spacing: Style.space(4)
+
+                Repeater {
+                  model: dayflow.weeklyPayload.app_treemap
+                  delegate: Row {
+                    width: parent.width
+                    spacing: Style.space(8)
+
+                    Rectangle {
+                      width: Math.max(Style.space(4), parent.width * (modelData.percentage / 100))
+                      height: Style.space(14)
+                      radius: Style.space(2)
+                      color: dayflow.accentFill(0.5)
+                    }
+
+                    Text {
+                      text: (modelData.display || modelData.name) + "  " + modelData.percentage + "%"
+                      color: dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+                }
+              }
+
+            }
+
+            Column {
+              width: chartsCol.colW
+              spacing: Style.space(10)
+
+                Text {
+                  visible: dayflow.weeklyPayload.heatmap.length > 0
+                  text: "Focus heatmap"
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
             }
 
             Column {
               visible: dayflow.weeklyPayload.heatmap.length > 0
               width: parent.width
-              spacing: 2
+                spacing: 2
 
-              Repeater {
-                model: dayflow.weeklyPayload.heatmap
-                delegate: Row {
-                  id: heatRow
-                  property var dayData: modelData
-                  width: parent.width
-                  spacing: 2
+                Repeater {
+                  model: dayflow.weeklyPayload.heatmap
+                  delegate: Row {
+                    id: heatRow
+                    property var dayData: modelData
+                    width: parent.width
+                    spacing: 2
 
-                  Text {
-                    width: Style.space(28)
-                    text: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][heatRow.dayData.day] || ""
-                    color: dayflow.dim
-                    font.family: dayflow.fontFamily
-                    font.pixelSize: Style.font.caption
-                    anchors.verticalCenter: parent.verticalCenter
-                  }
+                    Text {
+                      width: Style.space(28)
+                      text: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][heatRow.dayData.day] || ""
+                      color: dayflow.dim
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
 
-                  Row {
-                    width: heatRow.width - Style.space(28) - parent.spacing
-                    spacing: 1
+                    Row {
+                      width: heatRow.width - Style.space(28) - parent.spacing
+                      spacing: 1
 
-                    Repeater {
-                      model: heatRow.dayData.hours || []
-                      delegate: Rectangle {
-                        width: (heatRow.width - Style.space(28) - 2 - 23) / 24
-                        height: Style.space(12)
-                        radius: 2
-                        color: modelData.category !== "" && modelData.minutes > 0
-                          ? dayflow.payloadFill(modelData.color, modelData.category,
-                              0.15 + 0.85 * Math.min(1, modelData.minutes / 60))
-                          : dayflow.fgFill(0.03)
+                      Repeater {
+                        model: heatRow.dayData.hours || []
+                        delegate: Rectangle {
+                          width: (heatRow.width - Style.space(28) - 2 - 23) / 24
+                          height: Style.space(12)
+                          radius: 2
+                          color: modelData.category !== "" && modelData.minutes > 0
+                            ? dayflow.payloadFill(modelData.color, modelData.category,
+                                0.15 + 0.85 * Math.min(1, modelData.minutes / 60))
+                            : dayflow.fgFill(0.03)
+                        }
                       }
                     }
                   }
                 }
               }
-            }
 
-            Text {
-              visible: dayflow.weeklyPayload.context_shifts.length > 0
-              text: "Context shifts"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
+              Text {
+                visible: dayflow.weeklyPayload.context_shifts.length > 0
+                text: "Context shifts"
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
             }
 
             Column {
               visible: dayflow.weeklyPayload.context_shifts.length > 0
               width: parent.width
-              spacing: Style.space(4)
+                spacing: Style.space(4)
 
-              Repeater {
-                model: dayflow.weeklyPayload.context_shifts.slice(0, 6)
-                delegate: Row {
-                  width: parent.width
-                  spacing: Style.space(6)
+                Repeater {
+                  model: dayflow.weeklyPayload.context_shifts.slice(0, 6)
+                  delegate: Row {
+                    width: parent.width
+                    spacing: Style.space(6)
 
-                  Text {
-                    text: (modelData.source || "?") + " → " + (modelData.target || "?")
-                    color: dayflow.foreground
-                    font.family: dayflow.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                  }
+                    Text {
+                      text: (modelData.source || "?") + " → " + (modelData.target || "?")
+                      color: dayflow.foreground
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
 
-                  Text {
-                    text: modelData.count + "×"
-                    color: dayflow.dim
-                    font.family: dayflow.fontFamily
-                    font.pixelSize: Style.font.caption
+                    Text {
+                      text: modelData.count + "×"
+                      color: dayflow.dim
+                      font.family: dayflow.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
                   }
                 }
               }
-            }
 
-            Text {
-              visible: dayflow.weeklyPayload.highlights.length > 0
-              text: "Highlights"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-            }
-
-            Repeater {
-              model: dayflow.weeklyPayload.highlights
-              delegate: Text {
-                width: parent.width
-                text: "• " + modelData
+              Text {
+                visible: dayflow.weeklyPayload.highlights.length > 0
+                text: "Highlights"
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
+                font.pixelSize: Style.font.body
+                font.bold: true
               }
-            }
 
-            Text {
-              visible: dayflow.weeklyPayload.suggestions.length > 0
-              text: "Suggestions"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-            }
+              Repeater {
+                model: dayflow.weeklyPayload.highlights
+                delegate: Text {
+                  width: parent.width
+                  text: "• " + modelData
+                  color: dayflow.foreground
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+              }
 
-            Repeater {
-              model: dayflow.weeklyPayload.suggestions
-              delegate: Text {
-                width: parent.width
-                text: "• " + modelData
-                color: dayflow.dim
+              Text {
+                visible: dayflow.weeklyPayload.suggestions.length > 0
+                text: "Suggestions"
+                color: dayflow.foreground
                 font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+
+              Repeater {
+                model: dayflow.weeklyPayload.suggestions
+                delegate: Text {
+                  width: parent.width
+                  text: "• " + modelData
+                  color: dayflow.dim
+                  font.family: dayflow.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
               }
             }
           }
@@ -2954,93 +3057,6 @@ Panel {
             }
           }
 
-          Rectangle {
-            height: Style.space(26)
-            width: a4.implicitWidth + Style.space(16)
-            radius: Style.cornerRadius
-            color: dayflow.btnBg(m4.containsMouse)
-            border.color: dayflow.accentFill(0.5)
-            Text {
-              id: a4
-              anchors.centerIn: parent
-              text: copyProc.running ? "Copying…" : "Copy today (md)"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            MouseArea {
-              id: m4
-              anchors.fill: parent
-              hoverEnabled: true
-              onClicked: { dayflow.uilog("copy today md"); if (!copyProc.running) copyProc.running = true }
-            }
-          }
-
-          Rectangle {
-            height: Style.space(26)
-            width: a5.implicitWidth + Style.space(16)
-            radius: Style.cornerRadius
-            color: dayflow.btnBg(m5.containsMouse)
-            border.color: dayflow.accentFill(0.5)
-            Text {
-              id: a5
-              anchors.centerIn: parent
-              text: copyWeekProc.running ? "Copying…" : "Copy week (md)"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            MouseArea {
-              id: m5
-              anchors.fill: parent
-              hoverEnabled: true
-              onClicked: { dayflow.uilog("copy week md"); if (!copyWeekProc.running) copyWeekProc.running = true }
-            }
-          }
-
-          Rectangle {
-            height: Style.space(26)
-            width: a6.implicitWidth + Style.space(16)
-            radius: Style.cornerRadius
-            color: dayflow.btnBg(m6.containsMouse)
-            border.color: dayflow.fgFill(0.2)
-            Text {
-              id: a6
-              anchors.centerIn: parent
-              text: copyMiniProc.running ? "Copying…" : "Copy today · mini"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            MouseArea {
-              id: m6
-              anchors.fill: parent
-              hoverEnabled: true
-              onClicked: { dayflow.uilog("copy today mini"); if (!copyMiniProc.running) copyMiniProc.running = true }
-            }
-          }
-
-          Rectangle {
-            height: Style.space(26)
-            width: a7.implicitWidth + Style.space(16)
-            radius: Style.cornerRadius
-            color: dayflow.btnBg(m7.containsMouse)
-            border.color: dayflow.fgFill(0.2)
-            Text {
-              id: a7
-              anchors.centerIn: parent
-              text: copyWeekMiniProc.running ? "Copying…" : "Copy week · mini"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            MouseArea {
-              id: m7
-              anchors.fill: parent
-              hoverEnabled: true
-              onClicked: { dayflow.uilog("copy week mini"); if (!copyWeekMiniProc.running) copyWeekMiniProc.running = true }
-            }
-          }
         }
 
         // ---- status ----
