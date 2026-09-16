@@ -290,6 +290,48 @@ func TestConfigSet(t *testing.T) {
 	}
 }
 
+func TestConfigPatchPreservesMaskedProviderKeys(t *testing.T) {
+	dir := t.TempDir()
+	cp := filepath.Join(dir, "config.json")
+	t.Setenv("DAYFLOW_CONFIG", cp)
+	t.Setenv("DAYFLOW_DATA_DIR", dir)
+	os.WriteFile(cp, []byte(`{
+		"model": "google/gemma-4-31b-it",
+		"provider": "openrouter",
+		"openrouter_api_key": "sk-real-key-123",
+		"providers": [{"id":"default","name":"Default","kind":"openrouter","api_key":"sk-real-key-123","model":"m","enabled":true}],
+		"routing": {"primary":"default"}
+	}`), 0o600)
+
+	// The panel round-trips the masked key — it must not overwrite the real one.
+	patch := `{"providers":[{"id":"default","name":"Default","kind":"openrouter","api_key":"***redacted***","model":"m2","enabled":true}]}`
+	if err := patchConfig(patch); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers[0].APIKey != "sk-real-key-123" {
+		t.Fatalf("provider key clobbered: %q", cfg.Providers[0].APIKey)
+	}
+	if cfg.Providers[0].Model != "m2" {
+		t.Fatalf("other fields should still merge: %+v", cfg.Providers[0])
+	}
+
+	// A sentinel for an unknown provider id is dropped, never persisted.
+	patch = `{"providers":[{"id":"newp","kind":"openrouter","api_key":"***redacted***"}]}`
+	if err := patchConfig(patch); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = loadConfig()
+	for _, p := range cfg.Providers {
+		if p.APIKey == "***redacted***" {
+			t.Fatalf("sentinel persisted for %q", p.ID)
+		}
+	}
+}
+
 func TestRetention(t *testing.T) {
 	cfg := testEnv(t)
 	db, _ := openDB()

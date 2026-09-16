@@ -116,6 +116,11 @@ Panel {
   function saveConfig() {
     var patch = dayflow.cloneConfig(dayflow.configDraft)
     if (patch.openrouter_api_key === "***redacted***") delete patch.openrouter_api_key
+    if (patch.providers) {
+      for (var pi = 0; pi < patch.providers.length; pi++) {
+        if (patch.providers[pi].api_key === "***redacted***") delete patch.providers[pi].api_key
+      }
+    }
     patch.categories = []
     for (var i = 0; i < settingsCatModel.count; i++) {
       var item = settingsCatModel.get(i)

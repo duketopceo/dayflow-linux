@@ -221,6 +221,44 @@ func patchConfig(patch string) error {
 			delete(patchMap, "openrouter_api_key")
 		}
 	}
+	// The panel round-trips providers with masked api_key fields. A sentinel
+	// inside the providers array must keep the existing key for that id —
+	// otherwise a settings save silently clobbers the real credential.
+	if v, ok := patchMap["providers"]; ok {
+		var provs []map[string]json.RawMessage
+		if json.Unmarshal(v, &provs) == nil {
+			existing := effectiveProviders(cfg)
+			changed := false
+			for _, p := range provs {
+				rawKey, hasKey := p["api_key"]
+				var key, id string
+				if !hasKey || json.Unmarshal(rawKey, &key) != nil || key != "***redacted***" {
+					continue
+				}
+				fixed := false
+				if json.Unmarshal(p["id"], &id) == nil {
+					for _, e := range existing {
+						if e.ID == id && e.APIKey != "" {
+							p["api_key"], _ = json.Marshal(e.APIKey)
+							fixed = true
+							break
+						}
+					}
+				}
+				if !fixed {
+					// no stored key to preserve — drop the sentinel so the
+					// masked value is never persisted
+					delete(p, "api_key")
+				}
+				changed = true
+			}
+			if changed {
+				if fixed, err := json.Marshal(provs); err == nil {
+					patchMap["providers"] = fixed
+				}
+			}
+		}
+	}
 	if v, ok := patchMap["api_base_url"]; ok {
 		var s string
 		if json.Unmarshal(v, &s) == nil {
