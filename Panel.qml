@@ -787,6 +787,22 @@ Panel {
   }
 
   Process {
+    id: copyMiniProc
+    command: ["bash", "-c", "dayflow export today --brief | wl-copy"]
+    onExited: function(exitCode) {
+      dayflow.notice = exitCode === 0 ? "copied today (mini)" : "copy failed"
+    }
+  }
+
+  Process {
+    id: copyWeekMiniProc
+    command: ["bash", "-c", "dayflow export week --brief | wl-copy"]
+    onExited: function(exitCode) {
+      dayflow.notice = exitCode === 0 ? "copied week (mini)" : "copy failed"
+    }
+  }
+
+  Process {
     id: editProc
     command: ["dayflow", "edit"]
     stderr: StdioCollector {
@@ -2761,6 +2777,50 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               onClicked: { if (!copyWeekProc.running) copyWeekProc.running = true }
+            }
+          }
+
+          Rectangle {
+            height: Style.space(26)
+            width: a6.implicitWidth + Style.space(16)
+            radius: Style.cornerRadius
+            color: dayflow.btnBg(m6.containsMouse)
+            border.color: dayflow.fgFill(0.2)
+            Text {
+              id: a6
+              anchors.centerIn: parent
+              text: copyMiniProc.running ? "Copying…" : "Copy today · mini"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: m6
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: { if (!copyMiniProc.running) copyMiniProc.running = true }
+            }
+          }
+
+          Rectangle {
+            height: Style.space(26)
+            width: a7.implicitWidth + Style.space(16)
+            radius: Style.cornerRadius
+            color: dayflow.btnBg(m7.containsMouse)
+            border.color: dayflow.fgFill(0.2)
+            Text {
+              id: a7
+              anchors.centerIn: parent
+              text: copyWeekMiniProc.running ? "Copying…" : "Copy week · mini"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: m7
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: { if (!copyWeekMiniProc.running) copyWeekMiniProc.running = true }
             }
           }
         }

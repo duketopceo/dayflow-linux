@@ -192,3 +192,23 @@ func markdownTimeline(blocks []Block, title string) string {
 	}
 	return b.String()
 }
+
+// markdownBrief renders one compact line per merged card — work type, a few
+// words, time spent — for pasting into agents where the full journal is noise.
+func markdownBrief(blocks []Block, title string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	day := ""
+	for _, c := range mergeCards(blocks) {
+		d := c.Start.Format("Mon 2 Jan")
+		if d != day {
+			day = d
+			fmt.Fprintf(&b, "## %s\n", d)
+		}
+		fmt.Fprintf(&b, "- **%s** %s · %s\n", catDisplay(c.Category), c.Title, fmtDur(c.Minutes))
+	}
+	if len(blocks) == 0 {
+		fmt.Fprintln(&b, "_No summarized blocks in this range._")
+	}
+	return b.String()
+}

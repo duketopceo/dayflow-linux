@@ -782,7 +782,7 @@ func main() {
 		}
 
 	case "export":
-		// export [day|YYYY-MM-DD|week|month] [--copy]
+		// export [day|YYYY-MM-DD|week|month] [--copy] [--out path] [--brief]
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
@@ -820,6 +820,9 @@ func main() {
 		blocks, err := blocksBetween(db, start, end)
 		fatal(err)
 		md := markdownTimeline(blocks, label)
+		if hasFlag(args, "--brief") {
+			md = markdownBrief(blocks, label)
+		}
 		out := ""
 		for i, a := range args {
 			if a == "--out" && i+1 < len(args) {
