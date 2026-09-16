@@ -55,6 +55,7 @@ Control:
                           retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
                           output, capture_command, openrouter_api_key, provider,
                           filter_inappropriate, panel_expanded, debug)
+  key set|status|del    Store/inspect API keys in OmaSeal instead of config.json
   provider [list]       List configured providers and routing
   provider add <id> <kind>          Add a provider (openrouter, local, custom,
                                     gemini, chatgpt, claude, mcp)
@@ -873,6 +874,61 @@ func main() {
 
 	case "setup":
 		fatal(runSetup())
+	case "key":
+		// key set <account>   store a secret in OmaSeal (reads stdin) and
+		//                     scrub the plaintext copy from config.json
+		// key status          which dayflow accounts exist in the keyring
+		// key del <account>   remove a stored secret
+		if !keyringAvailable() {
+			fatal(fmt.Errorf("omaseal not found on PATH — install it or keep file-based keys"))
+		}
+		sub := "status"
+		if len(args) >= 1 {
+			sub = args[0]
+		}
+		switch sub {
+		case "set":
+			if len(args) < 2 {
+				fatal(fmt.Errorf("usage: dayflow key set <account>  (key on stdin)"))
+			}
+			account := args[1]
+			secret := readStdin()
+			if secret == "" {
+				fatal(fmt.Errorf("no secret on stdin"))
+			}
+			fatal(keyringSet(account, secret))
+			// Scrub the plaintext copy so config.json stays secret-free.
+			scrubbed := false
+			if account == "openrouter" && cfg.OpenRouterAPIKey == secret {
+				cfg.OpenRouterAPIKey = ""
+				scrubbed = true
+			}
+			for i := range cfg.Providers {
+				if cfg.Providers[i].APIKey == secret {
+					cfg.Providers[i].APIKey = ""
+					scrubbed = true
+				}
+			}
+			if scrubbed {
+				fatal(writeConfig(cfg))
+			}
+			fmt.Println("stored in keyring:", account)
+		case "status":
+			out, err := exec.Command("omaseal", "list", keyringService).CombinedOutput()
+			fmt.Print(string(out))
+			if err != nil {
+				fatal(fmt.Errorf("omaseal list failed"))
+			}
+		case "del":
+			if len(args) < 2 {
+				fatal(fmt.Errorf("usage: dayflow key del <account>"))
+			}
+			fatal(keyringDel(args[1]))
+			fmt.Println("deleted:", args[1])
+		default:
+			fatal(fmt.Errorf("usage: dayflow key set|status|del"))
+		}
+
 	case "doctor":
 		runDoctor(cfg, jsonOut, hasFlag(args, "--deep"))
 	case "detect":

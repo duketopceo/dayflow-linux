@@ -97,13 +97,39 @@ Flickable {
     }
   }
 
+  // The API key goes to OmaSeal over stdin when the keyring is available;
+  // on failure we fall back to embedding it in the config patch.
+  Process {
+    id: keySetProc
+    property string pendingKey: ""
+    stdinEnabled: true
+    onStarted: { write(pendingKey + "\n"); pendingKey = "" }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.keyInPatch = true
+      root.applyPatch()
+    }
+  }
+
+  property bool keyInPatch: false
+
   function apply() {
     root.testing = true
     root.testResult = "Testing..."
+    if (root.mode === "openrouter" && root.apiKey !== "") {
+      root.keyInPatch = false
+      keySetProc.pendingKey = root.apiKey
+      keySetProc.command = ["dayflow", "key", "set", "openrouter"]
+      keySetProc.running = true
+      return
+    }
+    root.applyPatch()
+  }
+
+  function applyPatch() {
     var patch = { model: root.modelSlug }
     if (root.mode === "openrouter") {
       patch.provider = "openrouter"
-      patch.openrouter_api_key = root.apiKey
+      if (root.keyInPatch) patch.openrouter_api_key = root.apiKey
       patch.api_base_url = ""
     } else if (root.mode === "ollama" || root.mode === "lmstudio") {
       patch.provider = "local"
