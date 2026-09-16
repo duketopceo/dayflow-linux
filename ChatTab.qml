@@ -21,6 +21,30 @@ Flickable {
   property string chatInput: ""
   property string lastSent: ""
   property string chatAttribution: ""
+  property bool recapFired: false
+
+  // Instant local recap from the already-loaded timeline spans — no LLM call.
+  function recapText() {
+    var spans = (dayflow && dayflow.spans) ? dayflow.spans : []
+    if (spans.length === 0) return ""
+    var byCat = {}
+    var total = 0
+    for (var i = 0; i < spans.length; i++) {
+      var m = Number(spans[i].minutes || 0)
+      total += m
+      var c = spans[i].category || "other"
+      byCat[c] = (byCat[c] || 0) + m
+    }
+    if (total <= 0) return ""
+    var cats = Object.keys(byCat).sort(function(a, b) { return byCat[b] - byCat[a] }).slice(0, 3)
+    var parts = []
+    for (i = 0; i < cats.length; i++)
+      parts.push(dayflow.catDisplay(cats[i]) + " " + dayflow.fmtDur(byCat[cats[i]]))
+    var last = spans[spans.length - 1]
+    var head = (dayflow.dateLabel || "Today") + " · " + dayflow.fmtDur(total) + " tracked — " + parts.join(" · ")
+    if (last && last.title) head += "\nLatest: " + last.title
+    return head
+  }
 
   // Lightweight markdown-ish formatting for assistant replies: bold, inline
   // code, and "- " bullets. Input is HTML-escaped first.
@@ -232,6 +256,37 @@ Flickable {
       font.pixelSize: Style.font.caption
     }
 
+    // Preloaded mini-recap: local timeline data, shown instantly in the
+    // empty state so the tab isn't blank while the LLM recap warms up.
+    Rectangle {
+      visible: root.chatMessages.length === 0 && root.recapText() !== ""
+      width: parent.width
+      height: recapLabel.implicitHeight + Style.space(14)
+      radius: Style.cornerRadius
+      color: dayflow ? dayflow.fgFill(0.04) : "transparent"
+      border.color: dayflow ? dayflow.accentFill(0.25) : "transparent"
+
+      Text {
+        id: recapLabel
+        anchors.fill: parent
+        anchors.margins: Style.space(7)
+        text: root.recapText()
+        color: dayflow ? dayflow.foreground : Color.foreground
+        font.family: dayflow ? dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+    }
+
+    Text {
+      visible: autoRecapTimer.running
+      width: parent.width
+      text: "auto-recap in a few seconds…"
+      color: dayflow ? dayflow.dim : Color.dim
+      font.family: dayflow ? dayflow.fontFamily : Style.font.family
+      font.pixelSize: Style.font.caption
+    }
+
     Flow {
       visible: root.chatMessages.length === 0 && !root.chatLoading
       width: parent.width
@@ -331,6 +386,27 @@ Flickable {
         enabled: !root.chatLoading
         onClicked: root.sendChat()
       }
+    }
+  }
+
+  // Auto-recap: this tab instance is destroyed by the tab Loader when the
+  // user clicks away, so the timer simply dying with it implements
+  // "fires 5s after opening, unless you click off". Skips if the user is
+  // typing, a conversation/messages are already loaded, or a proc is busy.
+  Timer {
+    id: autoRecapTimer
+    interval: 5000
+    repeat: false
+    running: true
+    onTriggered: {
+      if (root.recapFired) return
+      root.recapFired = true
+      if (!dayflow || dayflow.configured === false) return
+      if (root.chatMessages.length !== 0 || root.chatConversation !== 0) return
+      if (chatProc.running || convProc.running || root.chatLoading) return
+      if (root.chatInput.trim() !== "") return
+      root.chatInput = "Summarize my day so far"
+      root.sendChat()
     }
   }
 
