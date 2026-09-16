@@ -968,6 +968,7 @@ Panel {
             Text {
               anchors.centerIn: parent
               text: "‹"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
@@ -983,6 +984,7 @@ Panel {
 
           Text {
             text: dayflow.viewDateLabel()
+            textFormat: Text.PlainText
             color: dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
@@ -1000,6 +1002,7 @@ Panel {
             Text {
               anchors.centerIn: parent
               text: "›"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
@@ -1017,6 +1020,7 @@ Panel {
           Text {
             visible: dayflow.dayOffset !== 0
             text: "back to today"
+            textFormat: Text.PlainText
             color: backToday.containsMouse ? dayflow.foreground : dayflow.dim
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.caption
@@ -1041,6 +1045,7 @@ Panel {
               id: calLbl
               anchors.centerIn: parent
               text: "Cal"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -1075,6 +1080,7 @@ Panel {
                 id: dayCopyLbl
                 anchors.centerIn: parent
                 text: dayflow.procByName(modelData.proc).running ? "Copying…" : modelData.label
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1107,6 +1113,7 @@ Panel {
             spacing: Style.space(6)
             Text {
               text: "<"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.pixelSize: Style.font.body
               anchors.verticalCenter: parent.verticalCenter
@@ -1114,6 +1121,7 @@ Panel {
             }
             Text {
               text: Qt.formatDate(new Date(dayflow.calYear, dayflow.calMonth, 1), "MMMM yyyy")
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
@@ -1122,6 +1130,7 @@ Panel {
             }
             Text {
               text: ">"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.pixelSize: Style.font.body
               anchors.verticalCenter: parent.verticalCenter
@@ -1166,6 +1175,7 @@ Panel {
                 Text {
                   anchors.centerIn: parent
                   text: dayNum > 0 ? dayNum : ""
+                  textFormat: Text.PlainText
                   color: isFuture ? dayflow.dim : dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -1206,6 +1216,7 @@ Panel {
                 id: chipLbl
                 anchors.centerIn: parent
                 text: dayflow.dayName(index)
+                textFormat: Text.PlainText
                 color: dayflow.dayOffset === offset ? dayflow.foreground : dayflow.dim
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1226,6 +1237,7 @@ Panel {
           visible: dayflow.spans.length === 0 && dayflow.errorText === "" && dayflow.configured
           width: parent.width
           text: "Nothing summarized yet — blocks land every 15 minutes."
+          textFormat: Text.PlainText
           color: dayflow.dim
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.body
@@ -1289,6 +1301,7 @@ Panel {
                         " · " + dayflow.fmtDur(modelData.minutes) +
                         (modelData.count > 1 ? " · " + modelData.count + " blocks" : "") +
                         (modelData.appName ? " · " + modelData.appName : "")
+                  textFormat: Text.PlainText
                   color: dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -1305,6 +1318,7 @@ Panel {
                     id: catText
                     anchors.centerIn: parent
                     text: dayflow.catDisplay(modelData.category)
+                    textFormat: Text.PlainText
                     color: dayflow.foreground
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1314,6 +1328,7 @@ Panel {
                 Text {
                   visible: modelData.productive === true
                   text: "⚡"
+                  textFormat: Text.PlainText
                   color: dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -1322,6 +1337,7 @@ Panel {
 
                 Text {
                   text: cardRoot.editing ? "close" : "edit"
+                  textFormat: Text.PlainText
                   color: editLink.containsMouse ? dayflow.foreground : dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -1343,6 +1359,7 @@ Panel {
               Text {
                 width: parent.width
                 text: modelData.title
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.body
@@ -1353,6 +1370,7 @@ Panel {
               Text {
                 width: parent.width
                 text: modelData.summary
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 opacity: 0.75
                 font.family: dayflow.fontFamily
@@ -1422,6 +1440,7 @@ Panel {
                       id: prodPillText
                       anchors.centerIn: parent
                       text: cardRoot.editProd ? "⚡ productive" : "not productive"
+                      textFormat: Text.PlainText
                       color: dayflow.foreground
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.caption
@@ -1448,6 +1467,7 @@ Panel {
                       id: saveEditText
                       anchors.centerIn: parent
                       text: "Save"
+                      textFormat: Text.PlainText
                       color: dayflow.foreground
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.caption
@@ -1476,6 +1496,7 @@ Panel {
                       id: cancelEditText
                       anchors.centerIn: parent
                       text: "Cancel"
+                      textFormat: Text.PlainText
                       color: dayflow.dim
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.caption
@@ -1555,6 +1576,7 @@ Panel {
 
           Text {
             text: label
+            textFormat: Text.PlainText
             color: dayflow.dim
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.caption
@@ -1616,6 +1638,7 @@ Panel {
               anchors.centerIn: parent
               visible: dayflow.dayGoal.completed
               text: "✓"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.pixelSize: Style.font.caption
             }
@@ -1650,6 +1673,7 @@ Panel {
           Text {
             visible: dayflow.dayGoal.goal === ""
             text: "Today's goal…"
+            textFormat: Text.PlainText
             color: dayflow.dim
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.caption
@@ -1672,6 +1696,7 @@ Panel {
         visible: dayflow.standup.yesterday.entries.length === 0 && dayflow.standup.today.entries.length === 0
         width: parent.width
         text: "No standup data yet — need a few summarized blocks."
+        textFormat: Text.PlainText
         color: dayflow.dim
         font.family: dayflow.fontFamily
         font.pixelSize: Style.font.body
@@ -1702,6 +1727,7 @@ Panel {
 
               Text {
                 text: label
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.body
@@ -1711,6 +1737,7 @@ Panel {
               Text {
                 anchors.right: parent.right
                 text: dayflow.fmtDur(day.total_minutes) + " tracked"
+                textFormat: Text.PlainText
                 color: dayflow.dim
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1735,6 +1762,7 @@ Panel {
                     id: durText
                     anchors.centerIn: parent
                     text: dayflow.fmtDur(modelData.minutes)
+                    textFormat: Text.PlainText
                     color: (modelData.productive === true) ? dayflow.foreground : dayflow.dim
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1749,6 +1777,7 @@ Panel {
                   Text {
                     width: parent.width
                     text: modelData.title
+                    textFormat: Text.PlainText
                     color: (modelData.productive === true) ? dayflow.foreground : dayflow.dim
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.body
@@ -1760,6 +1789,7 @@ Panel {
                     text: (modelData.app ? modelData.app + " · " : "")
                           + dayflow.catDisplay(modelData.category)
                           + (modelData.span ? " · " + modelData.span : "")
+                    textFormat: Text.PlainText
                     color: dayflow.dim
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1808,6 +1838,7 @@ Panel {
 
           Text {
             text: "Blockers"
+            textFormat: Text.PlainText
             color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
@@ -1819,6 +1850,7 @@ Panel {
             text: dayflow.draft.blockers !== ""
               ? dayflow.draft.blockers
               : "Nothing flagged — fill this in when you write your update."
+            textFormat: Text.PlainText
             color: dayflow.draft.blockers !== "" ? dayflow.foreground : dayflow.dim
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
@@ -1829,6 +1861,7 @@ Panel {
             visible: dayflow.draft.priorities !== ""
             width: parent.width
             text: "Priorities: " + dayflow.draft.priorities
+            textFormat: Text.PlainText
             color: dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
@@ -1849,6 +1882,7 @@ Panel {
               id: cpy
               anchors.centerIn: parent
               text: "Copy standup"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -1881,6 +1915,7 @@ Panel {
 
             Text {
               text: "Standup draft" + (dayflow.draft.date ? " · " + dayflow.draft.date : "")
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
@@ -1891,6 +1926,7 @@ Panel {
               anchors.right: parent.right
               visible: dayflow.draftDirty
               text: "unsaved changes"
+              textFormat: Text.PlainText
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -1938,6 +1974,7 @@ Panel {
               id: saveDraftText
               anchors.centerIn: parent
               text: draftSaveProc.running ? "Saving..." : "Save draft"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -1997,6 +2034,7 @@ Panel {
                 id: weekCopyLbl
                 anchors.centerIn: parent
                 text: dayflow.procByName(modelData.proc).running ? "Copying…" : modelData.label
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.caption
@@ -2021,6 +2059,7 @@ Panel {
             && !weeklyProc.running && !weekTimelineProc.running && !insightsFetchProc.running
           width: parent.width
           text: "No weekly data yet."
+          textFormat: Text.PlainText
           color: dayflow.dim
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.body
@@ -2043,6 +2082,7 @@ Panel {
 
             Text {
               text: "This week" + (dayflow.insights.days ? " · " + dayflow.insights.days + " days" : "")
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
@@ -2076,6 +2116,7 @@ Panel {
                     Text {
                       width: parent.width
                       text: modelData.label
+                      textFormat: Text.PlainText
                       color: dayflow.dim
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.caption
@@ -2085,6 +2126,7 @@ Panel {
                     Text {
                       width: parent.width
                       text: modelData.value
+                      textFormat: Text.PlainText
                       color: modelData.dimmed ? dayflow.dim : dayflow.foreground
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.body
@@ -2123,6 +2165,7 @@ Panel {
 
               Text {
                 text: "Category breakdown"
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.body
@@ -2161,6 +2204,7 @@ Panel {
 
                   Text {
                     text: (modelData.display || modelData.name) + "  " + modelData.percentage + "%"
+                    textFormat: Text.PlainText
                     color: dayflow.foreground
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
@@ -2172,6 +2216,7 @@ Panel {
               Text {
                 visible: dayflow.weeklyPayload.app_treemap.length > 0
                 text: "Top apps"
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.body
@@ -2198,6 +2243,7 @@ Panel {
 
                     Text {
                       text: (modelData.display || modelData.name) + "  " + modelData.percentage + "%"
+                      textFormat: Text.PlainText
                       color: dayflow.foreground
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.caption
@@ -2216,6 +2262,7 @@ Panel {
                 Text {
                   visible: dayflow.weeklyPayload.heatmap.length > 0
                   text: "Focus heatmap"
+                  textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.body
@@ -2238,6 +2285,7 @@ Panel {
                     Text {
                       width: Style.space(28)
                       text: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][heatRow.dayData.day] || ""
+                      textFormat: Text.PlainText
                       color: dayflow.dim
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.caption
@@ -2268,6 +2316,7 @@ Panel {
               Text {
                 visible: dayflow.weeklyPayload.context_shifts.length > 0
                 text: "Context shifts"
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.body
@@ -2287,6 +2336,7 @@ Panel {
 
                     Text {
                       text: (modelData.source || "?") + " → " + (modelData.target || "?")
+                      textFormat: Text.PlainText
                       color: dayflow.foreground
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.caption
@@ -2295,6 +2345,7 @@ Panel {
 
                     Text {
                       text: modelData.count + "×"
+                      textFormat: Text.PlainText
                       color: dayflow.dim
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.caption
@@ -2306,6 +2357,7 @@ Panel {
               Text {
                 visible: dayflow.weeklyPayload.highlights.length > 0
                 text: "Highlights"
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.body
@@ -2327,6 +2379,7 @@ Panel {
               Text {
                 visible: dayflow.weeklyPayload.suggestions.length > 0
                 text: "Suggestions"
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.body
@@ -2368,6 +2421,7 @@ Panel {
 
               Text {
                 text: "Weekly review"
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.body
@@ -2386,6 +2440,7 @@ Panel {
                   id: genText
                   anchors.centerIn: parent
                   text: "Generate"
+                  textFormat: Text.PlainText
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -2410,6 +2465,7 @@ Panel {
                   id: regText
                   anchors.centerIn: parent
                   text: "Regenerate"
+                  textFormat: Text.PlainText
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -2427,6 +2483,7 @@ Panel {
               width: parent.width
               visible: dayflow.weekSummary === "" && !dayflow.weekSummaryLoading
               text: "Generate a weekly review to get AI advice, corrections, and suggestions."
+              textFormat: Text.PlainText
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -2437,6 +2494,7 @@ Panel {
               width: parent.width
               visible: dayflow.weekSummaryLoading
               text: "Generating weekly review..."
+              textFormat: Text.PlainText
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
@@ -2451,7 +2509,7 @@ Panel {
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
               wrapMode: Text.WordWrap
-              textFormat: Text.MarkdownText
+              textFormat: Text.PlainText
             }
           }
         }
@@ -2472,6 +2530,7 @@ Panel {
 
             Text {
               text: "Week heat map"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
@@ -2480,6 +2539,7 @@ Panel {
 
             Text {
               text: "1 cell = 1 hour"
+              textFormat: Text.PlainText
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -2494,6 +2554,7 @@ Panel {
                 Text {
                   width: Style.space(28)
                   text: dayflow.dayName(index)
+                  textFormat: Text.PlainText
                   color: index === dayflow.todayIndex() ? dayflow.foreground : dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -2563,6 +2624,7 @@ Panel {
             Text {
               text: "Week timeline" +
                     (dayflow.weekStart ? "  " + dayflow.weekStart.substring(5) + " – " + dayflow.weekEnd.substring(5) : "")
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
@@ -2583,6 +2645,7 @@ Panel {
                   spacing: Style.space(6)
                   Text {
                     text: dayflow.dayName(dayIndex) + (dayIndex === dayflow.todayIndex() ? " — today" : "")
+                    textFormat: Text.PlainText
                     color: dayIndex === dayflow.todayIndex() ? dayflow.foreground : dayflow.dim
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
@@ -2591,6 +2654,7 @@ Panel {
                   }
                   Text {
                     text: dayflow.fmtDur(dayflow.weekDayMinutes(dayIndex))
+                    textFormat: Text.PlainText
                     color: dayflow.dim
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
@@ -2618,6 +2682,7 @@ Panel {
                       text: modelData.start + "–" + modelData.end +
                             "  " + modelData.title +
                             (modelData.count > 1 ? "  (" + dayflow.fmtDur(modelData.minutes) + ")" : "")
+                      textFormat: Text.PlainText
                       color: dayflow.foreground
                       font.family: dayflow.fontFamily
                       font.pixelSize: Style.font.caption
@@ -2673,6 +2738,7 @@ Panel {
 
             Text {
               text: "Longest focus blocks"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.body
@@ -2755,6 +2821,7 @@ Panel {
 
         Text {
           text: title
+          textFormat: Text.PlainText
           color: dayflow.foreground
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.body
@@ -2770,6 +2837,7 @@ Panel {
             Text {
               width: parent.width - mins.implicitWidth - parent.spacing
               text: modelData.display || modelData.name
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -2780,6 +2848,7 @@ Panel {
             Text {
               id: mins
               text: dayflow.fmtHours(modelData.minutes) + " hr"
+              textFormat: Text.PlainText
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -2838,6 +2907,7 @@ Panel {
 
               Text {
                 text: "Dayflow"
+                textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.subtitle
@@ -2847,6 +2917,7 @@ Panel {
 
             Text {
               text: (dayflow.paused ? "paused" : "recording") + " · " + dayflow.modelShort()
+              textFormat: Text.PlainText
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -2867,6 +2938,7 @@ Panel {
               id: exg
               anchors.centerIn: parent
               text: dayflow.expanded ? "Shrink" : "Expand"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -2899,6 +2971,7 @@ Panel {
               id: tgl
               anchors.centerIn: parent
               text: dayflow.paused ? "Resume capture" : "Pause"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -2938,6 +3011,7 @@ Panel {
                 id: tabLabel
                 anchors.centerIn: parent
                 text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
+                textFormat: Text.PlainText
                 color: dayflow.currentTab === modelData ? dayflow.foreground : dayflow.dim
                 font.bold: dayflow.currentTab === modelData
                 font.family: dayflow.fontFamily
@@ -2967,6 +3041,7 @@ Panel {
             visible: dayflow.errorText !== ""
             width: parent.width
             text: "! " + dayflow.errorText
+            textFormat: Text.PlainText
             color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
@@ -2977,6 +3052,7 @@ Panel {
             visible: !dayflow.configured
             width: parent.width
             text: "Not configured yet. Run `dayflow setup` in a terminal."
+            textFormat: Text.PlainText
             color: dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
@@ -3017,6 +3093,7 @@ Panel {
               id: a2
               anchors.centerIn: parent
               text: "Ignore current app"
+              textFormat: Text.PlainText
               color: dayflow.activeApp !== "" ? dayflow.foreground : dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -3045,6 +3122,7 @@ Panel {
                 : (dayflow.blocksPending > 0
                     ? "Summarize now (" + dayflow.blocksPending + " pending)"
                     : "Summarize now")
+              textFormat: Text.PlainText
               color: (dayflow.blocksPending > 0 || summarizeProc.running) ? dayflow.foreground : dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -3068,6 +3146,7 @@ Panel {
               id: a4
               anchors.centerIn: parent
               text: "Full view"
+              textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -3089,6 +3168,7 @@ Panel {
           width: parent.width - content.leftPadding - content.rightPadding
           text: "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
                 " — run `dayflow install` or rescan plugins"
+          textFormat: Text.PlainText
           color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.caption
@@ -3100,6 +3180,7 @@ Panel {
           text: dayflow.framesToday + " frames · " + dayflow.blocksPending + " pending" +
                 (dayflow.storageText !== "" ? " · " + dayflow.storageText : "") +
                 (dayflow.ignoredApps.length ? " · ignoring " + dayflow.ignoredApps.map(function(a) { return dayflow.appDisplayName(a) }).join(", ") : "")
+          textFormat: Text.PlainText
           color: dayflow.dim
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.caption
@@ -3110,6 +3191,7 @@ Panel {
           visible: dayflow.notice !== ""
           width: parent.width - content.leftPadding - content.rightPadding
           text: dayflow.notice
+          textFormat: Text.PlainText
           color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.caption
