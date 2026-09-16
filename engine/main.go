@@ -38,6 +38,9 @@ Query:
   today [--json]      Print today's timeline
   day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
+  frames [YYYY-MM-DD] [--json]   List captured frames for a day
+  playback [on|off|status] [--json]   Opt-in frame retention for timelapse
+                          playback (applies the standard storage cap)
   blocks [--json]     List blocks that failed summarization
   standup [--json]    Generate a standup update from yesterday/today
   standup draft [--date YYYY-MM-DD]   Print the saved standup draft as JSON
@@ -194,6 +197,44 @@ func main() {
 
 	case "status":
 		printStatus(cfg, jsonOut)
+
+	case "frames":
+		// frames [YYYY-MM-DD] [--json] — list captured frames for a day
+		d := time.Now()
+		for _, a := range args {
+			if len(a) == 10 && a[4] == '-' {
+				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
+				fatal(err)
+				d = parsed
+			}
+		}
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		printFrames(db, d, jsonOut)
+
+	case "playback":
+		// playback [on|off|status] [--json] — opt-in frame retention for
+		// timelapse playback; enabling applies the standard storage cap.
+		sub := "status"
+		for _, a := range args {
+			if a[0] != '-' {
+				sub = a
+			}
+		}
+		switch sub {
+		case "on", "off":
+			cfg2, changed := setPlayback(cfg, sub == "on")
+			if changed {
+				fatal(writeConfig(cfg2))
+			}
+			cfg = cfg2
+			printPlaybackStatus(cfg, jsonOut)
+		case "status":
+			printPlaybackStatus(cfg, jsonOut)
+		default:
+			usage()
+		}
 
 	case "blocks":
 		printFailed(cfg, jsonOut)
