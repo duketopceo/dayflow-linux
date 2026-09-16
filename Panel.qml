@@ -47,6 +47,7 @@ Panel {
   property int dayOffset: 0
   property bool expanded: false
   property bool expandedLoaded: false
+  property bool fullViewOpen: false
   // Bump with manifest.json version — compared against the engine's
   // reported version to warn when the plugin and binary drift apart.
   readonly property string pluginVersion: "1.0.1"
@@ -949,7 +950,7 @@ Panel {
 
         BusyBar {
           width: parent.width
-          dayflow: dayflow
+          pal: dayflow
           active: dayflow.timelineLoading
         }
 
@@ -1540,7 +1541,7 @@ Panel {
 
         BusyBar {
           width: parent.width
-          dayflow: dayflow
+          pal: dayflow
           active: standupFetchProc.running || goalProc.running
         }
 
@@ -1973,7 +1974,7 @@ Panel {
 
         BusyBar {
           width: parent.width
-          dayflow: dayflow
+          pal: dayflow
           active: weeklyProc.running || weekTimelineProc.running || insightsFetchProc.running
         }
 
@@ -3057,6 +3058,29 @@ Panel {
             }
           }
 
+          Rectangle {
+            height: Style.space(26)
+            width: a4.implicitWidth + Style.space(16)
+            radius: Style.cornerRadius
+            color: dayflow.btnBg(m4.containsMouse)
+            border.color: dayflow.accentFill(0.5)
+            Text {
+              id: a4
+              anchors.centerIn: parent
+              text: "Full view"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: m4
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: { dayflow.uilog("full view open"); dayflow.fullViewOpen = true }
+            }
+          }
+
         }
 
         // ---- status ----
@@ -3093,5 +3117,13 @@ Panel {
         }
       }
     }
+  }
+
+  // Expanded full-view window — created lazily on first "Full view" click.
+  Loader {
+    id: fullViewLoader
+    active: dayflow.fullViewOpen
+    source: "FullView.qml"
+    onLoaded: item.dayflow = dayflow
   }
 }
