@@ -47,6 +47,10 @@ Panel {
   property int dayOffset: 0
   property bool expanded: false
   property bool expandedLoaded: false
+  // Bump with manifest.json version — compared against the engine's
+  // reported version to warn when the plugin and binary drift apart.
+  readonly property string pluginVersion: "1.0.1"
+  property string engineVersion: ""
 
   readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(dayflow.foreground, 1.5)
@@ -127,7 +131,8 @@ Panel {
       var item = settingsCatModel.get(i)
       if (item.name) patch.categories.push({ name: item.name, description: item.description, color: item.color || "" })
     }
-    patchProc.command = ["dayflow", "config", "patch", JSON.stringify(patch)]
+    patchProc.pendingPatch = JSON.stringify(patch)
+    patchProc.command = ["dayflow", "config", "patch", "-"]
     patchProc.running = true
   }
 
@@ -291,6 +296,7 @@ Panel {
       dayflow.framesToday = Number(s.frames_today || 0)
       dayflow.blocksPending = Number(s.blocks_pending || 0)
       dayflow.storageText = s.storage_text || ""
+      dayflow.engineVersion = s.version || ""
       // Apply the persisted expand preference once; later polls must not
       // fight an in-flight `config set` from the Expand click.
       if (!dayflow.expandedLoaded) {
@@ -407,6 +413,20 @@ Panel {
   function dayName(index) {
     var names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     return names[index] || ""
+  }
+
+  // Index of today within the Mon..Sun week (Mon=0).
+  function todayIndex() {
+    return (new Date().getDay() + 6) % 7
+  }
+
+  // Day order for the week timeline: today first so it needs no scroll,
+  // then the rest of the week in order.
+  function weekDayOrder() {
+    var t = dayflow.todayIndex()
+    var order = [t]
+    for (var i = 0; i < 7; i++) if (i !== t) order.push(i)
+    return order
   }
 
   function weekDayBlocks(dayIndex) {
@@ -846,7 +866,10 @@ Panel {
 
   Process {
     id: patchProc
-    command: ["dayflow", "config", "patch", "{}"]
+    property string pendingPatch: ""
+    stdinEnabled: true
+    onStarted: { write(pendingPatch + "\n"); pendingPatch = "" }
+    command: ["dayflow", "config", "patch", "-"]
     onExited: function(exitCode) {
       if (exitCode === 0) {
         dayflow.notice = "settings saved"
@@ -952,6 +975,45 @@ Panel {
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onClicked: { dayflow.dayOffset = 0; dayflow.loadTimeline() }
+            }
+          }
+        }
+
+        // ---- this-week day jump ----
+        Flow {
+          width: parent.width
+          spacing: Style.space(4)
+
+          Repeater {
+            model: 7
+            delegate: Rectangle {
+              property int offset: index - dayflow.todayIndex()
+              height: Style.space(22)
+              width: chipLbl.implicitWidth + Style.space(10)
+              radius: Style.cornerRadius
+              opacity: offset > 0 ? 0.4 : 1
+              color: dayflow.dayOffset === offset
+                ? dayflow.accentFill(0.18)
+                : (chipMa.containsMouse ? dayflow.accentFill(0.08) : "transparent")
+              border.color: dayflow.dayOffset === offset
+                ? dayflow.accentFill(0.5) : dayflow.fgFill(0.12)
+
+              Text {
+                id: chipLbl
+                anchors.centerIn: parent
+                text: dayflow.dayName(index)
+                color: dayflow.dayOffset === offset ? dayflow.foreground : dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              MouseArea {
+                id: chipMa
+                anchors.fill: parent
+                hoverEnabled: true
+                enabled: offset <= 0
+                cursorShape: Qt.PointingHandCursor
+                onClicked: { dayflow.dayOffset = offset; dayflow.loadTimeline() }
+              }
             }
           }
         }
@@ -2174,9 +2236,10 @@ Panel {
                 Text {
                   width: Style.space(28)
                   text: dayflow.dayName(index)
-                  color: dayflow.dim
+                  color: index === dayflow.todayIndex() ? dayflow.foreground : dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
+                  font.bold: index === dayflow.todayIndex()
                   anchors.verticalCenter: parent.verticalCenter
                 }
 
@@ -2249,9 +2312,10 @@ Panel {
             }
 
             Repeater {
-              model: 7
+              model: dayflow.weekDayOrder()
               delegate: Column {
-                property var daySpans: dayflow.weekDaySpans(index)
+                property int dayIndex: modelData
+                property var daySpans: dayflow.weekDaySpans(dayIndex)
                 visible: daySpans.length > 0
                 width: parent.width
                 spacing: Style.space(2)
@@ -2260,15 +2324,15 @@ Panel {
                   width: parent.width
                   spacing: Style.space(6)
                   Text {
-                    text: dayflow.dayName(index)
-                    color: dayflow.foreground
+                    text: dayflow.dayName(dayIndex) + (dayIndex === dayflow.todayIndex() ? " — today" : "")
+                    color: dayIndex === dayflow.todayIndex() ? dayflow.foreground : dayflow.dim
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
                     font.bold: true
                     anchors.verticalCenter: parent.verticalCenter
                   }
                   Text {
-                    text: dayflow.fmtDur(dayflow.weekDayMinutes(index))
+                    text: dayflow.fmtDur(dayflow.weekDayMinutes(dayIndex))
                     color: dayflow.dim
                     font.family: dayflow.fontFamily
                     font.pixelSize: Style.font.caption
@@ -2826,6 +2890,17 @@ Panel {
         }
 
         // ---- status ----
+        Text {
+          visible: dayflow.engineVersion !== "" && dayflow.engineVersion !== dayflow.pluginVersion
+          width: parent.width - content.leftPadding - content.rightPadding
+          text: "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
+                " — run `dayflow install` or rescan plugins"
+          color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
         Text {
           width: parent.width - content.leftPadding - content.rightPadding
           text: dayflow.framesToday + " frames · " + dayflow.blocksPending + " pending" +

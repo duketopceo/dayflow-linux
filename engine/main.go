@@ -14,6 +14,15 @@ import (
 
 const version = "1.0.1"
 
+// readStdin reads one line from stdin — used by `config set -`,
+// `config patch -`, and `provider set <id> <key> -` so secrets never appear
+// in argv. Line-based (not ReadAll) because callers like Quickshell keep the
+// pipe open after writing, so waiting for EOF would hang.
+func readStdin() string {
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	return strings.TrimRight(line, "\r\n")
+}
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `dayflow %s — private, automatic work journal for Wayland/Omarchy
 
@@ -218,17 +227,24 @@ func main() {
 			args = args[1:]
 		}
 		if len(args) >= 2 && args[0] == "set" {
+			val := args[2]
+			if val == "-" {
+				val = strings.TrimSpace(readStdin())
+			}
 			if args[1] == "model" {
-				if vis, ok := isVisionModel(cfg, args[2]); ok && !vis {
-					fatal(fmt.Errorf("model %q cannot read images — dayflow needs a vision model (see 'dayflow models')", args[2]))
+				if vis, ok := isVisionModel(cfg, val); ok && !vis {
+					fatal(fmt.Errorf("model %q cannot read images — dayflow needs a vision model (see 'dayflow models')", val))
 				}
 			}
-			fatal(setConfigValue(args[1], args[2]))
+			fatal(setConfigValue(args[1], val))
 			fmt.Println("set", args[1])
 			break
 		}
 		if len(args) >= 1 && args[0] == "patch" {
 			patch := args[1]
+			if patch == "-" {
+				patch = readStdin() // keeps key material out of argv
+			}
 			if patch == "" {
 				fatal(fmt.Errorf("config patch requires a JSON object"))
 			}
@@ -858,7 +874,7 @@ func main() {
 	case "setup":
 		fatal(runSetup())
 	case "doctor":
-		runDoctor(cfg, jsonOut)
+		runDoctor(cfg, jsonOut, hasFlag(args, "--deep"))
 	case "detect":
 		runDetect(jsonOut)
 	case "models":

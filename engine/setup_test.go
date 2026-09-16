@@ -42,7 +42,7 @@ func TestCollectDoctorChecks(t *testing.T) {
 	t.Setenv("DAYFLOW_DATA_DIR", dir)
 	t.Setenv("DAYFLOW_CONFIG", dir+"/config.json")
 
-	checks, _ := collectDoctorChecks(Config{Model: "google/gemma-4-31b-it"})
+	checks, _ := collectDoctorChecks(Config{Model: "google/gemma-4-31b-it"}, false)
 	if len(checks) == 0 {
 		t.Fatal("expected at least one check")
 	}

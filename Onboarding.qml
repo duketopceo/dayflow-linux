@@ -45,9 +45,13 @@ Flickable {
     }
   }
 
-  // config patch -> doctor --json for the connection test
+  // config patch -> doctor --json for the connection test.
+  // The patch JSON carries the API key, so it goes over stdin, not argv.
   Process {
     id: applyProc
+    property string pendingPatch: ""
+    stdinEnabled: true
+    onStarted: { write(pendingPatch + "\n"); pendingPatch = "" }
     onExited: function(exitCode) {
       if (exitCode === 0) {
         testProc.running = true
@@ -119,7 +123,8 @@ Flickable {
     if (cats.length > 0) {
       patch.categories = cats.map(function(n) { return { name: n, description: n } })
     }
-    applyProc.command = ["dayflow", "config", "patch", JSON.stringify(patch)]
+    applyProc.pendingPatch = JSON.stringify(patch)
+    applyProc.command = ["dayflow", "config", "patch", "-"]
     applyProc.running = true
   }
 
