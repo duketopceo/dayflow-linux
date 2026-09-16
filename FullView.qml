@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -15,9 +16,89 @@ FloatingWindow {
 
   // Rail model — later feature units append their pane entries here.
   readonly property var sections: [
-    { key: "today", label: "Today" },
-    { key: "week",  label: "Week" }
+    { key: "today",     label: "Today" },
+    { key: "week",      label: "Week" },
+    { key: "timelapse", label: "Timelapse" }
   ]
+
+  // ---- timelapse state ----
+  property var tlFrames: []
+  property int tlIndex: 0
+  property bool tlPlaying: false
+  property bool tlLoading: false
+  property string tlError: ""
+
+  function tlLoad() {
+    if (!root.dayflow) return
+    root.dayflow.uilog("timelapse load " + root.dayflow.viewDateStr())
+    framesProc.command = ["dayflow", "frames", root.dayflow.viewDateStr(), "--json"]
+    root.tlLoading = true
+    root.tlPlaying = false
+    framesProc.running = true
+  }
+
+  function tlSeek(i) {
+    if (root.tlFrames.length === 0) return
+    root.tlIndex = Math.max(0, Math.min(root.tlFrames.length - 1, i))
+  }
+
+  Process {
+    id: framesProc
+    command: ["dayflow", "frames", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.tlLoading = false
+        try {
+          var d = JSON.parse(text)
+          var list = (d.frames || []).filter(function(f) { return f.exists })
+          root.tlFrames = list
+          root.tlIndex = 0
+          root.tlError = ""
+        } catch (e) {
+          root.tlFrames = []
+          root.tlError = "could not load frames"
+        }
+      }
+    }
+    onExited: function(exitCode) {
+      root.tlLoading = false
+      if (exitCode !== 0) {
+        root.tlFrames = []
+        root.tlError = "frames listing failed"
+      }
+    }
+  }
+
+  Process {
+    id: playbackProc
+    property string pendingArg: "status"
+    command: ["dayflow", "playback", pendingArg]
+    onExited: function(exitCode) {
+      if (root.dayflow) {
+        root.dayflow.notice = exitCode === 0
+          ? "playback " + playbackProc.pendingArg
+          : "playback toggle failed"
+      }
+      if (exitCode === 0) {
+        playbackStatusProc.running = true
+        root.tlLoad()
+      }
+    }
+  }
+
+  Timer {
+    interval: 250
+    repeat: true
+    running: root.tlPlaying && root.tlFrames.length > 1
+    onTriggered: {
+      if (root.tlIndex >= root.tlFrames.length - 1) {
+        root.tlPlaying = false
+      } else {
+        root.tlIndex++
+      }
+    }
+  }
 
   title: "Dayflow"
   color: "transparent"
@@ -26,15 +107,12 @@ FloatingWindow {
   minimumSize: Qt.size(840, 560)
   visible: root.dayflow !== null
 
-  onVisibleChanged: {
-    if (!visible && root.dayflow) root.dayflow.fullViewOpen = false
-  }
-
   Component.onCompleted: {
     if (root.dayflow) {
       root.dayflow.loadTimeline()
       root.dayflow.refreshForTab("week")
     }
+    playbackStatusProc.running = true
   }
 
   Rectangle {
@@ -105,6 +183,8 @@ FloatingWindow {
                 onClicked: {
                   if (root.dayflow) root.dayflow.uilog("fullview section " + modelData.key)
                   root.section = modelData.key
+                  if (modelData.key === "timelapse" && root.tlFrames.length === 0 && !root.tlLoading)
+                    root.tlLoad()
                 }
               }
             }
@@ -167,7 +247,9 @@ FloatingWindow {
         Loader {
           width: parent.width
           height: parent.height - Style.space(52)
-          sourceComponent: root.section === "week" ? weekPane : todayPane
+          sourceComponent: root.section === "week" ? weekPane
+            : root.section === "timelapse" ? tlPane
+            : todayPane
         }
       }
     }
@@ -604,5 +686,262 @@ FloatingWindow {
         Item { width: 1; height: Style.space(8) }
       }
     }
+  }
+
+  // ============ Timelapse pane ============
+  Component {
+    id: tlPane
+
+    Column {
+      width: parent ? parent.width : 0
+      height: parent ? parent.height : 0
+      spacing: Style.space(8)
+      leftPadding: Style.space(16)
+      rightPadding: Style.space(16)
+
+      // controls
+      Row {
+        width: parent.width
+        spacing: Style.space(6)
+
+        Repeater {
+          model: [
+            { label: "‹", act: -1 },
+            { label: "Today", act: 0 },
+            { label: "›", act: 1 }
+          ]
+
+          delegate: Rectangle {
+            required property var modelData
+            height: Style.space(28)
+            width: tlNavText.implicitWidth + Style.space(16)
+            radius: Style.cornerRadius
+            color: tlNavMouse.containsMouse ? root.dayflow.fgFill(0.08) : "transparent"
+            border.color: root.dayflow ? root.dayflow.fgFill(0.15) : "transparent"
+
+            Text {
+              id: tlNavText
+              anchors.centerIn: parent
+              text: modelData.label
+              color: root.dayflow ? root.dayflow.foreground : "white"
+              font.family: root.dayflow ? root.dayflow.fontFamily : ""
+              font.pixelSize: Style.font.body
+            }
+
+            MouseArea {
+              id: tlNavMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                if (!root.dayflow) return
+                if (modelData.act === 0) {
+                  if (root.dayflow.dayOffset !== 0) {
+                    root.dayflow.dayOffset = 0
+                    root.dayflow.loadTimeline()
+                  }
+                } else {
+                  root.dayflow.goDay(modelData.act)
+                }
+              }
+            }
+          }
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.dayflow ? root.dayflow.viewDateLabel() : ""
+          color: root.dayflow ? root.dayflow.dim : "gray"
+          font.family: root.dayflow ? root.dayflow.fontFamily : ""
+          font.pixelSize: Style.font.body
+        }
+
+        Item { width: Style.space(8); height: 1 }
+
+        // play / pause
+        Rectangle {
+          height: Style.space(28)
+          width: playText.implicitWidth + Style.space(16)
+          radius: Style.cornerRadius
+          color: playMouse.containsMouse ? root.dayflow.accentFill(0.12) : "transparent"
+          border.color: root.dayflow ? root.dayflow.accentFill(0.4) : "transparent"
+          opacity: root.tlFrames.length > 1 ? 1 : 0.45
+
+          Text {
+            id: playText
+            anchors.centerIn: parent
+            text: root.tlPlaying ? "Pause" : "Play"
+            color: root.dayflow ? root.dayflow.foreground : "white"
+            font.family: root.dayflow ? root.dayflow.fontFamily : ""
+            font.pixelSize: Style.font.caption
+          }
+
+          MouseArea {
+            id: playMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: root.tlFrames.length > 1
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              if (root.dayflow) root.dayflow.uilog("timelapse " + (root.tlPlaying ? "pause" : "play"))
+              root.tlPlaying = !root.tlPlaying
+            }
+          }
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.tlFrames.length > 0
+            ? "frame " + (root.tlIndex + 1) + " / " + root.tlFrames.length +
+              " · " + Qt.formatTime(new Date(root.tlFrames[root.tlIndex].ts * 1000), "hh:mm:ss")
+            : ""
+          color: root.dayflow ? root.dayflow.dim : "gray"
+          font.family: root.dayflow ? root.dayflow.fontFamily : ""
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      BusyBar {
+        width: parent.width
+        pal: root.dayflow
+        active: root.tlLoading
+      }
+
+      // image area
+      Rectangle {
+        width: parent.width
+        height: parent.height - Style.space(150)
+        radius: Style.cornerRadius
+        color: "black"
+        clip: true
+
+        Image {
+          anchors.fill: parent
+          fillMode: Image.PreserveAspectFit
+          // downscale at decode — full-res JPEGs would stall the scrubber
+          sourceSize.width: Math.round(width * 2)
+          sourceSize.height: Math.round(height * 2)
+          source: root.tlFrames.length > 0
+            ? "file://" + root.tlFrames[root.tlIndex].path
+            : ""
+        }
+
+        Text {
+          anchors.centerIn: parent
+          visible: root.tlFrames.length === 0 && !root.tlLoading
+          width: parent.width - Style.space(40)
+          horizontalAlignment: Text.AlignHCenter
+          wrapMode: Text.WordWrap
+          text: root.tlError !== "" ? root.tlError
+            : (root.tlPlaybackOn
+                ? "No frames kept for this day."
+                : "Frame playback is off. Frames are deleted after summarization — enable playback to keep them (standard 10GB cap).")
+          color: "white"
+          font.family: root.dayflow ? root.dayflow.fontFamily : ""
+          font.pixelSize: Style.font.body
+        }
+
+        // enable button, only when playback is off and day has no frames
+        Rectangle {
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.bottom: parent.bottom
+          anchors.bottomMargin: Style.space(20)
+          visible: !root.tlPlaybackOn && !root.tlLoading
+          height: Style.space(30)
+          width: enableText.implicitWidth + Style.space(20)
+          radius: Style.cornerRadius
+          color: enableMouse.containsMouse ? root.dayflow.accentFill(0.2) : root.dayflow.accentFill(0.12)
+          border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
+
+          Text {
+            id: enableText
+            anchors.centerIn: parent
+            text: "Enable playback"
+            color: "white"
+            font.family: root.dayflow ? root.dayflow.fontFamily : ""
+            font.pixelSize: Style.font.body
+          }
+
+          MouseArea {
+            id: enableMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              if (root.dayflow) root.dayflow.uilog("playback enable")
+              playbackProc.pendingArg = "on"
+              playbackProc.running = true
+            }
+          }
+        }
+      }
+
+      // scrub strip
+      Rectangle {
+        width: parent.width
+        height: Style.space(18)
+        radius: Style.cornerRadius
+        color: root.dayflow ? root.dayflow.fgFill(0.06) : "transparent"
+        border.color: root.dayflow ? root.dayflow.fgFill(0.10) : "transparent"
+
+        Rectangle {
+          width: root.tlFrames.length > 1
+            ? (root.tlIndex / (root.tlFrames.length - 1)) * parent.width
+            : 0
+          height: parent.height
+          radius: Style.cornerRadius
+          color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          enabled: root.tlFrames.length > 0
+          cursorShape: Qt.PointingHandCursor
+          onClicked: function(m) { root.tlSeek(Math.round(m.x / width * (root.tlFrames.length - 1))) }
+          onPositionChanged: function(m) {
+            if (pressed) root.tlSeek(Math.round(m.x / width * (root.tlFrames.length - 1)))
+          }
+        }
+      }
+
+      Text {
+        width: parent.width
+        visible: root.tlError !== ""
+        text: "! " + root.tlError
+        color: Color.urgent !== undefined ? Color.urgent : "red"
+        font.family: root.dayflow ? root.dayflow.fontFamily : ""
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+    }
+  }
+
+  // Day changes reload the scrubber when it's visible.
+  Connections {
+    target: root.dayflow
+    function onDayOffsetChanged() {
+      if (root.section === "timelapse") root.tlLoad()
+    }
+  }
+
+  // playback on/off state for the pane gate
+  property bool tlPlaybackOn: false
+
+  Process {
+    id: playbackStatusProc
+    command: ["dayflow", "playback", "status", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var d = JSON.parse(text)
+          root.tlPlaybackOn = d.enabled === true
+        } catch (e) {}
+      }
+    }
+  }
+
+  onVisibleChanged: {
+    if (!visible && root.dayflow) root.dayflow.fullViewOpen = false
   }
 }
