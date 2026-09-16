@@ -12,7 +12,7 @@ import (
 
 // schemaVersion is the highest migration this binary knows how to apply.
 // Bump it and add an applyMigration case when the schema changes.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // schema is the base (v1) schema: capture and journal tables only.
 const schema = `
@@ -140,6 +140,15 @@ CREATE TABLE IF NOT EXISTS block_edits (
 CREATE INDEX IF NOT EXISTS block_edits_start_ts ON block_edits(start_ts);
 `
 
+// schemaV3 enforces one goal per day: drop duplicate rows (keeping the most
+// recently inserted) and replace the plain date index with a unique one so
+// concurrent upserts can't create dupes.
+const schemaV3 = `
+DELETE FROM day_goals WHERE id NOT IN (SELECT MAX(id) FROM day_goals GROUP BY date);
+DROP INDEX IF EXISTS day_goals_date;
+CREATE UNIQUE INDEX IF NOT EXISTS day_goals_date ON day_goals(date);
+`
+
 // columnPatches adds columns to databases created before the columns existed.
 // Each is applied only when the column is actually missing.
 var columnPatches = []struct {
@@ -197,6 +206,10 @@ func applyMigration(db *sql.DB, v int) error {
 	switch v {
 	case 2:
 		if _, err := tx.Exec(schemaV2); err != nil {
+			return err
+		}
+	case 3:
+		if _, err := tx.Exec(schemaV3); err != nil {
 			return err
 		}
 	default:

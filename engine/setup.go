@@ -259,7 +259,7 @@ type doctorCheck struct {
 
 // collectDoctorChecks runs every check and returns results plus the failure
 // count. Rendering (text or JSON) happens in runDoctor.
-func collectDoctorChecks(cfg Config) ([]doctorCheck, int) {
+func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 	var checks []doctorCheck
 	fail := 0
 	check := func(name string, ok bool, hint string) {
@@ -308,12 +308,16 @@ func collectDoctorChecks(cfg Config) ([]doctorCheck, int) {
 			checks = append(checks, doctorCheck{Name: "database open/migrate", Status: "fail", Detail: err.Error()})
 		} else {
 			defer db.Close()
+			pragma := "quick_check"
+			if deep {
+				pragma = "integrity_check"
+			}
 			var qc string
-			if err := db.QueryRow(`PRAGMA quick_check`).Scan(&qc); err != nil {
+			if err := db.QueryRow(`PRAGMA ` + pragma).Scan(&qc); err != nil {
 				fail++
 				checks = append(checks, doctorCheck{Name: "sqlite integrity", Status: "fail", Detail: err.Error()})
 			} else {
-				check("sqlite integrity", qc == "ok", "quick_check: "+qc)
+				check("sqlite integrity", qc == "ok", pragma+": "+qc)
 			}
 			var fk int
 			db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk)
@@ -334,8 +338,8 @@ func collectDoctorChecks(cfg Config) ([]doctorCheck, int) {
 	return checks, fail
 }
 
-func runDoctor(cfg Config, jsonOut bool) {
-	checks, fail := collectDoctorChecks(cfg)
+func runDoctor(cfg Config, jsonOut bool, deep bool) {
+	checks, fail := collectDoctorChecks(cfg, deep)
 	if jsonOut {
 		out := map[string]interface{}{
 			"checks":         checks,

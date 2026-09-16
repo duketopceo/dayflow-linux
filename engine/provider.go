@@ -313,35 +313,39 @@ func runProvider(cfg Config, args []string, jsonOut bool) error {
 			return fmt.Errorf("no provider %q", args[1])
 		}
 		p := &cfg.Providers[idx]
+		val := args[3]
+		if val == "-" {
+			val = strings.TrimSpace(readStdin()) // keeps secrets out of argv
+		}
 		switch args[2] {
 		case "name":
-			p.Name = args[3]
+			p.Name = val
 		case "kind":
-			k := strings.ToLower(args[3])
+			k := strings.ToLower(val)
 			if !validProviderKind(k) {
 				return fmt.Errorf("kind must be one of: %s", strings.Join(providerKinds, ", "))
 			}
 			p.Kind = k
 		case "api_base_url":
-			p.APIBaseURL = normalizeAPIBaseURL(args[3])
+			p.APIBaseURL = normalizeAPIBaseURL(val)
 		case "api_key":
-			p.APIKey = args[3]
+			p.APIKey = val
 		case "model":
-			p.Model = args[3]
+			p.Model = val
 		case "enabled":
-			p.Enabled = args[3] == "true" || args[3] == "1" || args[3] == "yes"
+			p.Enabled = val == "true" || val == "1" || val == "yes"
 		case "vision":
-			p.Vision = args[3] == "true" || args[3] == "1" || args[3] == "yes"
+			p.Vision = val == "true" || val == "1" || val == "yes"
 		case "chat":
-			p.Chat = args[3] == "true" || args[3] == "1" || args[3] == "yes"
+			p.Chat = val == "true" || val == "1" || val == "yes"
 		case "title_prompt":
-			p.PromptOverrides.TitlePrompt = args[3]
+			p.PromptOverrides.TitlePrompt = val
 		case "summary_prompt":
-			p.PromptOverrides.SummaryPrompt = args[3]
+			p.PromptOverrides.SummaryPrompt = val
 		case "detailed_prompt":
-			p.PromptOverrides.DetailedPrompt = args[3]
+			p.PromptOverrides.DetailedPrompt = val
 		case "chat_prompt":
-			p.PromptOverrides.ChatPrompt = args[3]
+			p.PromptOverrides.ChatPrompt = val
 		default:
 			return fmt.Errorf("unknown provider key %q (name, kind, api_base_url, api_key, model, enabled, vision, chat, *_prompt)", args[2])
 		}

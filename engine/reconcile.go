@@ -137,6 +137,14 @@ func reconcileFrames(db *sql.DB, cfg Config, dryRun bool) (reconcileResult, erro
 			logEvent(db, "reconcile_error", p+": "+err.Error())
 			continue
 		}
+		// The purge below keys off mtime; a quarantined orphan keeps its
+		// original (old) mtime and would be purged on the next pass. Stamp
+		// it with quarantine time so the retention window is a real review
+		// period.
+		now := time.Now()
+		if err := os.Chtimes(dst, now, now); err != nil {
+			logEvent(db, "reconcile_error", dst+": "+err.Error())
+		}
 		res.Quarantined++
 	}
 	if res.Quarantined > 0 {

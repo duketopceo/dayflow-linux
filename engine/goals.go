@@ -28,17 +28,13 @@ func getGoal(db *sql.DB, date string) (DayGoal, error) {
 	return g, nil
 }
 
-// setGoal upserts the goal text for a date. The day_goals_date index is not
-// unique, so upsert is update-then-insert.
+// setGoal upserts the goal text for a date. The unique day_goals_date index
+// (schema v3) makes this race-safe via ON CONFLICT.
 func setGoal(db *sql.DB, date, goal string) error {
-	res, err := db.Exec(`UPDATE day_goals SET goal = ? WHERE date = ?`, goal, date)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		_, err = db.Exec(`INSERT INTO day_goals(date, goal, completed, created_at)
-		  VALUES(?,?,0,?)`, date, goal, time.Now().Unix())
-	}
+	_, err := db.Exec(`INSERT INTO day_goals(date, goal, completed, created_at)
+	  VALUES(?,?,0,?)
+	  ON CONFLICT(date) DO UPDATE SET goal = excluded.goal`,
+		date, goal, time.Now().Unix())
 	return err
 }
 
