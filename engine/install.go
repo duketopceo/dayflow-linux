@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+// unitMarker proves a dayflow-*.service/.timer file was created by this
+// installer: only marked units (or exact-content matches) may be replaced or
+// removed, so install/uninstall never clobber user-owned units that happen to
+// share our names.
+const unitMarker = "# Managed by dayflow — dayflow install/uninstall may replace or remove this file\n"
+
 const captureService = `[Unit]
 Description=dayflow screen capture daemon
 After=graphical-session.target
@@ -104,11 +110,8 @@ func unitArg(p string) string {
 	return `"` + strings.ReplaceAll(strings.ReplaceAll(p, "%", "%%"), `"`, `\"`) + `"`
 }
 
-func installUnits() error {
-	dir := unitDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
+// unitSet renders every managed unit for this binary path, marker included.
+func unitSet() map[string]string {
 	exe := unitArg(selfExe())
 	expDir := unitArg(exportsDir())
 	units := map[string]string{
@@ -121,7 +124,72 @@ func installUnits() error {
 		"dayflow-export.timer":      exportTimer,
 	}
 	for name, body := range units {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		units[name] = unitMarker + body
+	}
+	return units
+}
+
+// unitOwned reports whether path is a regular file we may replace/remove:
+// a symlink or unreadable path is never ours; content must carry the marker
+// or match the expected body exactly.
+func unitOwned(path, expected string) bool {
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) > 64<<10 {
+		return false
+	}
+	return strings.HasPrefix(string(b), unitMarker) || string(b) == expected
+}
+
+// writeUnitAtomic publishes body via a same-directory temp + rename. The temp
+// name is O_EXCL-created by us, so a planted symlink at the target is never
+// followed — it is only replaced wholesale on rename.
+func writeUnitAtomic(dir, name, body string) error {
+	tmp, err := os.CreateTemp(dir, ".dayflow-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.WriteString(body); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filepath.Join(dir, name))
+}
+
+func installUnits() error {
+	dir := unitDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	units := unitSet()
+	var unowned []string
+	for name, body := range units {
+		path := filepath.Join(dir, name)
+		if _, err := os.Lstat(path); err == nil && !unitOwned(path, body) {
+			unowned = append(unowned, path)
+		}
+	}
+	if len(unowned) > 0 {
+		return fmt.Errorf("refusing to overwrite units not managed by dayflow (remove them manually to install): %s", strings.Join(unowned, ", "))
+	}
+	for name, body := range units {
+		if err := writeUnitAtomic(dir, name, body); err != nil {
 			return err
 		}
 		fmt.Println("wrote", filepath.Join(dir, name))
@@ -154,9 +222,21 @@ func uninstallUnits() error {
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
 		c.Run()
 	}
-	run("--user", "disable", "--now", "dayflow-summarize.timer", "dayflow-capture.service", "dayflow-backup.timer", "dayflow-export.timer")
-	for _, name := range []string{"dayflow-capture.service", "dayflow-summarize.service", "dayflow-summarize.timer", "dayflow-backup.service", "dayflow-backup.timer", "dayflow-export.service", "dayflow-export.timer"} {
-		os.Remove(filepath.Join(unitDir(), name))
+	dir := unitDir()
+	var owned []string
+	for name, body := range unitSet() {
+		path := filepath.Join(dir, name)
+		if unitOwned(path, body) {
+			owned = append(owned, name)
+		} else if _, err := os.Lstat(path); err == nil {
+			fmt.Println("skipping unmanaged unit:", path)
+		}
+	}
+	if len(owned) > 0 {
+		run(append([]string{"--user", "disable", "--now"}, owned...)...)
+		for _, name := range owned {
+			os.Remove(filepath.Join(dir, name))
+		}
 	}
 	run("--user", "daemon-reload")
 	fmt.Println("units removed")

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -12,6 +13,10 @@ import (
 	"strings"
 	"time"
 )
+
+// maxModelsBody caps the /models catalog read: the 15s client timeout does
+// not bound a continuously delivered body, so the read itself must.
+const maxModelsBody = 8 << 20 // 8 MiB — the catalog is ~2-3 MB today
 
 // ModelPreset is a recommended vision model for Dayflow.
 type ModelPreset struct {
@@ -96,7 +101,14 @@ func fetchModels(apiKey string) ([]struct {
 			} `json:"pricing"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelsBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxModelsBody {
+		return nil, fmt.Errorf("models response exceeded %d bytes", maxModelsBody)
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, err
 	}
 	return out.Data, nil
