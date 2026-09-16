@@ -645,7 +645,10 @@ Panel {
       onStreamFinished: dayflow.applyTimeline(text)
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0) dayflow.errorText = "dayflow CLI not found on PATH"
+      if (exitCode !== 0) {
+        dayflow.timelineLoading = false
+        dayflow.errorText = "dayflow CLI not found on PATH"
+      }
     }
   }
 
