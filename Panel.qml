@@ -772,9 +772,17 @@ Panel {
 
   Process {
     id: copyProc
-    command: ["bash", "-c", "dayflow export | wl-copy"]
+    command: ["bash", "-c", "dayflow export today | wl-copy"]
     onExited: function(exitCode) {
-      dayflow.notice = exitCode === 0 ? "copied today's journal" : "copy failed"
+      dayflow.notice = exitCode === 0 ? "copied today (markdown)" : "copy failed"
+    }
+  }
+
+  Process {
+    id: copyWeekProc
+    command: ["bash", "-c", "dayflow export week | wl-copy"]
+    onExited: function(exitCode) {
+      dayflow.notice = exitCode === 0 ? "copied week (markdown)" : "copy failed"
     }
   }
 
@@ -2721,7 +2729,7 @@ Panel {
             Text {
               id: a4
               anchors.centerIn: parent
-              text: "Copy today's journal"
+              text: copyProc.running ? "Copying…" : "Copy today (md)"
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
@@ -2731,6 +2739,28 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               onClicked: { if (!copyProc.running) copyProc.running = true }
+            }
+          }
+
+          Rectangle {
+            height: Style.space(26)
+            width: a5.implicitWidth + Style.space(16)
+            radius: Style.cornerRadius
+            color: dayflow.btnBg(m5.containsMouse)
+            border.color: dayflow.accentFill(0.5)
+            Text {
+              id: a5
+              anchors.centerIn: parent
+              text: copyWeekProc.running ? "Copying…" : "Copy week (md)"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: m5
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: { if (!copyWeekProc.running) copyWeekProc.running = true }
             }
           }
         }
