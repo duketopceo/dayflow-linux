@@ -93,6 +93,7 @@ Flickable {
   }
 
   function loadConversation(id) {
+    if (dayflow) dayflow.uilog("chat load conv " + id)
     // chatProc and convProc both write chatConversation/chatMessages —
     // switching while either is active lets completions land out of order.
     if (chatProc.running || convProc.running) return
@@ -106,6 +107,7 @@ Flickable {
   }
 
   function newConversation() {
+    if (dayflow) dayflow.uilog("chat new")
     if (chatProc.running || convProc.running) return
     root.chatConversation = 0
     root.chatMessages = []
@@ -114,6 +116,7 @@ Flickable {
 
   function sendChat() {
     if (root.chatInput.trim() === "") return
+    if (dayflow) dayflow.uilog("chat send")
     root.chatLoading = true
     root.lastSent = root.chatInput
     var cmd = ["dayflow", "chat", root.chatInput, "--json"]

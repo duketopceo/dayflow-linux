@@ -12,21 +12,50 @@ func debugLogPath() string { return filepath.Join(dataDir(), "debug.log") }
 
 var debugMu sync.Mutex
 
-// debugf appends a timestamped line to debug.log when config debug is on.
-// Best-effort: logging failures are ignored so they never break capture.
-func debugf(cfg Config, format string, args ...any) {
-	if !cfg.Debug {
-		return
-	}
+// debugLogKeepDays is how long rotated debug-YYYYMMDD.log archives survive.
+const debugLogKeepDays = 10
+
+// appendLog writes one timestamped line to debug.log, rotating the file first
+// when it rolled past midnight or grew past 8MB. Archives are pruned after
+// debugLogKeepDays. Best-effort: failures never break the caller.
+func appendLog(line string) {
 	debugMu.Lock()
 	defer debugMu.Unlock()
-	f, err := os.OpenFile(debugLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	p := debugLogPath()
+	if fi, err := os.Stat(p); err == nil {
+		dayAgo := time.Now().Add(-24 * time.Hour)
+		if fi.ModTime().Before(dayAgo) || fi.Size() > 8<<20 {
+			arch := filepath.Join(dataDir(),
+				"debug-"+fi.ModTime().Format("20060102")+".log")
+			os.Rename(p, arch)
+			pruneLogArchives()
+		}
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n",
-		time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
+	fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), line)
+}
+
+// pruneLogArchives deletes rotated debug-*.log files past the keep window.
+func pruneLogArchives() {
+	cutoff := time.Now().Add(-debugLogKeepDays * 24 * time.Hour)
+	matches, _ := filepath.Glob(filepath.Join(dataDir(), "debug-*.log"))
+	for _, m := range matches {
+		if fi, err := os.Stat(m); err == nil && fi.ModTime().Before(cutoff) {
+			os.Remove(m)
+		}
+	}
+}
+
+// debugf appends a timestamped line to debug.log when config debug is on.
+func debugf(cfg Config, format string, args ...any) {
+	if !cfg.Debug {
+		return
+	}
+	appendLog(fmt.Sprintf(format, args...))
 }
 
 // humanBytes renders a byte count as "1.4 MB".

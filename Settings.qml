@@ -650,7 +650,7 @@ Flickable {
           }
           MouseArea {
             anchors.fill: parent
-            onClicked: dayflow.saveConfig()
+            onClicked: { dayflow.uilog("settings save"); dayflow.saveConfig() }
           }
         }
 
@@ -673,7 +673,7 @@ Flickable {
             id: resetMa
             anchors.fill: parent
             hoverEnabled: true
-            onClicked: dayflow.loadConfig()
+            onClicked: { dayflow.uilog("settings reload"); dayflow.loadConfig() }
           }
         }
       }

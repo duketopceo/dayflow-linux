@@ -170,7 +170,16 @@ Panel {
     dayflow.loadTimeline()
   }
 
+  // Fire-and-forget UI action logging -> debug.log. A single shared Process;
+  // overlapping actions may drop a line, which is fine for debug telemetry.
+  Process { id: uiLogProc }
+  function uilog(msg) {
+    uiLogProc.command = ["dayflow", "log", msg]
+    if (!uiLogProc.running) uiLogProc.running = true
+  }
+
   function loadTimeline() {
+    dayflow.uilog("timeline load " + dayflow.viewDateStr())
     timelineProc.command = ["dayflow", "timeline", "--json", dayflow.viewDateStr()]
     dayflow.timelineLoading = true
     if (!timelineProc.running) timelineProc.running = true
@@ -458,6 +467,7 @@ Panel {
     today.setHours(0, 0, 0, 0)
     dayflow.dayOffset = Math.round((sel - today) / 86400000)
     dayflow.showCalendar = false
+    dayflow.uilog("calendar pick " + Qt.formatDate(sel, "yyyy-MM-dd"))
     dayflow.loadTimeline()
   }
 
@@ -1009,7 +1019,7 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: { dayflow.dayOffset = 0; dayflow.loadTimeline() }
+              onClicked: { dayflow.uilog("back to today"); dayflow.dayOffset = 0; dayflow.loadTimeline() }
             }
           }
 
@@ -1031,7 +1041,7 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: dayflow.showCalendar = !dayflow.showCalendar
+              onClicked: { dayflow.showCalendar = !dayflow.showCalendar; dayflow.uilog("calendar " + (dayflow.showCalendar ? "open" : "close")) }
             }
           }
         }
@@ -1156,7 +1166,7 @@ Panel {
                 hoverEnabled: true
                 enabled: offset <= 0
                 cursorShape: Qt.PointingHandCursor
-                onClicked: { dayflow.dayOffset = offset; dayflow.loadTimeline() }
+                onClicked: { dayflow.uilog("week chip " + modelData); dayflow.dayOffset = offset; dayflow.loadTimeline() }
               }
             }
           }
@@ -1798,7 +1808,7 @@ Panel {
               id: mcp
               anchors.fill: parent
               hoverEnabled: true
-              onClicked: { if (!standupProc.running) standupProc.running = true }
+              onClicked: { dayflow.uilog("standup refresh"); if (!standupProc.running) standupProc.running = true }
             }
           }
         }
@@ -1888,7 +1898,7 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: dayflow.saveDraft()
+              onClicked: { dayflow.uilog("draft save"); dayflow.saveDraft() }
             }
           }
         }
@@ -2280,7 +2290,7 @@ Panel {
                   id: genMa
                   anchors.fill: parent
                   hoverEnabled: true
-                  onClicked: { dayflow.weekSummaryLoading = true; if (!reviewProc.running) reviewProc.running = true }
+                  onClicked: { dayflow.uilog("week review"); dayflow.weekSummaryLoading = true; if (!reviewProc.running) reviewProc.running = true }
                 }
               }
 
@@ -2304,7 +2314,7 @@ Panel {
                   id: regMa
                   anchors.fill: parent
                   hoverEnabled: true
-                  onClicked: { dayflow.weekSummaryLoading = true; if (!reviewProc.running) reviewProc.running = true }
+                  onClicked: { dayflow.uilog("week review"); dayflow.weekSummaryLoading = true; if (!reviewProc.running) reviewProc.running = true }
                 }
               }
             }
@@ -2794,7 +2804,7 @@ Panel {
               id: mtgl
               anchors.fill: parent
               hoverEnabled: true
-              onClicked: toggleProc.running = true
+              onClicked: { dayflow.uilog("expand toggle"); toggleProc.running = true }
             }
           }
         }
@@ -2835,7 +2845,7 @@ Panel {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: dayflow.currentTab = modelData
+                onClicked: { dayflow.uilog("tab " + modelData); dayflow.currentTab = modelData }
               }
             }
           }
@@ -2912,7 +2922,7 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               enabled: dayflow.activeApp !== ""
-              onClicked: { if (!ignoreProc.running) ignoreProc.running = true }
+              onClicked: { dayflow.uilog("ignore app " + dayflow.activeApp); if (!ignoreProc.running) ignoreProc.running = true }
             }
           }
 
@@ -2940,7 +2950,7 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               enabled: dayflow.blocksPending > 0 && !summarizeProc.running
-              onClicked: { if (!summarizeProc.running) summarizeProc.running = true }
+              onClicked: { dayflow.uilog("summarize now"); if (!summarizeProc.running) summarizeProc.running = true }
             }
           }
 
@@ -2962,7 +2972,7 @@ Panel {
               id: m4
               anchors.fill: parent
               hoverEnabled: true
-              onClicked: { if (!copyProc.running) copyProc.running = true }
+              onClicked: { dayflow.uilog("copy today md"); if (!copyProc.running) copyProc.running = true }
             }
           }
 
@@ -2984,7 +2994,7 @@ Panel {
               id: m5
               anchors.fill: parent
               hoverEnabled: true
-              onClicked: { if (!copyWeekProc.running) copyWeekProc.running = true }
+              onClicked: { dayflow.uilog("copy week md"); if (!copyWeekProc.running) copyWeekProc.running = true }
             }
           }
 
@@ -3006,7 +3016,7 @@ Panel {
               id: m6
               anchors.fill: parent
               hoverEnabled: true
-              onClicked: { if (!copyMiniProc.running) copyMiniProc.running = true }
+              onClicked: { dayflow.uilog("copy today mini"); if (!copyMiniProc.running) copyMiniProc.running = true }
             }
           }
 
@@ -3028,7 +3038,7 @@ Panel {
               id: m7
               anchors.fill: parent
               hoverEnabled: true
-              onClicked: { if (!copyWeekMiniProc.running) copyWeekMiniProc.running = true }
+              onClicked: { dayflow.uilog("copy week mini"); if (!copyWeekMiniProc.running) copyWeekMiniProc.running = true }
             }
           }
         }

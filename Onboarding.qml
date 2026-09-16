@@ -427,7 +427,7 @@ Flickable {
             color: root.dayflow ? root.dayflow.foreground : Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
-          MouseArea { anchors.fill: parent; onClicked: { root.apply(); root.step = 3 } }
+          MouseArea { anchors.fill: parent; onClicked: { if (dayflow) dayflow.uilog("onboarding apply " + root.mode); root.apply(); root.step = 3 } }
         }
         Text {
           anchors.verticalCenter: parent.verticalCenter

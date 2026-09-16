@@ -56,6 +56,7 @@ Control:
                           output, capture_command, openrouter_api_key, provider,
                           filter_inappropriate, panel_expanded, debug)
   key set|status|del    Store/inspect API keys in OmaSeal instead of config.json
+  log <msg>             Append a UI action line to debug.log
   provider [list]       List configured providers and routing
   provider add <id> <kind>          Add a provider (openrouter, local, custom,
                                     gemini, chatgpt, claude, mcp)
@@ -927,6 +928,14 @@ func main() {
 			fmt.Println("deleted:", args[1])
 		default:
 			fatal(fmt.Errorf("usage: dayflow key set|status|del"))
+		}
+
+	case "log":
+		// UI action log channel — the panel calls this for clicks/actions.
+		// Always on (actions are sparse); gated by nothing so it works even
+		// when engine debug is off.
+		if len(args) >= 1 {
+			appendLog("ui: " + strings.Join(args, " "))
 		}
 
 	case "doctor":
