@@ -46,6 +46,7 @@ Panel {
   property var spans: []
   property int dayOffset: 0
   property bool expanded: false
+  property bool expandedLoaded: false
 
   readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(dayflow.foreground, 1.5)
@@ -285,6 +286,12 @@ Panel {
       dayflow.framesToday = Number(s.frames_today || 0)
       dayflow.blocksPending = Number(s.blocks_pending || 0)
       dayflow.storageText = s.storage_text || ""
+      // Apply the persisted expand preference once; later polls must not
+      // fight an in-flight `config set` from the Expand click.
+      if (!dayflow.expandedLoaded) {
+        dayflow.expanded = s.panel_expanded === true
+        dayflow.expandedLoaded = true
+      }
     } catch (e) {}
   }
 
@@ -788,6 +795,14 @@ Panel {
     command: ["bash", "-c", "dayflow standup | wl-copy"]
     onExited: function(exitCode) {
       dayflow.notice = exitCode === 0 ? "copied standup" : "standup copy failed"
+    }
+  }
+
+  Process {
+    id: persistExpandedProc
+    command: ["dayflow", "config", "set", "panel_expanded", "false"]
+    onExited: function(exitCode) {
+      if (exitCode !== 0) dayflow.notice = "could not save panel size"
     }
   }
 
@@ -2432,7 +2447,7 @@ Panel {
     bar: dayflow.bar
     open: dayflow.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(dayflow.expanded ? Style.space(560) : Style.space(340))
+    contentWidth: panel.fittedContentWidth(dayflow.expanded ? Style.space(560) : Style.space(420))
     contentHeight: panel.fittedContentHeight(content.implicitHeight)
 
     PanelKeyCatcher {
@@ -2510,7 +2525,12 @@ Panel {
               id: mexg
               anchors.fill: parent
               hoverEnabled: true
-              onClicked: dayflow.expanded = !dayflow.expanded
+              onClicked: {
+                dayflow.expanded = !dayflow.expanded
+                persistExpandedProc.command = ["dayflow", "config", "set", "panel_expanded",
+                  dayflow.expanded ? "true" : "false"]
+                persistExpandedProc.running = true
+              }
             }
           }
 
