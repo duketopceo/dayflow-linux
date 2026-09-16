@@ -2460,7 +2460,7 @@ Panel {
     bar: dayflow.bar
     open: dayflow.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(dayflow.expanded ? Style.space(560) : Style.space(420))
+    contentWidth: panel.fittedContentWidth(dayflow.expanded ? Style.space(780) : Style.space(540))
     contentHeight: panel.fittedContentHeight(content.implicitHeight)
 
     PanelKeyCatcher {
