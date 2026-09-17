@@ -98,6 +98,8 @@ omarchy plugin enable io.github.duketopceo.dayflow
 
 Bar widget: recording indicator; left-click opens the timeline panel, right-click pauses/resumes. The panel shows today's blocks, engine stats, the ignore list, and pause / ignore-focused-app / summarize-now / standup / insights controls.
 
+The panel's **Full view** button opens a standalone window with Today/Week timelines, a timelapse frame scrubber (requires `dayflow playback on`), a context-shift flow diagram, Claude Code/Codex session recaps, and a next-day forecast.
+
 ## Uninstall
 
 ```sh
@@ -135,6 +137,12 @@ dayflow unignore <class>
 dayflow events -n 20           # full audit log: captures, skips, errors
 dayflow usage                  # token totals across all API calls
 dayflow blocks                 # failed summaries (auto-retried)
+dayflow frames [YYYY-MM-DD]    # list captured frames for a day
+dayflow playback on|off|status # opt-in frame retention for timelapse (10GB cap)
+dayflow agents [YYYY-MM-DD]    # Claude Code / Codex session recaps
+dayflow forecast [YYYY-MM-DD]  # predict a day's category mix from history (default: tomorrow)
+dayflow key set|status|del     # store API keys in OmaSeal instead of config.json
+dayflow log <msg>              # append a UI action line to debug.log
 dayflow week | month           # multi-day rollups
 dayflow export week [--copy]   # markdown export to stdout (or clipboard)
 dayflow export week --out <path> # atomic file export (0600; used by dayflow-export.timer)

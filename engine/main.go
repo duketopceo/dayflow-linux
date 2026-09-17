@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const version = "1.0.1"
+const version = "1.1.0"
 
 // readStdin reads one line from stdin — used by `config set -`,
 // `config patch -`, and `provider set <id> <key> -` so secrets never appear

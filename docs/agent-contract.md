@@ -21,10 +21,13 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 | `get_stats` | db stats, storage, config (no secrets) | — |
 | `get_standup` | blocks | — |
 | `get_insights` | blocks | — |
+| `get_agent_sessions` | Claude Code / Codex JSONL transcripts under `~/.claude/projects/` and `~/.codex/sessions/` (read-only) | — |
+| `get_forecast` | blocks (same-weekday history blend) | — |
 | `chat` | blocks + journal context | **writes chat_conversations/chat_messages and sends journal-derived content to the configured AI provider** |
 
-Every tool except `chat` is a pure database read. `chat` is the only tool
-that mutates state or sends data to an external provider.
+Every tool except `chat` is read-only — `get_agent_sessions` also reads
+agent JSONL transcripts on disk. `chat` is the only tool that mutates state
+or sends data to an external provider.
 
 ## Read-only mode
 
