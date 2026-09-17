@@ -54,6 +54,12 @@ var mcpTools = []map[string]any{
 	{"name": "get_insights", "description": "Focus, category, app, and distraction analytics for a range (day, week, month).",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"range": map[string]any{"type": "string", "description": "day, week, or month"}}}},
+	{"name": "get_agent_sessions", "description": "Claude Code and Codex session recaps for a date (YYYY-MM-DD, default today): project, time range, message count, first prompt.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD; default today"}}}},
+	{"name": "get_forecast", "description": "Predicted category mix for a date (default tomorrow), blended from same-weekday history.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD; default tomorrow"}}}},
 	{"name": "chat", "description": "Ask a question about the user's work journal. Optionally continue an existing conversation.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"message":         map[string]any{"type": "string", "description": "The user's question"},
@@ -284,6 +290,35 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 			return nil, err
 		}
 		return in.JSON(), nil
+
+	case "get_agent_sessions":
+		t := time.Now()
+		if d, _ := args["date"].(string); d != "" && d != "today" {
+			parsed, err := time.ParseInLocation("2006-01-02", d, time.Local)
+			if err != nil {
+				return nil, fmt.Errorf("bad date %q", d)
+			}
+			t = parsed
+		}
+		return map[string]any{
+			"date":     t.Local().Format("2006-01-02"),
+			"sessions": agentSessionsForDay(t),
+		}, nil
+
+	case "get_forecast":
+		t := time.Now().AddDate(0, 0, 1)
+		if d, _ := args["date"].(string); d != "" {
+			parsed, err := time.ParseInLocation("2006-01-02", d, time.Local)
+			if err != nil {
+				return nil, fmt.Errorf("bad date %q", d)
+			}
+			t = parsed
+		}
+		fc, err := forecast(db, t)
+		if err != nil {
+			return nil, err
+		}
+		return fc, nil
 
 	case "chat":
 		msg, _ := args["message"].(string)

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const version = "1.0.1"
+const version = "1.1.0"
 
 // readStdin reads one line from stdin — used by `config set -`,
 // `config patch -`, and `provider set <id> <key> -` so secrets never appear
@@ -38,6 +38,12 @@ Query:
   today [--json]      Print today's timeline
   day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
+  frames [YYYY-MM-DD] [--json]   List captured frames for a day
+  agents [YYYY-MM-DD] [--json]   Coding-agent session recaps (Claude Code, Codex)
+  forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
+                          (default: tomorrow)
+  playback [on|off|status] [--json]   Opt-in frame retention for timelapse
+                          playback (applies the standard storage cap)
   blocks [--json]     List blocks that failed summarization
   standup [--json]    Generate a standup update from yesterday/today
   standup draft [--date YYYY-MM-DD]   Print the saved standup draft as JSON
@@ -194,6 +200,72 @@ func main() {
 
 	case "status":
 		printStatus(cfg, jsonOut)
+
+	case "frames":
+		// frames [YYYY-MM-DD] [--json] — list captured frames for a day
+		d := time.Now()
+		for _, a := range args {
+			if len(a) == 10 && a[4] == '-' {
+				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
+				fatal(err)
+				d = parsed
+			}
+		}
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		printFrames(db, d, jsonOut)
+
+	case "playback":
+		// playback [on|off|status] [--json] — opt-in frame retention for
+		// timelapse playback; enabling applies the standard storage cap.
+		sub := "status"
+		for _, a := range args {
+			if a[0] != '-' {
+				sub = a
+			}
+		}
+		switch sub {
+		case "on", "off":
+			cfg2, changed := setPlayback(cfg, sub == "on")
+			if changed {
+				fatal(writeConfig(cfg2))
+			}
+			cfg = cfg2
+			printPlaybackStatus(cfg, jsonOut)
+		case "status":
+			printPlaybackStatus(cfg, jsonOut)
+		default:
+			usage()
+		}
+
+	case "agents":
+		// agents [YYYY-MM-DD] [--json] — coding-agent session recaps
+		d := time.Now()
+		for _, a := range args {
+			if len(a) == 10 && a[4] == '-' {
+				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
+				fatal(err)
+				d = parsed
+			}
+		}
+		printAgentSessions(d, jsonOut)
+
+	case "forecast":
+		// forecast [YYYY-MM-DD] [--json] — predict a day's category mix from
+		// same-weekday history (default: tomorrow)
+		d := time.Now().AddDate(0, 0, 1)
+		for _, a := range args {
+			if len(a) == 10 && a[4] == '-' {
+				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
+				fatal(err)
+				d = parsed
+			}
+		}
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		printForecast(db, d, jsonOut)
 
 	case "blocks":
 		printFailed(cfg, jsonOut)

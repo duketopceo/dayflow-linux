@@ -135,7 +135,7 @@ Flickable {
 
     BusyBar {
       width: parent.width
-      dayflow: root.dayflow
+      pal: root.dayflow
       active: root.chatLoading
     }
 
