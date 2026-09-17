@@ -39,6 +39,7 @@ Query:
   day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
   frames [YYYY-MM-DD] [--json]   List captured frames for a day
+  agents [YYYY-MM-DD] [--json]   Coding-agent session recaps (Claude Code, Codex)
   playback [on|off|status] [--json]   Opt-in frame retention for timelapse
                           playback (applies the standard storage cap)
   blocks [--json]     List blocks that failed summarization
@@ -235,6 +236,18 @@ func main() {
 		default:
 			usage()
 		}
+
+	case "agents":
+		// agents [YYYY-MM-DD] [--json] — coding-agent session recaps
+		d := time.Now()
+		for _, a := range args {
+			if len(a) == 10 && a[4] == '-' {
+				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
+				fatal(err)
+				d = parsed
+			}
+		}
+		printAgentSessions(d, jsonOut)
 
 	case "blocks":
 		printFailed(cfg, jsonOut)
