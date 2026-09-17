@@ -94,6 +94,7 @@ Control:
   config patch <json|-> Merge a JSON object into the config
   key set|status|del    Store/inspect API keys in OmaSeal instead of config.json
   log <msg>             Append a UI action line to debug.log
+  log [--limit N] [--json]   Tail debug.log (default last 50 lines)
   provider [list]       List configured providers and routing
   provider add <id> <kind>          Add a provider (openrouter, local, custom,
                                     gemini, chatgpt, claude, mcp)
@@ -657,10 +658,23 @@ func main() {
 			}
 		}
 		var msgParts []string
-		for _, a := range args {
-			if a != "" && a[0] != '-' {
-				msgParts = append(msgParts, a)
+		endOfFlags := false
+		for i := 0; i < len(args); i++ {
+			a := args[i]
+			if !endOfFlags {
+				if a == "--" {
+					endOfFlags = true
+					continue
+				}
+				if a == "--conversation-id" {
+					i++ // consume the value — it is not message text
+					continue
+				}
+				if strings.HasPrefix(a, "--conversation-id=") || (a != "" && a[0] == '-') {
+					continue // flag, not message text
+				}
 			}
+			msgParts = append(msgParts, a)
 		}
 		msg := strings.Join(msgParts, " ")
 		if msg == "" {
@@ -1022,9 +1036,31 @@ func main() {
 	case "log":
 		// UI action log channel — the panel calls this for clicks/actions.
 		// Always on (actions are sparse); gated by nothing so it works even
-		// when engine debug is off.
-		if len(args) >= 1 {
+		// when engine debug is off. Any flag arg (e.g. --limit) means this is
+		// the read path: tail the log instead of appending.
+		writeMode := len(args) >= 1
+		for _, a := range args {
+			if a == "" || a[0] == '-' {
+				writeMode = false
+			}
+		}
+		if writeMode {
 			appendLog("ui: " + strings.Join(args, " "))
+			break
+		}
+		limit := 50
+		if s := flagValue(args, "--limit"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 500 {
+				limit = n
+			}
+		}
+		lines := tailLogLines(limit)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(map[string]any{"lines": lines})
+		} else {
+			for _, l := range lines {
+				fmt.Println(l)
+			}
 		}
 
 	case "doctor":
@@ -1136,7 +1172,7 @@ func printStatus(cfg Config, asJSON bool) {
 	}
 	var blocksTotal int
 	db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE status='done'`).Scan(&blocksTotal)
-	storage := dataDirSize()
+	storage := storageBytesFast(db)
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"paused":         paused(),

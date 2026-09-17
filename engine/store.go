@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS api_calls (
   error             TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS api_calls_ts ON api_calls(ts);
+
+-- Small key/value scratch table for engine bookkeeping (e.g. one-time
+-- backfill flags). Created in the base schema so every open converges.
+CREATE TABLE IF NOT EXISTS meta (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL DEFAULT ''
+);
 `
 
 // schemaV2 is migration version 2: chat, standup, journal, goals, LLM-call
@@ -161,6 +168,7 @@ var columnPatches = []struct {
 	table, column, ddl string
 }{
 	{"frames", "app", `ALTER TABLE frames ADD COLUMN app TEXT NOT NULL DEFAULT ''`},
+	{"frames", "bytes", `ALTER TABLE frames ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0`},
 	{"blocks", "attempts", `ALTER TABLE blocks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`},
 	{"blocks", "app", `ALTER TABLE blocks ADD COLUMN app TEXT NOT NULL DEFAULT ''`},
 	{"blocks", "activities", `ALTER TABLE blocks ADD COLUMN activities TEXT NOT NULL DEFAULT ''`},
@@ -305,8 +313,8 @@ func insertFrame(db *sql.DB, ts time.Time, path string) error {
 	return err
 }
 
-func insertFrameApp(db *sql.DB, ts time.Time, path, app string) error {
-	_, err := db.Exec(`INSERT INTO frames(ts, path, app) VALUES(?, ?, ?)`, ts.Unix(), path, app)
+func insertFrameApp(db *sql.DB, ts time.Time, path, app string, bytes int64) error {
+	_, err := db.Exec(`INSERT INTO frames(ts, path, app, bytes) VALUES(?, ?, ?, ?)`, ts.Unix(), path, app, bytes)
 	return err
 }
 

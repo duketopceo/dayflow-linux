@@ -45,7 +45,13 @@ var mcpTools = []map[string]any{
 	{"name": "get_events", "description": "Recent engine event log (captures, dedup skips, errors).",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"limit": map[string]any{"type": "integer"}}}},
-	{"name": "get_usage", "description": "OpenRouter token usage totals.",
+	{"name": "get_log", "description": "Tail of the debug/UI-action log (debug.log).",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"limit": map[string]any{"type": "integer", "description": "max lines, default 50"}}}},
+	{"name": "get_frames", "description": "Captured frame list for a date (YYYY-MM-DD, default today): timestamp, path, exists flag.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD; default today"}}}},
+	{"name": "get_usage", "description": "LLM usage totals across all call types (block summaries, chat, review, standup) and providers.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "get_stats", "description": "Storage usage (db, frames, total), journal block counts, date coverage, and API call/token totals.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
@@ -120,7 +126,7 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		default:
 			t, err := time.ParseInLocation("2006-01-02", d, time.Local)
 			if err != nil {
-				return nil, fmt.Errorf("bad date %q", d)
+				return nil, fmt.Errorf("bad date %q — expected YYYY-MM-DD, today, yesterday, week, or month", d)
 			}
 			start, end = dayBounds(t)
 		}
@@ -145,23 +151,25 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if q == "" {
 			return nil, fmt.Errorf("query required")
 		}
-		rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category FROM blocks
-		  WHERE status='done' AND (title LIKE ? OR summary LIKE ?) ORDER BY start_ts DESC LIMIT 50`,
-			"%"+q+"%", "%"+q+"%")
+		like := "%" + q + "%"
+		rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,app FROM blocks
+		  WHERE status='done' AND (title LIKE ? OR summary LIKE ? OR app LIKE ?) ORDER BY start_ts DESC LIMIT 50`,
+			like, like, like)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
-		var out []map[string]string
+		out := []map[string]string{}
 		for rows.Next() {
 			var s, e int64
-			var t, su, c string
-			if err := rows.Scan(&s, &e, &t, &su, &c); err != nil {
+			var t, su, c, a string
+			if err := rows.Scan(&s, &e, &t, &su, &c, &a); err != nil {
 				continue
 			}
 			out = append(out, map[string]string{
 				"start": time.Unix(s, 0).Local().Format("2006-01-02 15:04"),
-				"title": t, "summary": su, "category": c,
+				"end":   time.Unix(e, 0).Local().Format("15:04"),
+				"title": t, "summary": su, "category": c, "app": a,
 			})
 		}
 		return map[string]any{"matches": out}, nil
@@ -193,15 +201,51 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		}
 		return map[string]any{"events": out}, nil
 
+	case "get_log":
+		limit := 50.0
+		if l, ok := args["limit"].(float64); ok && l > 0 && l <= 500 {
+			limit = l
+		}
+		return map[string]any{"lines": tailLogLines(int(limit))}, nil
+
+	case "get_frames":
+		t := time.Now()
+		if d, _ := args["date"].(string); d != "" && d != "today" {
+			parsed, err := time.ParseInLocation("2006-01-02", d, time.Local)
+			if err != nil {
+				return nil, fmt.Errorf("bad date %q — expected YYYY-MM-DD or today", d)
+			}
+			t = parsed
+		}
+		frames, err := framesForDay(db, t)
+		if err != nil {
+			return nil, err
+		}
+		if frames == nil {
+			frames = []frameEntry{}
+		}
+		return map[string]any{"date": t.Local().Format("2006-01-02"), "frames": frames, "count": len(frames)}, nil
+
 	case "get_usage":
+		// Two ledgers: api_calls covers block summarization; llm_calls covers
+		// chat/review/standup and any non-OpenRouter provider.
 		var calls, pt, ct, okn, failed int
 		if err := db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
 		  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
 		  FROM api_calls`).Scan(&calls, &pt, &ct, &okn, &failed); err != nil {
 			return nil, err
 		}
-		return map[string]any{"api_calls": calls, "ok": okn, "failed": failed,
-			"prompt_tokens": pt, "completion_tokens": ct}, nil
+		var lcalls, lpt, lct, lok, lfailed int
+		db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+		  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
+		  FROM llm_calls`).Scan(&lcalls, &lpt, &lct, &lok, &lfailed)
+		return map[string]any{
+			"api_calls": calls, "ok": okn, "failed": failed,
+			"prompt_tokens": pt, "completion_tokens": ct,
+			"other_llm_calls": lcalls, "other_ok": lok, "other_failed": lfailed,
+			"other_prompt_tokens": lpt, "other_completion_tokens": lct,
+			"total_prompt_tokens": pt + lpt, "total_completion_tokens": ct + lct,
+		}, nil
 
 	case "get_stats":
 		var blocksTotal, blocksDone, blocksFailed, blocksDead, framesPending, eventsTotal int
@@ -236,10 +280,11 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if fi, err := os.Stat(dbPath() + "-wal"); err == nil {
 			walBytes = fi.Size()
 		}
-		framesBytes, frameFiles := dirStats(framesDir())
+		framesBytes, frameFiles := frameStats(db)
+		totalBytes := storageBytesFast(db)
 		return map[string]any{
 			"storage": map[string]any{
-				"total_bytes": dataDirSize(), "total": humanBytes(dataDirSize()),
+				"total_bytes": totalBytes, "total": humanBytes(totalBytes),
 				"db_bytes": dbBytes, "db": humanBytes(dbBytes),
 				"wal_bytes": walBytes, "wal": humanBytes(walBytes),
 				"frames_bytes": framesBytes, "frames": humanBytes(framesBytes),
@@ -300,7 +345,7 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if d, _ := args["date"].(string); d != "" && d != "today" {
 			parsed, err := time.ParseInLocation("2006-01-02", d, time.Local)
 			if err != nil {
-				return nil, fmt.Errorf("bad date %q", d)
+				return nil, fmt.Errorf("bad date %q — expected YYYY-MM-DD or today", d)
 			}
 			t = parsed
 		}
@@ -314,7 +359,7 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if d, _ := args["date"].(string); d != "" {
 			parsed, err := time.ParseInLocation("2006-01-02", d, time.Local)
 			if err != nil {
-				return nil, fmt.Errorf("bad date %q", d)
+				return nil, fmt.Errorf("bad date %q — expected YYYY-MM-DD", d)
 			}
 			t = parsed
 		}

@@ -17,7 +17,9 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 | `get_status` | frames, blocks, pause flag | — |
 | `search_journal` | blocks | — |
 | `get_events` | events (may include local paths, provider error strings) | — |
-| `get_usage` | api_calls | — |
+| `get_log` | debug.log tail (UI actions, debug lines) | — |
+| `get_frames` | frames index + frame file existence | — |
+| `get_usage` | api_calls + llm_calls (all providers, all tasks) | — |
 | `get_stats` | db stats, storage, config (no secrets) | — |
 | `get_standup` | blocks | — |
 | `get_insights` | blocks | — |

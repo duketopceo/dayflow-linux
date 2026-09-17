@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,6 +57,30 @@ func pruneLogArchives() {
 			os.Remove(m)
 		}
 	}
+}
+
+// tailLogLines returns the last n lines of debug.log — the read side of the
+// `dayflow log` write channel, also exposed as the MCP get_log tool.
+func tailLogLines(n int) []string {
+	f, err := os.Open(debugLogPath())
+	if err != nil {
+		return []string{}
+	}
+	defer f.Close()
+	// The file rotates at 8MB, so a full scan is bounded.
+	var lines []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	if lines == nil {
+		return []string{}
+	}
+	return lines
 }
 
 // debugf appends a timestamped line to debug.log when config debug is on.

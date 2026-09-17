@@ -429,6 +429,11 @@ Flickable {
         if (dayflow) dayflow.notice = "chat error"
       }
     }
+    // FailedToStart emits neither exited nor streamFinished — clear the
+    // flag so the busy bar can't stick.
+    onRunningChanged: {
+      if (!chatProc.running) root.chatLoading = false
+    }
   }
 
   Process {
@@ -443,6 +448,9 @@ Flickable {
         root.chatLoading = false
         if (dayflow) dayflow.notice = "could not load conversation"
       }
+    }
+    onRunningChanged: {
+      if (!convProc.running) root.chatLoading = false
     }
   }
 

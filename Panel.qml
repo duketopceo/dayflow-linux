@@ -453,39 +453,6 @@ Panel {
     return order
   }
 
-  // ---- calendar picker state + helpers ----
-  property bool showCalendar: false
-  property int calYear: new Date().getFullYear()
-  property int calMonth: new Date().getMonth()
-
-  function calShift(delta) {
-    var d = new Date(dayflow.calYear, dayflow.calMonth + delta, 1)
-    dayflow.calYear = d.getFullYear()
-    dayflow.calMonth = d.getMonth()
-  }
-
-  function calCells() {
-    var first = new Date(dayflow.calYear, dayflow.calMonth, 1)
-    var lead = (first.getDay() + 6) % 7           // Mon=0 blanks before day 1
-    var dim = new Date(dayflow.calYear, dayflow.calMonth + 1, 0).getDate()
-    var cells = []
-    for (var i = 0; i < lead; i++) cells.push(0)
-    for (i = 1; i <= dim; i++) cells.push(i)
-    while (cells.length % 7 !== 0) cells.push(0)
-    return cells
-  }
-
-  function calPick(day) {
-    if (day <= 0) return
-    var sel = new Date(dayflow.calYear, dayflow.calMonth, day)
-    var today = new Date()
-    today.setHours(0, 0, 0, 0)
-    dayflow.dayOffset = Math.round((sel - today) / 86400000)
-    dayflow.showCalendar = false
-    dayflow.uilog("calendar pick " + Qt.formatDate(sel, "yyyy-MM-dd"))
-    dayflow.loadTimeline()
-  }
-
   function weekDayBlocks(dayIndex) {
     if (!dayflow.weekBlocks.length) return []
     var dayStart = dayflow.weekStartDate().getTime() + dayIndex * 86400000
@@ -800,6 +767,10 @@ Panel {
         dayflow.notice = "weekly review failed"
       }
     }
+    // FailedToStart watchdog — applyWeekReview/onExited never fire.
+    onRunningChanged: {
+      if (!reviewProc.running) dayflow.weekSummaryLoading = false
+    }
   }
 
   Process {
@@ -929,18 +900,30 @@ Panel {
 
   Process {
     id: configProc
+    property bool didStart: false
     command: ["dayflow", "config", "--json"]
+    onStarted: configProc.didStart = true
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: dayflow.applyConfig(text)
+    }
+    // FailedToStart emits neither exited nor streamFinished — without this,
+    // Settings would sit on "Loading settings..." forever.
+    onRunningChanged: {
+      if (!configProc.running && !configProc.didStart) {
+        dayflow.configLoaded = true
+        dayflow.notice = "config load failed"
+      }
+      if (!configProc.running) configProc.didStart = false
     }
   }
 
   Process {
     id: patchProc
     property string pendingPatch: ""
+    property bool didStart: false
     stdinEnabled: true
-    onStarted: { write(pendingPatch + "\n"); pendingPatch = "" }
+    onStarted: { write(pendingPatch + "\n"); pendingPatch = ""; patchProc.didStart = true }
     command: ["dayflow", "config", "patch", "-"]
     onExited: function(exitCode) {
       if (exitCode === 0) {
@@ -949,6 +932,10 @@ Panel {
       } else {
         dayflow.notice = "settings save failed"
       }
+    }
+    onRunningChanged: {
+      if (!patchProc.running && !patchProc.didStart) dayflow.notice = "settings save failed"
+      if (!patchProc.running) patchProc.didStart = false
     }
   }
 
@@ -1058,7 +1045,7 @@ Panel {
             height: Style.space(28)
             width: calLbl.implicitWidth + Style.space(14)
             radius: Style.cornerRadius
-            color: dayflow.showCalendar ? dayflow.accentFill(0.15) : dayflow.fgFill(0.04)
+            color: calPicker.visible ? dayflow.accentFill(0.15) : dayflow.fgFill(0.04)
             border.color: dayflow.accentFill(0.4)
             Text {
               id: calLbl
@@ -1073,7 +1060,7 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: { dayflow.showCalendar = !dayflow.showCalendar; dayflow.uilog("calendar " + (dayflow.showCalendar ? "open" : "close")) }
+              onClicked: { calPicker.visible = !calPicker.visible; dayflow.uilog("calendar " + (calPicker.visible ? "open" : "close")) }
             }
           }
         }
@@ -1089,128 +1076,27 @@ Panel {
               { label: "Copy day · md", proc: "copyProc", logName: "copy day md", extra: "" },
               { label: "Copy day · mini", proc: "copyMiniProc", logName: "copy day mini", extra: " --brief" }
             ]
-            delegate: Rectangle {
-              height: Style.space(22)
-              width: dayCopyLbl.implicitWidth + Style.space(12)
-              radius: Style.cornerRadius
-              color: dayflow.btnBg(dayCopyMa.containsMouse)
-              border.color: dayflow.fgFill(0.2)
-              Text {
-                id: dayCopyLbl
-                anchors.centerIn: parent
-                text: dayflow.procByName(modelData.proc).running ? "Copying…" : modelData.label
-                textFormat: Text.PlainText
-                color: dayflow.foreground
-                font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-              MouseArea {
-                id: dayCopyMa
-                anchors.fill: parent
-                hoverEnabled: true
-                enabled: !dayflow.procByName(modelData.proc).running
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  dayflow.uilog(modelData.logName + " " + dayflow.viewDateStr())
-                  var p = dayflow.procByName(modelData.proc)
-                  p.command = ["bash", "-c",
-                    "dayflow export " + dayflow.viewDateStr() + modelData.extra + " | wl-copy"]
-                  p.running = true
-                }
+            delegate: CopyButton {
+              required property var modelData
+              dayflow: dayflow
+              label: modelData.label
+              proc: dayflow.procByName(modelData.proc)
+              onActivated: {
+                dayflow.uilog(modelData.logName + " " + dayflow.viewDateStr())
+                proc.command = ["bash", "-c",
+                  "dayflow export " + dayflow.viewDateStr() + modelData.extra + " | wl-copy"]
+                proc.running = true
               }
             }
           }
         }
 
         // ---- calendar picker ----
-        Column {
-          visible: dayflow.showCalendar
+        CalendarPicker {
+          id: calPicker
+          visible: false
           width: parent.width
-          spacing: Style.space(4)
-
-          Row {
-            width: parent.width
-            spacing: Style.space(6)
-            Text {
-              text: "<"
-              textFormat: Text.PlainText
-              color: dayflow.foreground
-              font.pixelSize: Style.font.body
-              anchors.verticalCenter: parent.verticalCenter
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: dayflow.calShift(-1) }
-            }
-            Text {
-              text: Qt.formatDate(new Date(dayflow.calYear, dayflow.calMonth, 1), "MMMM yyyy")
-              textFormat: Text.PlainText
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-              anchors.verticalCenter: parent.verticalCenter
-            }
-            Text {
-              text: ">"
-              textFormat: Text.PlainText
-              color: dayflow.foreground
-              font.pixelSize: Style.font.body
-              anchors.verticalCenter: parent.verticalCenter
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: dayflow.calShift(1) }
-            }
-          }
-
-          Grid {
-            width: parent.width
-            columns: 7
-            Repeater {
-              model: ["M", "T", "W", "T", "F", "S", "S"]
-              delegate: Text {
-                width: parent.width / 7
-                horizontalAlignment: Text.AlignHCenter
-                text: modelData
-                color: dayflow.dim
-                font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-          }
-
-          Grid {
-            width: parent.width
-            columns: 7
-            Repeater {
-              model: dayflow.calCells()
-              delegate: Rectangle {
-                width: parent.width / 7
-                height: Style.space(24)
-                radius: Style.cornerRadius
-                property int dayNum: modelData
-                property bool isToday: dayNum === new Date().getDate()
-                  && dayflow.calMonth === new Date().getMonth()
-                  && dayflow.calYear === new Date().getFullYear()
-                property bool isFuture: dayNum > 0 &&
-                  new Date(dayflow.calYear, dayflow.calMonth, dayNum) > new Date()
-                color: isToday ? dayflow.accentFill(0.18)
-                  : (dayMa.containsMouse && dayNum > 0 && !isFuture ? dayflow.accentFill(0.08) : "transparent")
-                border.color: isToday ? dayflow.accentFill(0.5) : "transparent"
-                Text {
-                  anchors.centerIn: parent
-                  text: dayNum > 0 ? dayNum : ""
-                  textFormat: Text.PlainText
-                  color: isFuture ? dayflow.dim : dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                MouseArea {
-                  id: dayMa
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  enabled: dayNum > 0 && !isFuture
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: dayflow.calPick(dayNum)
-                }
-              }
-            }
-          }
+          dayflow: dayflow
         }
 
         // ---- this-week day jump ----
@@ -2046,31 +1932,14 @@ Panel {
               { label: "Copy week · md", proc: "copyWeekProc", logName: "copy week md" },
               { label: "Copy week · mini", proc: "copyWeekMiniProc", logName: "copy week mini" }
             ]
-            delegate: Rectangle {
-              height: Style.space(22)
-              width: weekCopyLbl.implicitWidth + Style.space(12)
-              radius: Style.cornerRadius
-              color: dayflow.btnBg(weekCopyMa.containsMouse)
-              border.color: dayflow.fgFill(0.2)
-              Text {
-                id: weekCopyLbl
-                anchors.centerIn: parent
-                text: dayflow.procByName(modelData.proc).running ? "Copying…" : modelData.label
-                textFormat: Text.PlainText
-                color: dayflow.foreground
-                font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-              MouseArea {
-                id: weekCopyMa
-                anchors.fill: parent
-                hoverEnabled: true
-                enabled: !dayflow.procByName(modelData.proc).running
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  dayflow.uilog(modelData.logName)
-                  dayflow.procByName(modelData.proc).running = true
-                }
+            delegate: CopyButton {
+              required property var modelData
+              dayflow: dayflow
+              label: modelData.label
+              proc: dayflow.procByName(modelData.proc)
+              onActivated: {
+                dayflow.uilog(modelData.logName)
+                proc.running = true
               }
             }
           }
