@@ -19,8 +19,48 @@ FloatingWindow {
     { key: "today",     label: "Today" },
     { key: "week",      label: "Week" },
     { key: "timelapse", label: "Timelapse" },
-    { key: "context",   label: "Context" }
+    { key: "context",   label: "Context" },
+    { key: "agents",    label: "Agents" }
   ]
+
+  // ---- agents pane state ----
+  property var agentSessions: []
+  property bool agentsLoading: false
+  property string agentsError: ""
+
+  function agentsLoad() {
+    if (!root.dayflow) return
+    root.dayflow.uilog("agents load " + root.dayflow.viewDateStr())
+    agentsProc.command = ["dayflow", "agents", root.dayflow.viewDateStr(), "--json"]
+    root.agentsLoading = true
+    agentsProc.running = true
+  }
+
+  Process {
+    id: agentsProc
+    command: ["dayflow", "agents", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.agentsLoading = false
+        try {
+          var d = JSON.parse(text)
+          root.agentSessions = d.sessions || []
+          root.agentsError = ""
+        } catch (e) {
+          root.agentSessions = []
+          root.agentsError = "could not load agent sessions"
+        }
+      }
+    }
+    onExited: function(exitCode) {
+      root.agentsLoading = false
+      if (exitCode !== 0) {
+        root.agentSessions = []
+        root.agentsError = "agent scan failed"
+      }
+    }
+  }
 
   // ---- context-shift graph ----
   // Bipartite flow: same categories on both columns, links sized by minutes.
@@ -208,6 +248,8 @@ FloatingWindow {
                   root.section = modelData.key
                   if (modelData.key === "timelapse" && root.tlFrames.length === 0 && !root.tlLoading)
                     root.tlLoad()
+                  if (modelData.key === "agents" && root.agentSessions.length === 0 && !root.agentsLoading)
+                    root.agentsLoad()
                 }
               }
             }
@@ -273,6 +315,7 @@ FloatingWindow {
           sourceComponent: root.section === "week" ? weekPane
             : root.section === "timelapse" ? tlPane
             : root.section === "context" ? ctxPane
+            : root.section === "agents" ? agentsPane
             : todayPane
         }
       }
@@ -1105,11 +1148,206 @@ FloatingWindow {
     }
   }
 
+  // ============ Agents pane ============
+  Component {
+    id: agentsPane
+
+    Column {
+      width: parent ? parent.width : 0
+      height: parent ? parent.height : 0
+      spacing: Style.space(8)
+      leftPadding: Style.space(16)
+      rightPadding: Style.space(16)
+      topPadding: Style.space(4)
+
+      Row {
+        width: parent.width
+        spacing: Style.space(6)
+
+        Repeater {
+          model: [
+            { label: "‹", act: -1 },
+            { label: "Today", act: 0 },
+            { label: "›", act: 1 }
+          ]
+
+          delegate: Rectangle {
+            required property var modelData
+            height: Style.space(28)
+            width: agNavText.implicitWidth + Style.space(16)
+            radius: Style.cornerRadius
+            color: agNavMouse.containsMouse ? root.dayflow.fgFill(0.08) : "transparent"
+            border.color: root.dayflow ? root.dayflow.fgFill(0.15) : "transparent"
+
+            Text {
+              id: agNavText
+              anchors.centerIn: parent
+              text: modelData.label
+              textFormat: Text.PlainText
+              color: root.dayflow ? root.dayflow.foreground : "white"
+              font.family: root.dayflow ? root.dayflow.fontFamily : ""
+              font.pixelSize: Style.font.body
+            }
+
+            MouseArea {
+              id: agNavMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                if (!root.dayflow) return
+                if (modelData.act === 0) {
+                  if (root.dayflow.dayOffset !== 0) {
+                    root.dayflow.dayOffset = 0
+                    root.dayflow.loadTimeline()
+                  }
+                } else {
+                  root.dayflow.goDay(modelData.act)
+                }
+              }
+            }
+          }
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.dayflow ? root.dayflow.viewDateLabel() : ""
+          textFormat: Text.PlainText
+          color: root.dayflow ? root.dayflow.dim : "gray"
+          font.family: root.dayflow ? root.dayflow.fontFamily : ""
+          font.pixelSize: Style.font.body
+        }
+      }
+
+      BusyBar {
+        width: parent.width
+        pal: root.dayflow
+        active: root.agentsLoading
+      }
+
+      Text {
+        visible: root.agentsError !== ""
+        text: "! " + root.agentsError
+        textFormat: Text.PlainText
+        color: Color.urgent !== undefined ? Color.urgent : "red"
+        font.family: root.dayflow ? root.dayflow.fontFamily : ""
+        font.pixelSize: Style.font.caption
+      }
+
+      Text {
+        visible: !root.agentsLoading && root.agentSessions.length === 0 && root.agentsError === ""
+        text: "No Claude Code or Codex sessions on this day."
+        textFormat: Text.PlainText
+        color: root.dayflow ? root.dayflow.dim : "gray"
+        font.family: root.dayflow ? root.dayflow.fontFamily : ""
+        font.pixelSize: Style.font.body
+      }
+
+      Flickable {
+        width: parent.width
+        height: parent.height - Style.space(110)
+        contentHeight: sessCol.implicitHeight
+        clip: true
+
+        Column {
+          id: sessCol
+          width: parent.width
+          spacing: Style.space(6)
+
+          Repeater {
+            model: root.agentSessions
+
+            delegate: Rectangle {
+              required property var modelData
+              width: sessCol.width
+              height: sessInner.implicitHeight + Style.space(16)
+              radius: Style.cornerRadius
+              color: root.dayflow ? root.dayflow.fgFill(0.04) : "transparent"
+              border.color: root.dayflow ? root.dayflow.fgFill(0.08) : "transparent"
+
+              Column {
+                id: sessInner
+                width: parent.width - Style.space(16)
+                anchors.centerIn: parent
+                spacing: Style.space(3)
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+
+                  Rectangle {
+                    height: Style.space(18)
+                    width: badgeText.implicitWidth + Style.space(12)
+                    radius: Style.cornerRadius
+                    color: modelData.source === "claude"
+                      ? Qt.rgba(0.85, 0.55, 0.25, 0.2)
+                      : Qt.rgba(0.30, 0.65, 0.85, 0.2)
+
+                    Text {
+                      id: badgeText
+                      anchors.centerIn: parent
+                      text: modelData.source
+                      textFormat: Text.PlainText
+                      color: modelData.source === "claude"
+                        ? Qt.rgba(0.95, 0.70, 0.40, 1.0)
+                        : Qt.rgba(0.45, 0.80, 1.0, 1.0)
+                      font.family: root.dayflow ? root.dayflow.fontFamily : ""
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                  }
+
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.project
+                    textFormat: Text.PlainText
+                    color: root.dayflow ? root.dayflow.foreground : "white"
+                    font.family: root.dayflow ? root.dayflow.fontFamily : ""
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    elide: Text.ElideRight
+                    width: parent.width - badgeText.implicitWidth - timeText.implicitWidth - Style.space(24)
+                  }
+
+                  Text {
+                    id: timeText
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    text: Qt.formatTime(new Date(modelData.start * 1000), "hh:mm") +
+                          "–" +
+                          Qt.formatTime(new Date(modelData.end * 1000), "hh:mm") +
+                          " · " + modelData.messages + " msgs"
+                    textFormat: Text.PlainText
+                    color: root.dayflow ? root.dayflow.dim : "gray"
+                    font.family: root.dayflow ? root.dayflow.fontFamily : ""
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Text {
+                  width: parent.width
+                  visible: modelData.title !== ""
+                  text: modelData.title
+                  textFormat: Text.PlainText
+                  color: root.dayflow ? root.dayflow.dim : "gray"
+                  font.family: root.dayflow ? root.dayflow.fontFamily : ""
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Day changes reload the scrubber when it's visible.
   Connections {
     target: root.dayflow
     function onDayOffsetChanged() {
       if (root.section === "timelapse") root.tlLoad()
+      if (root.section === "agents") root.agentsLoad()
     }
   }
 
