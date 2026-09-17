@@ -85,10 +85,13 @@ Notes:
 
 ## Data contract for agents
 
-- Times are Unix seconds (UTC) in the db; CLI/MCP output is local time.
+- Times are Unix seconds (UTC) in the db. CLI/MCP JSON outputs carry Unix
+  seconds in `*_ts` fields (and `AgentSession.start`/`end`, frame `ts`);
+  human-readable string fields (`start`, `end`, `time`) are local time.
 - `blocks.status`: `done` (summarized), `failed` (retryable), `dead` (gave up).
 - Frame files under `frames/` exist only until their block is summarized
   unless `keep_frames` is on; files under `quarantine/` are untracked
   orphans awaiting review, not live data.
-- Do not write to the db directly — use the CLI (`edit`, `scrub`, `retry`,
-  `reconcile`) or MCP tools. Direct writes bypass the event log.
+- Do not write to the db directly. MCP exposes no journal-mutation tools;
+  corrections require the CLI (`edit`, `scrub`, `retry`, `reconcile`),
+  e.g. over SSH. Direct writes bypass the event log.

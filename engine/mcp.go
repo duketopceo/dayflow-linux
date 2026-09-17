@@ -171,6 +171,10 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if l, ok := args["limit"].(float64); ok {
 			limit = l
 		}
+		// SQLite treats LIMIT < 0 as unbounded — clamp to a sane range.
+		if limit <= 0 || limit > 500 {
+			limit = 20
+		}
 		rows, err := db.Query(`SELECT ts,type,detail FROM events ORDER BY ts DESC LIMIT ?`, int(limit))
 		if err != nil {
 			return nil, err
@@ -337,7 +341,12 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if err != nil {
 			return nil, err
 		}
-		return res.Reply, nil
+		return map[string]any{
+			"conversation_id": res.ConversationID,
+			"reply":           res.Reply,
+			"provider":        res.Provider,
+			"model":           res.Model,
+		}, nil
 	}
 	return nil, fmt.Errorf("unknown tool %q", name)
 }

@@ -44,7 +44,7 @@ func codexDir() string {
 // transcript file was modified inside the given day, oldest first.
 func agentSessionsForDay(d time.Time) []AgentSession {
 	s, e := dayBounds(d)
-	var out []AgentSession
+	out := []AgentSession{}
 	out = append(out, scanClaude(claudeDir(), s, e)...)
 	out = append(out, scanCodex(codexDir(), s, e)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Start < out[j].Start })
@@ -55,7 +55,7 @@ func agentSessionsForDay(d time.Time) []AgentSession {
 func jsonlFiles(root string, s, e time.Time) []string {
 	var paths []string
 	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(p, ".jsonl") {
+		if err != nil || !info.Mode().IsRegular() || !strings.HasSuffix(p, ".jsonl") {
 			return nil
 		}
 		mt := info.ModTime()
@@ -87,13 +87,14 @@ func truncTitle(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	const max = 120
 	if len(s) > max {
-		return s[:max] + "…"
+		// Truncate on a rune boundary — a mid-rune cut emits invalid UTF-8.
+		return string([]rune(s)[:max]) + "…"
 	}
 	return s
 }
 
 func scanClaude(root string, s, e time.Time) []AgentSession {
-	var out []AgentSession
+	out := []AgentSession{}
 	for _, p := range jsonlFiles(root, s, e) {
 		sess := AgentSession{Source: "claude", File: p}
 		f, err := os.Open(p)
@@ -138,8 +139,11 @@ func scanClaude(root string, s, e time.Time) []AgentSession {
 				}
 			}
 		}
+		// A scan error (e.g. a line over the 1MB buffer) means the session
+		// data is truncated — skip it rather than report partials.
+		scanErr := sc.Err()
 		f.Close()
-		if sess.Start == 0 {
+		if scanErr != nil || sess.Start == 0 {
 			continue
 		}
 		sess.Title = truncTitle(sess.Title)
@@ -150,7 +154,7 @@ func scanClaude(root string, s, e time.Time) []AgentSession {
 }
 
 func scanCodex(root string, s, e time.Time) []AgentSession {
-	var out []AgentSession
+	out := []AgentSession{}
 	for _, p := range jsonlFiles(root, s, e) {
 		sess := AgentSession{Source: "codex", File: p}
 		f, err := os.Open(p)
@@ -197,8 +201,9 @@ func scanCodex(root string, s, e time.Time) []AgentSession {
 				}
 			}
 		}
+		scanErr := sc.Err()
 		f.Close()
-		if sess.Start == 0 {
+		if scanErr != nil || sess.Start == 0 {
 			continue
 		}
 		sess.Title = truncTitle(sess.Title)

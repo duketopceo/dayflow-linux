@@ -42,6 +42,7 @@ Panel {
   property string weekSummary: ""
   property bool weekSummaryLoading: false
   property bool timelineLoading: false
+  property bool timelineQueued: false
   property var weeklyPayload: ({ start: "", end: "", total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, category_donut: [], app_treemap: [], context_shifts: [], context_shift_count: 0, top_distractions: [], focus_blocks: [], highlights: [], suggestions: [], heatmap: [] })
   property var spans: []
   property int dayOffset: 0
@@ -190,7 +191,13 @@ Panel {
     dayflow.uilog("timeline load " + dayflow.viewDateStr())
     timelineProc.command = ["dayflow", "timeline", "--json", dayflow.viewDateStr()]
     dayflow.timelineLoading = true
-    if (!timelineProc.running) timelineProc.running = true
+    // command changes on a running Process only affect the next start —
+    // queue a rerun so the requested day isn't dropped mid-flight.
+    if (timelineProc.running) {
+      dayflow.timelineQueued = true
+    } else {
+      timelineProc.running = true
+    }
     dayflow.loadWorkflow()
   }
 
@@ -627,11 +634,6 @@ Panel {
     return [c.r, c.g, c.b]
   }
 
-  function themeFill(alpha) {
-    var rgb = dayflow._rgb(dayflow.foreground)
-    return Qt.rgba(rgb[0], rgb[1], rgb[2], alpha)
-  }
-
   function accentFill(alpha) {
     var c = (Color.accent === undefined || Color.accent === null)
       ? dayflow.foreground : Color.accent
@@ -666,6 +668,23 @@ Panel {
       if (exitCode !== 0) {
         dayflow.timelineLoading = false
         dayflow.errorText = "dayflow CLI not found on PATH"
+      }
+      if (dayflow.timelineQueued) {
+        dayflow.timelineQueued = false
+        dayflow.timelineLoading = true
+        timelineProc.running = true
+      }
+    }
+    // FailedToStart emits neither exited nor streamFinished — without this
+    // the loading flag sticks forever when the binary can't launch.
+    onRunningChanged: {
+      if (!timelineProc.running) {
+        dayflow.timelineLoading = false
+        if (dayflow.timelineQueued) {
+          dayflow.timelineQueued = false
+          dayflow.timelineLoading = true
+          timelineProc.running = true
+        }
       }
     }
   }
@@ -1089,13 +1108,14 @@ Panel {
                 id: dayCopyMa
                 anchors.fill: parent
                 hoverEnabled: true
+                enabled: !dayflow.procByName(modelData.proc).running
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
                   dayflow.uilog(modelData.logName + " " + dayflow.viewDateStr())
                   var p = dayflow.procByName(modelData.proc)
                   p.command = ["bash", "-c",
                     "dayflow export " + dayflow.viewDateStr() + modelData.extra + " | wl-copy"]
-                  if (!p.running) p.running = true
+                  p.running = true
                 }
               }
             }
@@ -1519,6 +1539,7 @@ Panel {
                 delegate: Text {
                   width: parent.width
                   text: "· " + modelData.start + " " + modelData.title
+                  textFormat: Text.PlainText
                   color: dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -1533,6 +1554,7 @@ Panel {
                 delegate: Text {
                   width: parent.width
                   text: dayflow.appDisplayName(modelData.app) + " · " + modelData.title
+                  textFormat: Text.PlainText
                   color: dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -2043,11 +2065,11 @@ Panel {
                 id: weekCopyMa
                 anchors.fill: parent
                 hoverEnabled: true
+                enabled: !dayflow.procByName(modelData.proc).running
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
                   dayflow.uilog(modelData.logName)
-                  var p = dayflow.procByName(modelData.proc)
-                  if (!p.running) p.running = true
+                  dayflow.procByName(modelData.proc).running = true
                 }
               }
             }
@@ -2369,6 +2391,7 @@ Panel {
                 delegate: Text {
                   width: parent.width
                   text: "• " + modelData
+                  textFormat: Text.PlainText
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption
@@ -2391,6 +2414,7 @@ Panel {
                 delegate: Text {
                   width: parent.width
                   text: "• " + modelData
+                  textFormat: Text.PlainText
                   color: dayflow.dim
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.caption

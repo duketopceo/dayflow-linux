@@ -197,6 +197,7 @@ Flickable {
             id: convText
             anchors.centerIn: parent
             text: modelData.title
+            textFormat: Text.PlainText
             color: dayflow ? dayflow.foreground : Color.foreground
             font.family: dayflow ? dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
@@ -274,6 +275,7 @@ Flickable {
         anchors.fill: parent
         anchors.margins: Style.space(7)
         text: root.recapText()
+        textFormat: Text.PlainText
         color: dayflow ? dayflow.foreground : Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption

@@ -144,7 +144,13 @@ CREATE INDEX IF NOT EXISTS block_edits_start_ts ON block_edits(start_ts);
 // recently inserted) and replace the plain date index with a unique one so
 // concurrent upserts can't create dupes.
 const schemaV3 = `
-DELETE FROM day_goals WHERE id NOT IN (SELECT MAX(id) FROM day_goals GROUP BY date);
+DELETE FROM day_goals WHERE id NOT IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY date ORDER BY completed DESC, id DESC
+    ) rn FROM day_goals
+  ) WHERE rn = 1
+);
 DROP INDEX IF EXISTS day_goals_date;
 CREATE UNIQUE INDEX IF NOT EXISTS day_goals_date ON day_goals(date);
 `

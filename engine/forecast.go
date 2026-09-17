@@ -61,6 +61,7 @@ func forecast(db *sql.DB, target time.Time) (Forecast, error) {
 	fc := Forecast{
 		Date:    target.Local().Format("2006-01-02"),
 		Weekday: target.Local().Weekday().String(),
+		Items:   []ForecastItem{},
 	}
 	type dayProfile struct {
 		m     map[string]float64
@@ -150,18 +151,5 @@ func printForecast(db *sql.DB, d time.Time, jsonOut bool) {
 	}
 	fmt.Printf("forecast %s (%s, %s confidence): %s — ~%s total\n",
 		fc.Date, fc.Weekday, fc.Confidence, strings.Join(parts, ", "),
-		fmtDurMin(fc.TotalMinutes))
-}
-
-// fmtDurMin renders minutes as "5h 20m".
-func fmtDurMin(m float64) string {
-	h := int(m) / 60
-	r := int(m) % 60
-	if h == 0 {
-		return fmt.Sprintf("%dm", r)
-	}
-	if r == 0 {
-		return fmt.Sprintf("%dh", h)
-	}
-	return fmt.Sprintf("%dh %dm", h, r)
+		fmtDur(int(fc.TotalMinutes + 0.5)))
 }

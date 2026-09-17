@@ -131,7 +131,9 @@ func unitSet() map[string]string {
 
 // unitOwned reports whether path is a regular file we may replace/remove:
 // a symlink or unreadable path is never ours; content must carry the marker
-// or match the expected body exactly.
+// or match the expected body exactly. Pre-marker installs (v1.0.1 and
+// earlier) wrote the same bodies without the marker, so an exact match on
+// the unmarked body also counts as ours.
 func unitOwned(path, expected string) bool {
 	fi, err := os.Lstat(path)
 	if err != nil || !fi.Mode().IsRegular() {
@@ -141,7 +143,9 @@ func unitOwned(path, expected string) bool {
 	if err != nil || len(b) > 64<<10 {
 		return false
 	}
-	return strings.HasPrefix(string(b), unitMarker) || string(b) == expected
+	s := string(b)
+	return strings.HasPrefix(s, unitMarker) || s == expected ||
+		s == strings.TrimPrefix(expected, unitMarker)
 }
 
 // writeUnitAtomic publishes body via a same-directory temp + rename. The temp

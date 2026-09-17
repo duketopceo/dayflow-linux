@@ -330,6 +330,27 @@ func TestConfigPatchPreservesMaskedProviderKeys(t *testing.T) {
 			t.Fatalf("sentinel persisted for %q", p.ID)
 		}
 	}
+
+	// The panel strips the sentinel before patching, so the engine must also
+	// preserve the stored key when api_key is simply absent from the entry.
+	patch = `{"providers":[{"id":"default","name":"Default","kind":"openrouter","model":"m3","enabled":true}]}`
+	if err := patchConfig(patch); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = loadConfig()
+	if cfg.Providers[0].APIKey != "sk-real-key-123" {
+		t.Fatalf("absent api_key clobbered the stored key: %q", cfg.Providers[0].APIKey)
+	}
+
+	// Top-level masked sentinel is likewise ignored on round-trip.
+	patch = `{"openrouter_api_key":"***redacted***"}`
+	if err := patchConfig(patch); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = loadConfig()
+	if cfg.OpenRouterAPIKey != "sk-real-key-123" {
+		t.Fatalf("top-level sentinel clobbered the key: %q", cfg.OpenRouterAPIKey)
+	}
 }
 
 func TestRetention(t *testing.T) {

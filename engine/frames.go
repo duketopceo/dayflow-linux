@@ -29,7 +29,7 @@ func framesForDay(db *sql.DB, d time.Time) ([]frameEntry, error) {
 	}
 	defer rows.Close()
 
-	var out []frameEntry
+	out := []frameEntry{}
 	for rows.Next() {
 		var f frameEntry
 		if err := rows.Scan(&f.TS, &f.Path); err != nil {

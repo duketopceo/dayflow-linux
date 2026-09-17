@@ -47,7 +47,11 @@ FloatingWindow {
     root.dayflow.uilog("agents load " + root.dayflow.viewDateStr())
     agentsProc.command = ["dayflow", "agents", root.dayflow.viewDateStr(), "--json"]
     root.agentsLoading = true
-    agentsProc.running = true
+    if (agentsProc.running) {
+      root.agentsPending = true
+    } else {
+      agentsProc.running = true
+    }
   }
 
   Process {
@@ -72,6 +76,21 @@ FloatingWindow {
       if (exitCode !== 0) {
         root.agentSessions = []
         root.agentsError = "agent scan failed"
+      }
+      if (root.agentsPending) {
+        root.agentsPending = false
+        root.agentsLoad()
+      }
+    }
+    // FailedToStart emits neither exited nor streamFinished — clear the
+    // flag and drain the queue so the bar never sticks.
+    onRunningChanged: {
+      if (!agentsProc.running) {
+        root.agentsLoading = false
+        if (root.agentsPending) {
+          root.agentsPending = false
+          root.agentsLoad()
+        }
       }
     }
   }
@@ -105,13 +124,22 @@ FloatingWindow {
   property bool tlLoading: false
   property string tlError: ""
 
+  property bool tlPending: false
+  property bool agentsPending: false
+
   function tlLoad() {
     if (!root.dayflow) return
     root.dayflow.uilog("timelapse load " + root.dayflow.viewDateStr())
     framesProc.command = ["dayflow", "frames", root.dayflow.viewDateStr(), "--json"]
     root.tlLoading = true
     root.tlPlaying = false
-    framesProc.running = true
+    // command changes on a running Process only affect the next start —
+    // queue a rerun so the requested day isn't dropped mid-flight.
+    if (framesProc.running) {
+      root.tlPending = true
+    } else {
+      framesProc.running = true
+    }
   }
 
   function tlSeek(i) {
@@ -144,6 +172,19 @@ FloatingWindow {
         root.tlFrames = []
         root.tlError = "frames listing failed"
       }
+      if (root.tlPending) {
+        root.tlPending = false
+        root.tlLoad()
+      }
+    }
+    onRunningChanged: {
+      if (!framesProc.running) {
+        root.tlLoading = false
+        if (root.tlPending) {
+          root.tlPending = false
+          root.tlLoad()
+        }
+      }
     }
   }
 
@@ -167,7 +208,7 @@ FloatingWindow {
   Timer {
     interval: 250
     repeat: true
-    running: root.tlPlaying && root.tlFrames.length > 1
+    running: root.tlPlaying && root.section === "timelapse" && root.tlFrames.length > 1
     onTriggered: {
       if (root.tlIndex >= root.tlFrames.length - 1) {
         root.tlPlaying = false
@@ -184,11 +225,16 @@ FloatingWindow {
   minimumSize: Qt.size(840, 560)
   visible: root.dayflow !== null
 
-  Component.onCompleted: {
+  // dayflow is assigned by the panel's Loader.onLoaded AFTER this component's
+  // onCompleted — trigger the initial loads on assignment instead.
+  onDayflowChanged: {
     if (root.dayflow) {
       root.dayflow.loadTimeline()
       root.dayflow.refreshForTab("week")
     }
+  }
+
+  Component.onCompleted: {
     playbackStatusProc.running = true
     forecastProc.running = true
   }
@@ -471,6 +517,7 @@ FloatingWindow {
               Text {
                 width: parent.width
                 text: modelData.title + (modelData.count > 1 ? "  ·" + modelData.count : "")
+                textFormat: Text.PlainText
                 color: root.dayflow ? root.dayflow.foreground : "white"
                 font.family: root.dayflow ? root.dayflow.fontFamily : ""
                 font.pixelSize: Style.font.body
@@ -483,6 +530,7 @@ FloatingWindow {
                 text: (modelData.summary !== "" ? modelData.summary + " · " : "") +
                       modelData.appName + " · " +
                       (root.dayflow ? root.dayflow.appDisplayName(modelData.category) : modelData.category)
+                textFormat: Text.PlainText
                 color: root.dayflow ? root.dayflow.dim : "gray"
                 font.family: root.dayflow ? root.dayflow.fontFamily : ""
                 font.pixelSize: Style.font.caption
@@ -725,13 +773,14 @@ FloatingWindow {
                     radius: Style.space(5)
                     anchors.verticalCenter: parent.verticalCenter
                     color: root.dayflow
-                      ? root.dayflow.payloadColor(modelData.color, modelData.category)
+                      ? root.dayflow.payloadColor(modelData.color, modelData.name)
                       : "gray"
                   }
 
                   Text {
                     width: parent.width - Style.space(80)
-                    text: root.dayflow ? root.dayflow.appDisplayName(modelData.category) : modelData.category
+                    text: root.dayflow ? root.dayflow.appDisplayName(modelData.display || modelData.name) : modelData.name
+                    textFormat: Text.PlainText
                     color: root.dayflow ? root.dayflow.foreground : "white"
                     font.family: root.dayflow ? root.dayflow.fontFamily : ""
                     font.pixelSize: Style.font.caption
@@ -782,7 +831,8 @@ FloatingWindow {
 
                   Text {
                     width: parent.width - Style.space(70)
-                    text: root.dayflow ? root.dayflow.appDisplayName(modelData.app) : modelData.app
+                    text: root.dayflow ? root.dayflow.appDisplayName(modelData.display || modelData.name) : modelData.name
+                    textFormat: Text.PlainText
                     color: root.dayflow ? root.dayflow.foreground : "white"
                     font.family: root.dayflow ? root.dayflow.fontFamily : ""
                     font.pixelSize: Style.font.caption
@@ -816,6 +866,7 @@ FloatingWindow {
             width: parent.width - Style.space(16)
             anchors.centerIn: parent
             text: root.dayflow ? root.dayflow.weekSummary : ""
+            textFormat: Text.PlainText
             color: root.dayflow ? root.dayflow.foreground : "white"
             font.family: root.dayflow ? root.dayflow.fontFamily : ""
             font.pixelSize: Style.font.body
@@ -1199,6 +1250,7 @@ FloatingWindow {
 
           delegate: Text {
             required property var modelData
+            textFormat: Text.PlainText
             text: (root.dayflow ? root.dayflow.appDisplayName(modelData.source) : modelData.source) +
                   " → " +
                   (root.dayflow ? root.dayflow.appDisplayName(modelData.target) : modelData.target) +
@@ -1416,10 +1468,14 @@ FloatingWindow {
     }
   }
 
-  // Day changes reload the scrubber when it's visible.
+  // Day changes invalidate loaded day-scoped data and reload visible panes.
   Connections {
     target: root.dayflow
     function onDayOffsetChanged() {
+      root.tlFrames = []
+      root.tlIndex = 0
+      root.tlPlaying = false
+      root.agentSessions = []
       if (root.section === "timelapse") root.tlLoad()
       if (root.section === "agents") root.agentsLoad()
     }

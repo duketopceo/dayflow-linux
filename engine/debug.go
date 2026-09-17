@@ -27,6 +27,14 @@ func appendLog(line string) {
 		if newDay || fi.Size() > 8<<20 {
 			arch := filepath.Join(dataDir(),
 				"debug-"+fi.ModTime().Format("20060102")+".log")
+			// A second same-day rotation must not clobber the first archive.
+			for n := 2; ; n++ {
+				if _, err := os.Stat(arch); os.IsNotExist(err) {
+					break
+				}
+				arch = filepath.Join(dataDir(), fmt.Sprintf(
+					"debug-%s-%d.log", fi.ModTime().Format("20060102"), n))
+			}
 			os.Rename(p, arch)
 			pruneLogArchives()
 		}

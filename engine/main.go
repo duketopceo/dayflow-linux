@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,32 @@ import (
 )
 
 const version = "1.1.0"
+
+// positionalArgs returns non-flag argv entries; an empty arg is not a flag
+// and is skipped (a[0] on "" panics).
+func positionalArgs(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if a != "" && a[0] != '-' {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// dateArg scans args for a YYYY-MM-DD date, erroring on malformed positional
+// args so a typo never silently reports the wrong day.
+func dateArg(args []string, def time.Time) (time.Time, error) {
+	d := def
+	for _, a := range positionalArgs(args) {
+		parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
+		if err != nil {
+			return d, fmt.Errorf("bad date %q (want YYYY-MM-DD)", a)
+		}
+		d = parsed
+	}
+	return d, nil
+}
 
 // readStdin reads one line from stdin — used by `config set -`,
 // `config patch -`, and `provider set <id> <key> -` so secrets never appear
@@ -36,6 +63,7 @@ Engine:
 
 Query:
   today [--json]      Print today's timeline
+  timeline [--json] [YYYY-MM-DD]   Print a day's timeline
   day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
   frames [YYYY-MM-DD] [--json]   List captured frames for a day
@@ -61,6 +89,9 @@ Control:
                           retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
                           output, capture_command, openrouter_api_key, provider,
                           filter_inappropriate, panel_expanded, debug)
+                          Use "-" as the value to read it from stdin (keeps
+                          secrets out of argv and shell history)
+  config patch <json|-> Merge a JSON object into the config
   key set|status|del    Store/inspect API keys in OmaSeal instead of config.json
   log <msg>             Append a UI action line to debug.log
   provider [list]       List configured providers and routing
@@ -80,7 +111,8 @@ Control:
   stats [--json]          Storage, block counts, date range, and API usage
   week | month [--json]   Timeline rollups
   weekly [--json]        Weekly analytics payload (donut, treemap, context shifts, highlights)
-  export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
+  export [day|YYYY-MM-DD|week|month] [--brief] [--out <file>|--copy]
+                                    Markdown export (--brief = one line per span)
   mcp [--read-only]       Run the MCP server over stdio (for agents);
                           --read-only hides and blocks the chat tool
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
@@ -102,7 +134,8 @@ Control:
 Setup & health:
   setup                   Interactive AI-provider onboarding (OpenRouter or local endpoint)
   models                  List vision-capable models on your OpenRouter account
-  doctor [--json]         Check session, grim, key, model, and endpoint support
+  doctor [--json] [--deep]  Check session, grim, key, model, endpoint;
+                          --deep runs a full sqlite integrity check
   detect [--json]         Probe for local model endpoints (Ollama, LM Studio)
 
 Config: %s
@@ -166,20 +199,14 @@ func main() {
 
 	case "timeline":
 		// timeline [--json] [YYYY-MM-DD]
-		d := time.Now()
-		for _, a := range args {
-			if len(a) == 10 && a[4] == '-' {
-				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
-				fatal(err)
-				d = parsed
-			}
-		}
+		d, err := dateArg(args, time.Now())
+		fatal(err)
 		printTimeline(cfg, d, jsonOut)
 
 	case "day":
 		var d time.Time
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				var err error
 				d, err = time.ParseInLocation("2006-01-02", a, time.Local)
 				fatal(err)
@@ -203,14 +230,8 @@ func main() {
 
 	case "frames":
 		// frames [YYYY-MM-DD] [--json] — list captured frames for a day
-		d := time.Now()
-		for _, a := range args {
-			if len(a) == 10 && a[4] == '-' {
-				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
-				fatal(err)
-				d = parsed
-			}
-		}
+		d, err := dateArg(args, time.Now())
+		fatal(err)
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
@@ -221,7 +242,7 @@ func main() {
 		// timelapse playback; enabling applies the standard storage cap.
 		sub := "status"
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				sub = a
 			}
 		}
@@ -241,27 +262,15 @@ func main() {
 
 	case "agents":
 		// agents [YYYY-MM-DD] [--json] — coding-agent session recaps
-		d := time.Now()
-		for _, a := range args {
-			if len(a) == 10 && a[4] == '-' {
-				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
-				fatal(err)
-				d = parsed
-			}
-		}
+		d, err := dateArg(args, time.Now())
+		fatal(err)
 		printAgentSessions(d, jsonOut)
 
 	case "forecast":
 		// forecast [YYYY-MM-DD] [--json] — predict a day's category mix from
 		// same-weekday history (default: tomorrow)
-		d := time.Now().AddDate(0, 0, 1)
-		for _, a := range args {
-			if len(a) == 10 && a[4] == '-' {
-				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
-				fatal(err)
-				d = parsed
-			}
-		}
+		d, err := dateArg(args, time.Now().AddDate(0, 0, 1))
+		fatal(err)
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
@@ -301,6 +310,9 @@ func main() {
 			args = args[1:]
 		}
 		if len(args) >= 2 && args[0] == "set" {
+			if len(args) < 3 {
+				fatal(fmt.Errorf("usage: dayflow config set <key> <value|->"))
+			}
 			val := args[2]
 			if val == "-" {
 				val = strings.TrimSpace(readStdin())
@@ -315,6 +327,9 @@ func main() {
 			break
 		}
 		if len(args) >= 1 && args[0] == "patch" {
+			if len(args) < 2 {
+				fatal(fmt.Errorf("usage: dayflow config patch <json|->"))
+			}
 			patch := args[1]
 			if patch == "-" {
 				patch = readStdin() // keeps key material out of argv
@@ -348,7 +363,7 @@ func main() {
 		for _, a := range args {
 			if a == "--active" {
 				cls = activeWindowClass()
-			} else if a[0] != '-' {
+			} else if a != "" && a[0] != '-' {
 				cls = a
 			}
 		}
@@ -515,7 +530,7 @@ func main() {
 					i++
 					continue
 				}
-				if a[0] != '-' {
+				if a != "" && a[0] != '-' {
 					text = a
 					break
 				}
@@ -555,7 +570,7 @@ func main() {
 		label := "dayflow insights"
 		sel := "week"
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				sel = a
 			}
 		}
@@ -591,7 +606,7 @@ func main() {
 		rangeLabel := "this week"
 		sel := "week"
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				sel = a
 			}
 		}
@@ -643,7 +658,7 @@ func main() {
 		}
 		var msgParts []string
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				msgParts = append(msgParts, a)
 			}
 		}
@@ -699,7 +714,7 @@ func main() {
 		// conversation <id> [--json] — print one thread's messages
 		var pos []string
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				pos = append(pos, a)
 			}
 		}
@@ -739,7 +754,7 @@ func main() {
 		// edit <start_ts|"YYYY-MM-DD HH:MM"> <field> <value...>
 		var pos []string
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				pos = append(pos, a)
 			}
 		}
@@ -766,7 +781,7 @@ func main() {
 	case "edits":
 		var pos []string
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				pos = append(pos, a)
 			}
 		}
@@ -934,7 +949,7 @@ func main() {
 	case "provider":
 		var pargs []string
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				pargs = append(pargs, a)
 			}
 		}
@@ -987,11 +1002,13 @@ func main() {
 			}
 			fmt.Println("stored in keyring:", account)
 		case "status":
-			out, err := exec.Command("omaseal", "list", keyringService).CombinedOutput()
-			fmt.Print(string(out))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			out, err := exec.CommandContext(ctx, "omaseal", "list", keyringService).CombinedOutput()
+			cancel()
 			if err != nil {
-				fatal(fmt.Errorf("omaseal list failed"))
+				fatal(fmt.Errorf("omaseal list failed: %s", strings.TrimSpace(string(out))))
 			}
+			fmt.Print(string(out))
 		case "del":
 			if len(args) < 2 {
 				fatal(fmt.Errorf("usage: dayflow key del <account>"))
