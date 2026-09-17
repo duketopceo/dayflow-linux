@@ -246,6 +246,7 @@ FloatingWindow {
                 anchors.left: parent.left
                 anchors.leftMargin: Style.space(10)
                 text: modelData.label
+                textFormat: Text.PlainText
                 color: root.section === modelData.key
                   ? (root.dayflow ? root.dayflow.foreground : "white")
                   : (root.dayflow ? root.dayflow.dim : "gray")
@@ -377,6 +378,7 @@ FloatingWindow {
                 id: navText
                 anchors.centerIn: parent
                 text: modelData.label
+                textFormat: Text.PlainText
                 color: root.dayflow ? root.dayflow.foreground : "white"
                 font.family: root.dayflow ? root.dayflow.fontFamily : ""
                 font.pixelSize: Style.font.body
@@ -611,6 +613,7 @@ FloatingWindow {
                 Text {
                   anchors.horizontalCenter: parent.horizontalCenter
                   text: modelData.label
+                  textFormat: Text.PlainText
                   color: root.dayflow ? root.dayflow.dim : "gray"
                   font.family: root.dayflow ? root.dayflow.fontFamily : ""
                   font.pixelSize: Style.font.caption
@@ -860,6 +863,7 @@ FloatingWindow {
               id: tlNavText
               anchors.centerIn: parent
               text: modelData.label
+              textFormat: Text.PlainText
               color: root.dayflow ? root.dayflow.foreground : "white"
               font.family: root.dayflow ? root.dayflow.fontFamily : ""
               font.pixelSize: Style.font.body
