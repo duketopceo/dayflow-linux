@@ -40,6 +40,8 @@ Query:
   status [--json]     Show recording state and counts
   frames [YYYY-MM-DD] [--json]   List captured frames for a day
   agents [YYYY-MM-DD] [--json]   Coding-agent session recaps (Claude Code, Codex)
+  forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
+                          (default: tomorrow)
   playback [on|off|status] [--json]   Opt-in frame retention for timelapse
                           playback (applies the standard storage cap)
   blocks [--json]     List blocks that failed summarization
@@ -248,6 +250,22 @@ func main() {
 			}
 		}
 		printAgentSessions(d, jsonOut)
+
+	case "forecast":
+		// forecast [YYYY-MM-DD] [--json] — predict a day's category mix from
+		// same-weekday history (default: tomorrow)
+		d := time.Now().AddDate(0, 0, 1)
+		for _, a := range args {
+			if len(a) == 10 && a[4] == '-' {
+				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
+				fatal(err)
+				d = parsed
+			}
+		}
+		db, err := openDB()
+		fatal(err)
+		defer db.Close()
+		printForecast(db, d, jsonOut)
 
 	case "blocks":
 		printFailed(cfg, jsonOut)

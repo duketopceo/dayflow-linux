@@ -23,6 +23,20 @@ FloatingWindow {
     { key: "agents",    label: "Agents" }
   ]
 
+  // ---- forecast ----
+  property var forecast: null
+
+  Process {
+    id: forecastProc
+    command: ["dayflow", "forecast", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.forecast = JSON.parse(text) } catch (e) { root.forecast = null }
+      }
+    }
+  }
+
   // ---- agents pane state ----
   property var agentSessions: []
   property bool agentsLoading: false
@@ -176,6 +190,7 @@ FloatingWindow {
       root.dayflow.refreshForTab("week")
     }
     playbackStatusProc.running = true
+    forecastProc.running = true
   }
 
   Rectangle {
@@ -504,6 +519,61 @@ FloatingWindow {
         width: parent.width - Style.space(32)
         x: Style.space(16)
         spacing: Style.space(12)
+
+        // tomorrow forecast strip
+        Rectangle {
+          visible: root.forecast !== null && (root.forecast.items || []).length > 0
+          width: parent.width
+          height: fcRow.implicitHeight + Style.space(14)
+          radius: Style.cornerRadius
+          color: root.dayflow ? root.dayflow.fgFill(0.04) : "transparent"
+          border.color: root.dayflow ? root.dayflow.accentFill(0.25) : "transparent"
+
+          Row {
+            id: fcRow
+            width: parent.width - Style.space(16)
+            anchors.centerIn: parent
+            spacing: Style.space(8)
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Tomorrow · " + (root.forecast ? root.forecast.weekday : "") +
+                    " · " + (root.forecast ? root.forecast.confidence : "") + " conf"
+              textFormat: Text.PlainText
+              color: root.dayflow ? root.dayflow.dim : "gray"
+              font.family: root.dayflow ? root.dayflow.fontFamily : ""
+              font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+              model: root.forecast ? (root.forecast.items || []).slice(0, 5) : []
+
+              delegate: Rectangle {
+                required property var modelData
+                height: Style.space(20)
+                width: fcChipText.implicitWidth + Style.space(14)
+                radius: Style.cornerRadius
+                color: root.dayflow
+                  ? root.dayflow.payloadFill("", modelData.category, 0.15)
+                  : "transparent"
+                border.color: root.dayflow
+                  ? root.dayflow.payloadFill("", modelData.category, 0.4)
+                  : "transparent"
+
+                Text {
+                  id: fcChipText
+                  anchors.centerIn: parent
+                  text: (root.dayflow ? root.dayflow.appDisplayName(modelData.category) : modelData.category) +
+                        " " + Math.round(modelData.pct) + "%"
+                  textFormat: Text.PlainText
+                  color: root.dayflow ? root.dayflow.foreground : "white"
+                  font.family: root.dayflow ? root.dayflow.fontFamily : ""
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+        }
 
         // stat strip
         Row {
