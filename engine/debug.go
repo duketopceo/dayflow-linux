@@ -23,8 +23,8 @@ func appendLog(line string) {
 	defer debugMu.Unlock()
 	p := debugLogPath()
 	if fi, err := os.Stat(p); err == nil {
-		dayAgo := time.Now().Add(-24 * time.Hour)
-		if fi.ModTime().Before(dayAgo) || fi.Size() > 8<<20 {
+		newDay := fi.ModTime().Local().Format("2006-01-02") != time.Now().Local().Format("2006-01-02")
+		if newDay || fi.Size() > 8<<20 {
 			arch := filepath.Join(dataDir(),
 				"debug-"+fi.ModTime().Format("20060102")+".log")
 			os.Rename(p, arch)
