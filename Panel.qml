@@ -26,6 +26,8 @@ Panel {
   property int blocksPending: 0
   property string storageText: ""
   property string notice: ""
+  property string noticeTone: "neutral"
+  readonly property bool noticeIsError: noticeTone === "error"
   property string currentTab: "today"
   property var config: ({})
   property var configDraft: ({})
@@ -57,6 +59,12 @@ Panel {
   readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(dayflow.foreground, 1.5)
   readonly property string fontFamily: dayflow.bar ? dayflow.bar.fontFamily : Style.font.family
+
+  onNoticeChanged: {
+    if (notice === "") noticeTone = "neutral"
+    else if (/failed|error|could not|denied|unavailable|not found/i.test(notice)) noticeTone = "error"
+    else noticeTone = "success"
+  }
 
   function open() {
     dayflow.controller.show()
@@ -968,23 +976,23 @@ Panel {
       Column {
         id: content
         width: parent.width
-        leftPadding: Style.space(12)
-        rightPadding: Style.space(12)
-        topPadding: Style.space(12)
-        bottomPadding: Style.space(12)
-        spacing: Style.space(10)
+        leftPadding: Style.space(10)
+        rightPadding: Style.space(10)
+        topPadding: Style.space(10)
+        bottomPadding: Style.space(10)
+        spacing: Style.space(8)
 
         // ---- header ----
         Row {
           width: parent.width - content.leftPadding - content.rightPadding
-          spacing: Style.space(8)
+          spacing: Style.space(6)
 
           Column {
             width: parent.width - toggleBtn.width - expandBtn.width - Style.space(6) - parent.spacing
-            spacing: Style.space(2)
+            spacing: Style.space(1)
 
             Row {
-              spacing: Style.space(6)
+              spacing: Style.space(5)
 
               Rectangle {
                 width: Style.space(7)
@@ -1017,7 +1025,7 @@ Panel {
 
           Rectangle {
             id: expandBtn
-            height: Style.space(28)
+            height: Style.space(26)
             width: exg.implicitWidth + Style.space(14)
             radius: Style.cornerRadius
             color: mexg.containsMouse ? dayflow.accentFill(0.12) : "transparent"
@@ -1048,7 +1056,7 @@ Panel {
 
           Rectangle {
             id: toggleBtn
-            height: Style.space(28)
+            height: Style.space(26)
             width: tgl.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
             color: dayflow.paused
@@ -1078,14 +1086,14 @@ Panel {
         // ---- tab bar ----
         Row {
           width: parent.width - content.leftPadding - content.rightPadding
-          spacing: Style.space(6)
+          spacing: Style.space(4)
 
           Repeater {
             model: ["today", "standup", "chat", "week", "settings"]
 
             delegate: Rectangle {
-              height: Style.space(28)
-              width: tabLabel.implicitWidth + Style.space(16)
+              height: Style.space(26)
+              width: tabLabel.implicitWidth + Style.space(14)
               radius: Style.cornerRadius
               color: dayflow.currentTab === modelData
                 ? dayflow.accentFill(0.12)
@@ -1124,7 +1132,7 @@ Panel {
         Column {
           visible: dayflow.errorText !== "" || !dayflow.configured
           width: parent.width - content.leftPadding - content.rightPadding
-          spacing: Style.space(6)
+          spacing: Style.space(4)
 
           Text {
             visible: dayflow.errorText !== ""
@@ -1175,10 +1183,10 @@ Panel {
         Flow {
           width: parent.width - content.leftPadding - content.rightPadding
           height: implicitHeight
-          spacing: Style.space(6)
+          spacing: Style.space(4)
 
           Rectangle {
-            height: Style.space(26)
+            height: Style.space(24)
             width: a2.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
             color: dayflow.btnBg(m2.containsMouse)
@@ -1203,7 +1211,7 @@ Panel {
           }
 
           Rectangle {
-            height: Style.space(26)
+            height: Style.space(24)
             width: a3.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
             color: dayflow.btnBg(m3.containsMouse)
@@ -1232,7 +1240,7 @@ Panel {
           }
 
           Rectangle {
-            height: Style.space(26)
+            height: Style.space(24)
             width: a4.implicitWidth + Style.space(16)
             radius: Style.cornerRadius
             color: dayflow.btnBg(m4.containsMouse)
@@ -1287,7 +1295,9 @@ Panel {
           width: parent.width - content.leftPadding - content.rightPadding
           text: dayflow.notice
           textFormat: Text.PlainText
-          color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+          color: dayflow.noticeIsError && Color.urgent !== undefined
+            ? Color.urgent
+            : (Color.accent !== undefined ? Color.accent : dayflow.foreground)
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap

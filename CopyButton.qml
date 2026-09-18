@@ -14,11 +14,16 @@ Rectangle {
 
   signal activated()
 
-  height: Style.space(22)
+  height: Style.space(24)
   width: lbl.implicitWidth + Style.space(12)
   radius: Style.cornerRadius
-  color: btn.dayflow.btnBg(ma.containsMouse)
-  border.color: btn.dayflow.fgFill(0.2)
+  color: btn.proc && btn.proc.running
+    ? btn.dayflow.accentFill(0.10)
+    : btn.dayflow.btnBg(ma.containsMouse)
+  border.color: btn.proc && btn.proc.running
+    ? btn.dayflow.accentFill(0.45)
+    : btn.dayflow.fgFill(0.2)
+  opacity: btn.proc && btn.proc.running ? 0.8 : 1
 
   Text {
     id: lbl

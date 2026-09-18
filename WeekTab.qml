@@ -16,7 +16,7 @@ Flickable {
   Column {
     id: wcol
     width: parent.width
-    spacing: Style.space(10)
+    spacing: Style.space(8)
 
     BusyBar {
       width: parent.width
@@ -26,7 +26,7 @@ Flickable {
 
     Flow {
       width: parent.width
-      spacing: Style.space(6)
+      spacing: Style.space(4)
 
       Repeater {
         model: [
@@ -133,7 +133,8 @@ Flickable {
     }
 
     Rectangle {
-      visible: dayflow.weeklyPayload.category_donut.length > 0
+      // Detailed visuals are reserved for the expanded panel and Full View.
+      visible: dayflow.expanded && dayflow.weeklyPayload.category_donut.length > 0
       width: parent.width
       height: chartsCol.implicitHeight + Style.space(16)
       radius: Style.cornerRadius
@@ -509,7 +510,7 @@ Flickable {
     }
 
     Rectangle {
-      visible: dayflow.weekBlocks.length > 0
+      visible: dayflow.expanded && dayflow.weekBlocks.length > 0
       width: parent.width
       height: heatCol.implicitHeight + Style.space(16)
       radius: Style.cornerRadius
@@ -602,7 +603,7 @@ Flickable {
 
     // ---- full week timeline (merged spans per day) ----
     Rectangle {
-      visible: dayflow.weekBlocks.length > 0
+      visible: dayflow.expanded && dayflow.weekBlocks.length > 0
       width: parent.width
       height: weekCol.implicitHeight + Style.space(16)
       radius: Style.cornerRadius
@@ -717,7 +718,7 @@ Flickable {
     Binding { target: distLoader.item; property: "items"; value: dayflow.insights.top_distractions; when: distLoader.status === Loader.Ready }
 
     Rectangle {
-      visible: dayflow.insights.focus_blocks.length > 0
+      visible: dayflow.expanded && dayflow.insights.focus_blocks.length > 0
       width: parent.width
       height: fCol.implicitHeight + Style.space(16)
       radius: Style.cornerRadius

@@ -16,7 +16,7 @@ Flickable {
   Column {
     id: col
     width: parent.width
-    spacing: Style.space(10)
+    spacing: Style.space(8)
 
     BusyBar {
       width: parent.width
@@ -27,7 +27,7 @@ Flickable {
     // ---- day switcher ----
     Row {
       width: parent.width
-      spacing: Style.space(6)
+      spacing: Style.space(4)
 
       Rectangle {
         height: Style.space(28)
@@ -132,7 +132,7 @@ Flickable {
     // ---- copy actions for the viewed day ----
     Flow {
       width: parent.width
-      spacing: Style.space(6)
+      spacing: Style.space(4)
 
       Repeater {
         // Copies the currently viewed day, not always today.
@@ -166,7 +166,7 @@ Flickable {
     // ---- this-week day jump ----
     Flow {
       width: parent.width
-      spacing: Style.space(4)
+      spacing: Style.space(3)
 
       Repeater {
         model: 7
@@ -220,7 +220,7 @@ Flickable {
       delegate: Rectangle {
         id: cardRoot
         width: col.width
-        height: cardCol.implicitHeight + Style.space(16)
+        height: cardCol.implicitHeight + Style.space(14)
         radius: Style.cornerRadius
         color: dayflow.fgFill(0.04)
         border.color: dayflow.fgFill(0.08)
@@ -249,16 +249,17 @@ Flickable {
 
         Column {
           id: cardCol
-          width: parent.width - Style.space(22)
+          width: parent.width - Style.space(20)
           anchors.centerIn: parent
           anchors.horizontalCenterOffset: Style.space(3)
-          spacing: Style.space(4)
+          spacing: Style.space(3)
 
           Row {
             width: parent.width
             spacing: Style.space(8)
 
             Image {
+              id: appIcon
               width: Style.space(14)
               height: Style.space(14)
               source: dayflow.appIcon(modelData.app)
@@ -267,6 +268,7 @@ Flickable {
             }
 
             Text {
+              width: parent.width - appIcon.width - categoryPill.width - productiveMark.width - editLink.implicitWidth - parent.spacing * (productiveMark.visible ? 4 : 3)
               text: modelData.start + "–" + modelData.end +
                     " · " + dayflow.fmtDur(modelData.minutes) +
                     (modelData.count > 1 ? " · " + modelData.count + " blocks" : "") +
@@ -275,10 +277,12 @@ Flickable {
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
               anchors.verticalCenter: parent.verticalCenter
             }
 
             Rectangle {
+              id: categoryPill
               height: catText.implicitHeight + Style.space(4)
               width: catText.implicitWidth + Style.space(10)
               radius: height / 2
@@ -296,6 +300,7 @@ Flickable {
             }
 
             Text {
+              id: productiveMark
               visible: modelData.productive === true
               text: "⚡"
               textFormat: Text.PlainText
@@ -326,15 +331,17 @@ Flickable {
             }
           }
 
-          Text {
-            width: parent.width
+            Text {
+              width: parent.width
             text: modelData.title
             textFormat: Text.PlainText
             color: dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
-            font.bold: true
-            wrapMode: Text.WordWrap
+              font.bold: true
+              wrapMode: Text.WordWrap
+              maximumLineCount: 2
+              elide: Text.ElideRight
           }
 
           Text {
@@ -346,7 +353,7 @@ Flickable {
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
             wrapMode: Text.WordWrap
-            maximumLineCount: 4
+            maximumLineCount: 3
             elide: Text.ElideRight
           }
 

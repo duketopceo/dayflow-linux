@@ -21,7 +21,7 @@ Flickable {
     id: weekCol
     width: pane.width - Style.space(32)
     x: Style.space(16)
-    spacing: Style.space(12)
+    spacing: Style.space(10)
 
     // tomorrow forecast strip
     Rectangle {
@@ -32,14 +32,13 @@ Flickable {
       color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
       border.color: pane.dayflow ? pane.dayflow.accentFill(0.25) : "transparent"
 
-      Row {
+      Flow {
         id: fcRow
         width: parent.width - Style.space(16)
         anchors.centerIn: parent
         spacing: Style.space(8)
 
         Text {
-          anchors.verticalCenter: parent.verticalCenter
           text: "Tomorrow · " + (pane.forecast ? pane.forecast.weekday : "") +
                 " · " + (pane.forecast ? pane.forecast.confidence : "") + " conf"
           textFormat: Text.PlainText
@@ -79,7 +78,7 @@ Flickable {
     }
 
     // stat strip
-    Row {
+    Flow {
       width: parent.width
       spacing: Style.space(8)
 
@@ -94,7 +93,9 @@ Flickable {
         delegate: Rectangle {
           required property var modelData
           height: Style.space(52)
-          width: (weekCol.width - Style.space(24)) / 4
+          width: host && host.compactLayout
+            ? (weekCol.width - Style.space(8)) / 2
+            : (weekCol.width - Style.space(24)) / 4
           radius: Style.cornerRadius
           color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
           border.color: pane.dayflow ? pane.dayflow.fgFill(0.08) : "transparent"
@@ -186,12 +187,14 @@ Flickable {
     }
 
     // two columns: category donut legend + top apps
-    Row {
+    Flow {
       width: parent.width
       spacing: Style.space(10)
 
       Rectangle {
-        width: (parent.width - Style.space(10)) / 2
+        width: host && host.compactLayout
+          ? parent.width
+          : (parent.width - Style.space(10)) / 2
         height: catCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
         color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
@@ -253,7 +256,9 @@ Flickable {
       }
 
       Rectangle {
-        width: (parent.width - Style.space(10)) / 2
+        width: host && host.compactLayout
+          ? parent.width
+          : (parent.width - Style.space(10)) / 2
         height: appCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
         color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"

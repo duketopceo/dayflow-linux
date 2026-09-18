@@ -233,6 +233,9 @@ FloatingWindow {
   implicitHeight: 720
   minimumSize: Qt.size(840, 560)
   visible: root.dayflow !== null
+  readonly property bool compactLayout: width < Style.space(980) || height < Style.space(640)
+  readonly property int railWidth: Style.space(compactLayout ? 136 : 170)
+  readonly property int headerHeight: Style.space(compactLayout ? 46 : 52)
 
   // dayflow is assigned by the panel's Loader.onLoaded AFTER this component's
   // onCompleted — trigger the initial loads on assignment instead.
@@ -260,14 +263,14 @@ FloatingWindow {
 
       // ---- section rail ----
       Rectangle {
-        width: Style.space(170)
+        width: root.railWidth
         height: parent.height
         color: root.dayflow ? root.dayflow.fgFill(0.04) : "transparent"
         border.color: root.dayflow ? root.dayflow.fgFill(0.08) : "transparent"
 
         Column {
           anchors.fill: parent
-          anchors.margins: Style.space(12)
+          anchors.margins: Style.space(compactLayout ? 10 : 12)
           spacing: Style.space(4)
 
           Text {
@@ -276,7 +279,7 @@ FloatingWindow {
             font.family: root.dayflow ? root.dayflow.fontFamily : ""
             font.pixelSize: Style.font.subtitle
             font.bold: true
-            bottomPadding: Style.space(8)
+            bottomPadding: Style.space(6)
           }
 
           Repeater {
@@ -285,7 +288,7 @@ FloatingWindow {
             delegate: Rectangle {
               required property var modelData
               width: parent.width
-              height: Style.space(30)
+              height: Style.space(28)
               radius: Style.cornerRadius
               color: root.section === modelData.key
                 ? (root.dayflow ? root.dayflow.accentFill(0.14) : "transparent")
@@ -299,7 +302,7 @@ FloatingWindow {
               Text {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
-                anchors.leftMargin: Style.space(10)
+                anchors.leftMargin: Style.space(8)
                 text: modelData.label
                 textFormat: Text.PlainText
                 color: root.section === modelData.key
@@ -345,13 +348,13 @@ FloatingWindow {
 
       // ---- main area ----
       Column {
-        width: parent.width - Style.space(170)
+        width: parent.width - root.railWidth
         height: parent.height
 
         // header
         Item {
           width: parent.width
-          height: Style.space(52)
+          height: root.headerHeight
 
           Text {
             anchors.verticalCenter: parent.verticalCenter
@@ -384,7 +387,7 @@ FloatingWindow {
         // so a pane can rely on host.dayflow being non-null.
         Loader {
           width: parent.width
-          height: parent.height - Style.space(52)
+          height: parent.height - root.headerHeight
           active: root.dayflow !== null
           source: root.section === "week" ? "WeekPane.qml"
             : root.section === "timelapse" ? "TimelapsePane.qml"

@@ -19,13 +19,15 @@ Row {
 
     delegate: Rectangle {
       required property var modelData
+      readonly property bool canAdvance: modelData.act <= 0 || (nav.dayflow && nav.dayflow.dayOffset < 0)
       height: Style.space(28)
       width: navText.implicitWidth + Style.space(16)
       radius: Style.cornerRadius
-      color: navMouse.containsMouse && nav.dayflow
+      color: navMouse.containsMouse && nav.dayflow && canAdvance
         ? nav.dayflow.fgFill(0.08)
         : "transparent"
       border.color: nav.dayflow ? nav.dayflow.fgFill(0.15) : "transparent"
+      opacity: canAdvance ? 1 : 0.4
 
       Text {
         id: navText
@@ -41,6 +43,7 @@ Row {
         id: navMouse
         anchors.fill: parent
         hoverEnabled: true
+        enabled: parent.canAdvance
         cursorShape: Qt.PointingHandCursor
         onClicked: {
           if (!nav.dayflow) return

@@ -65,6 +65,11 @@ Column {
       return { left: left, right: right, links: links, nodeW: nodeW, names: names }
     }
 
+    function labelFor(name) {
+      var label = pane.dayflow ? pane.dayflow.appDisplayName(name) : name
+      return label.length > 9 ? label.substring(0, 8) + "..." : label
+    }
+
     onPaint: {
       var ctx = getContext("2d")
       ctx.reset()
@@ -104,10 +109,10 @@ Column {
         ctx.fillStyle = Qt.rgba(0.8, 0.8, 0.85, 0.9)
         ctx.font = Math.round(Style.font.caption) + "px " + (pane.dayflow ? pane.dayflow.fontFamily : "sans")
         ctx.textAlign = "right"
-        ctx.fillText(pane.dayflow ? pane.dayflow.appDisplayName(n) : n,
+        ctx.fillText(labelFor(n),
                      x1 - Style.space(6), L.left[n].y + L.left[n].h / 2 + 4)
         ctx.textAlign = "left"
-        ctx.fillText(pane.dayflow ? pane.dayflow.appDisplayName(n) : n,
+        ctx.fillText(labelFor(n),
                      x2 + L.nodeW + Style.space(6), L.right[n].y + L.right[n].h / 2 + 4)
       }
     }
