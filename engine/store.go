@@ -520,6 +520,111 @@ func logAPICall(db *sql.DB, blockStart time.Time, model string, framesSent, prom
 		time.Now().Unix(), blockStart.Unix(), model, framesSent, promptTok, completionTok, latencyMs, status, errStr)
 }
 
+type usageRow struct {
+	Calls      int `json:"calls"`
+	OK         int `json:"ok"`
+	Failed     int `json:"failed"`
+	PromptTok  int `json:"prompt_tokens"`
+	ComplTok   int `json:"completion_tokens"`
+}
+
+// usageGroup aggregates one ledger grouped by a column. The select must
+// return (key, calls, ok, failed, prompt_tokens, completion_tokens).
+func usageGroup(db *sql.DB, query string) (map[string]usageRow, error) {
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]usageRow{}
+	for rows.Next() {
+		var k string
+		var r usageRow
+		if err := rows.Scan(&k, &r.Calls, &r.OK, &r.Failed, &r.PromptTok, &r.ComplTok); err != nil {
+			return nil, err
+		}
+		if k == "" {
+			k = "unknown"
+		}
+		out[k] = r
+	}
+	return out, rows.Err()
+}
+
+const usageGroupSelect = `SELECT %s, COUNT(1),
+  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0),
+  COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
+  COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0)
+  FROM %s GROUP BY %s`
+
+// usageSummary aggregates both LLM ledgers: api_calls (block summarization,
+// always OpenRouter) and llm_calls (chat/review/standup, any provider).
+func usageSummary(db *sql.DB) (map[string]any, error) {
+	var calls, pt, ct, okn, failed int
+	if err := db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
+	  FROM api_calls`).Scan(&calls, &pt, &ct, &okn, &failed); err != nil {
+		return nil, err
+	}
+	var lcalls, lpt, lct, lok, lfailed int
+	db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
+	  FROM llm_calls`).Scan(&lcalls, &lpt, &lct, &lok, &lfailed)
+
+	byTask, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "task", "llm_calls", "task"))
+	if err != nil {
+		return nil, err
+	}
+	if calls > 0 {
+		r := byTask["summarize"]
+		r.Calls += calls
+		r.OK += okn
+		r.Failed += failed
+		r.PromptTok += pt
+		r.ComplTok += ct
+		byTask["summarize"] = r
+	}
+	byProvider, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "provider", "llm_calls", "provider"))
+	if err != nil {
+		return nil, err
+	}
+	if calls > 0 {
+		r := byProvider["openrouter"]
+		r.Calls += calls
+		r.OK += okn
+		r.Failed += failed
+		r.PromptTok += pt
+		r.ComplTok += ct
+		byProvider["openrouter"] = r
+	}
+	byModel := map[string]usageRow{}
+	for _, tbl := range []string{"api_calls", "llm_calls"} {
+		g, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "model", tbl, "model"))
+		if err != nil {
+			return nil, err
+		}
+		for k, r := range g {
+			m := byModel[k]
+			m.Calls += r.Calls
+			m.OK += r.OK
+			m.Failed += r.Failed
+			m.PromptTok += r.PromptTok
+			m.ComplTok += r.ComplTok
+			byModel[k] = m
+		}
+	}
+	return map[string]any{
+		"api_calls": calls, "ok": okn, "failed": failed,
+		"prompt_tokens": pt, "completion_tokens": ct,
+		"other_llm_calls": lcalls, "other_ok": lok, "other_failed": lfailed,
+		"other_prompt_tokens": lpt, "other_completion_tokens": lct,
+		"total_prompt_tokens": pt + lpt, "total_completion_tokens": ct + lct,
+		"breakdown": map[string]any{
+			"by_task": byTask, "by_provider": byProvider, "by_model": byModel,
+		},
+	}, nil
+}
+
 // framesBefore deletes frame rows (and optionally files) older than cutoff.
 func framesBefore(db *sql.DB, cutoff time.Time) ([]string, error) {
 	rows, err := db.Query(`SELECT path FROM frames WHERE ts < ?`, cutoff.Unix())

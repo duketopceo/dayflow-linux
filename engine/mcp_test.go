@@ -118,3 +118,59 @@ func TestReadMCPLine(t *testing.T) {
 		}
 	})
 }
+
+func TestUsageSummaryBreakdown(t *testing.T) {
+	testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	db.Exec(`INSERT INTO api_calls(ts, block_start, model, frames_sent, prompt_tokens, completion_tokens, latency_ms, status, error)
+	  VALUES(1, 1, 'm-a', 5, 100, 50, 10, 'ok', '')`)
+	db.Exec(`INSERT INTO llm_calls(ts, task, provider, model, prompt_tokens, completion_tokens, latency_ms, status, error)
+	  VALUES(1, 'chat', 'openrouter', 'm-b', 200, 80, 20, 'ok', ''),
+	         (2, 'review', 'local', 'm-a', 300, 120, 30, 'error', 'x')`)
+
+	sum, err := usageSummary(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum["api_calls"].(int) != 1 || sum["other_llm_calls"].(int) != 2 {
+		t.Fatalf("totals: %+v", sum)
+	}
+	if sum["total_prompt_tokens"].(int) != 600 {
+		t.Fatalf("total prompt: %+v", sum)
+	}
+	bd := sum["breakdown"].(map[string]any)
+	byTask := bd["by_task"].(map[string]usageRow)
+	if byTask["summarize"].Calls != 1 || byTask["chat"].PromptTok != 200 || byTask["review"].Failed != 1 {
+		t.Fatalf("by_task: %+v", byTask)
+	}
+	byProvider := bd["by_provider"].(map[string]usageRow)
+	if byProvider["openrouter"].Calls != 2 || byProvider["local"].Calls != 1 {
+		t.Fatalf("by_provider: %+v", byProvider)
+	}
+	byModel := bd["by_model"].(map[string]usageRow)
+	if byModel["m-a"].Calls != 2 || byModel["m-b"].Calls != 1 {
+		t.Fatalf("by_model: %+v", byModel)
+	}
+}
+
+func TestUsageSummaryEmpty(t *testing.T) {
+	testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	sum, err := usageSummary(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bd := sum["breakdown"].(map[string]any)
+	if len(bd["by_task"].(map[string]usageRow)) != 0 {
+		t.Fatal("empty ledger should yield empty breakdown maps")
+	}
+}

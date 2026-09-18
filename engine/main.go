@@ -1309,19 +1309,20 @@ func printUsage(asJSON bool) {
 	db, err := openDB()
 	fatal(err)
 	defer db.Close()
-	var calls, prompt, completion, ok, failed int
-	fatal(db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
-	  FROM api_calls`).Scan(&calls, &prompt, &completion, &ok, &failed))
+	sum, err := usageSummary(db)
+	fatal(err)
 	if asJSON {
-		json.NewEncoder(os.Stdout).Encode(map[string]int{
-			"api_calls": calls, "ok": ok, "failed": failed,
-			"prompt_tokens": prompt, "completion_tokens": completion,
-		})
+		json.NewEncoder(os.Stdout).Encode(sum)
 		return
 	}
-	fmt.Printf("api calls: %d (%d ok, %d failed)\nprompt tokens: %d\ncompletion tokens: %d\n",
-		calls, ok, failed, prompt, completion)
+	calls := sum["api_calls"].(int)
+	fmt.Printf("api calls: %d (%d ok, %d failed)\n", calls, sum["ok"], sum["failed"])
+	other := sum["other_llm_calls"].(int)
+	if other > 0 {
+		fmt.Printf("other llm calls: %d (%d ok, %d failed)\n", other, sum["other_ok"], sum["other_failed"])
+	}
+	fmt.Printf("prompt tokens: %d\ncompletion tokens: %d\n",
+		sum["total_prompt_tokens"], sum["total_completion_tokens"])
 }
 
 // printStats reports storage usage, journal counts, date coverage, and API

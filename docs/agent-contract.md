@@ -23,7 +23,7 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 | `get_events` | events (may include local paths, provider error strings) | — |
 | `get_log` | debug.log tail (UI actions, debug lines) | — |
 | `get_frames` | frames index + frame file existence | — |
-| `get_usage` | api_calls + llm_calls (all providers, all tasks) | — |
+| `get_usage` | api_calls + llm_calls (all providers, all tasks; `breakdown` groups by task/provider/model) | — |
 | `get_stats` | db stats, storage, config (no secrets) | — |
 | `get_standup` | blocks | — |
 | `get_insights` | blocks | — |

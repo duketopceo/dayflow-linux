@@ -52,7 +52,7 @@ var mcpTools = []map[string]any{
 	{"name": "get_frames", "description": "Captured frame list for a date (YYYY-MM-DD, default today): timestamp, path, exists flag.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD; default today"}}}},
-	{"name": "get_usage", "description": "LLM usage totals across all call types (block summaries, chat, review, standup) and providers.",
+	{"name": "get_usage", "description": "LLM usage totals across all call types and providers, with per-task/per-provider/per-model breakdown.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "get_stats", "description": "Storage usage (db, frames, total), journal block counts, date coverage, and API call/token totals.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
@@ -228,25 +228,7 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		return map[string]any{"date": t.Local().Format("2006-01-02"), "frames": frames, "count": len(frames)}, nil
 
 	case "get_usage":
-		// Two ledgers: api_calls covers block summarization; llm_calls covers
-		// chat/review/standup and any non-OpenRouter provider.
-		var calls, pt, ct, okn, failed int
-		if err := db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-		  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
-		  FROM api_calls`).Scan(&calls, &pt, &ct, &okn, &failed); err != nil {
-			return nil, err
-		}
-		var lcalls, lpt, lct, lok, lfailed int
-		db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-		  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
-		  FROM llm_calls`).Scan(&lcalls, &lpt, &lct, &lok, &lfailed)
-		return map[string]any{
-			"api_calls": calls, "ok": okn, "failed": failed,
-			"prompt_tokens": pt, "completion_tokens": ct,
-			"other_llm_calls": lcalls, "other_ok": lok, "other_failed": lfailed,
-			"other_prompt_tokens": lpt, "other_completion_tokens": lct,
-			"total_prompt_tokens": pt + lpt, "total_completion_tokens": ct + lct,
-		}, nil
+		return usageSummary(db)
 
 	case "get_stats":
 		var blocksTotal, blocksDone, blocksFailed, blocksDead, framesPending, eventsTotal int
