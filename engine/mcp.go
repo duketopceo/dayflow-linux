@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 )
@@ -409,10 +410,19 @@ func runMCP(cfg Config, readOnly bool) error {
 	}
 	defer db.Close()
 
-	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
+	br := bufio.NewReader(os.Stdin)
+	for {
+		line, err := readMCPLine(br)
+		if err == errLineTooLarge {
+			mcpErr(nil, -32600, "request too large")
+			continue
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 		if len(line) == 0 {
 			continue
 		}
@@ -454,5 +464,47 @@ func runMCP(cfg Config, readOnly bool) error {
 			}
 		}
 	}
-	return nil
+}
+
+// mcpMaxRequestBytes bounds a single JSON-RPC request line. Chat calls embed
+// journal context, so the headroom above the old 1MB scanner cap is deliberate.
+const mcpMaxRequestBytes = 8 << 20
+
+var errLineTooLarge = fmt.Errorf("request line exceeds %d bytes", mcpMaxRequestBytes)
+
+// readMCPLine returns one newline-delimited request, accumulating ReadSlice
+// fragments so the buffer never grows past mcpMaxRequestBytes. An oversized
+// line is drained to its newline and reported as errLineTooLarge so the caller
+// can answer with an error and keep serving. A final line without a trailing
+// newline is returned normally; the next call reports io.EOF.
+func readMCPLine(br *bufio.Reader) ([]byte, error) {
+	var buf []byte
+	for {
+		frag, err := br.ReadSlice('\n')
+		buf = append(buf, frag...)
+		switch err {
+		case nil:
+			if len(buf) > mcpMaxRequestBytes {
+				return nil, errLineTooLarge
+			}
+			return buf, nil
+		case bufio.ErrBufferFull:
+			if len(buf) > mcpMaxRequestBytes {
+				for err == bufio.ErrBufferFull {
+					_, err = br.ReadSlice('\n')
+				}
+				return nil, errLineTooLarge
+			}
+		case io.EOF:
+			if len(buf) > mcpMaxRequestBytes {
+				return nil, errLineTooLarge
+			}
+			if len(buf) > 0 {
+				return buf, nil
+			}
+			return nil, io.EOF
+		default:
+			return nil, err
+		}
+	}
 }

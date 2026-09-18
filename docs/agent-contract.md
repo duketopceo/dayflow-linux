@@ -5,6 +5,10 @@ layer, and no remote transport — a client launches it as a child process and
 talks JSON-RPC over stdin/stdout. It reads the local journal at
 `~/.local/share/dayflow/dayflow.db`.
 
+Requests are newline-delimited JSON-RPC. A request line larger than **8 MiB**
+is rejected with a `-32600` error and the server keeps serving — malformed or
+oversized input never kills the process.
+
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 ```
