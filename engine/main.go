@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1323,6 +1324,26 @@ func printUsage(asJSON bool) {
 	}
 	fmt.Printf("prompt tokens: %d\ncompletion tokens: %d\n",
 		sum["total_prompt_tokens"], sum["total_completion_tokens"])
+	breakdown, _ := sum["breakdown"].(map[string]any)
+	for _, dim := range []struct {
+		label, key string
+	}{{"by task", "by_task"}, {"by provider", "by_provider"}, {"by model", "by_model"}} {
+		rows, _ := breakdown[dim.key].(map[string]usageRow)
+		if len(rows) == 0 {
+			continue
+		}
+		names := make([]string, 0, len(rows))
+		for name := range rows {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		fmt.Printf("%s:\n", dim.label)
+		for _, name := range names {
+			r := rows[name]
+			fmt.Printf("  %-32s %d calls (%d ok, %d failed)\n",
+				name, r.Calls, r.OK, r.Failed)
+		}
+	}
 }
 
 // printStats reports storage usage, journal counts, date coverage, and API
