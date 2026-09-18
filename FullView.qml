@@ -226,7 +226,9 @@ FloatingWindow {
   }
 
   title: "Dayflow"
-  color: "transparent"
+  // Opaque theme surface — a low-alpha window assumed Hyprland blur,
+  // which Omarchy 4.x ships off (same fill as other FloatingWindows).
+  color: Color.background
   implicitWidth: 1100
   implicitHeight: 720
   minimumSize: Qt.size(840, 560)
