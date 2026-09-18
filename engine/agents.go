@@ -40,8 +40,9 @@ func codexDir() string {
 	return filepath.Join(h, ".codex", "sessions")
 }
 
-// agentSessionsForDay collects Claude Code and Codex sessions whose
-// transcript file was modified inside the given day, oldest first.
+// agentSessionsForDay collects Claude Code and Codex sessions active inside
+// the given day — a session counts when its [Start, End] message-timestamp
+// range overlaps the day, so one spanning midnight appears on both days.
 func agentSessionsForDay(d time.Time) []AgentSession {
 	s, e := dayBounds(d)
 	out := []AgentSession{}
@@ -51,15 +52,17 @@ func agentSessionsForDay(d time.Time) []AgentSession {
 	return out
 }
 
-// jsonlFiles walks root for *.jsonl files modified within [s, e).
-func jsonlFiles(root string, s, e time.Time) []string {
+// jsonlFiles walks root for *.jsonl files modified at or after s. No upper
+// bound: a file written after e can still hold messages timestamped inside
+// [s, e) — a session spanning midnight would otherwise drop off both days.
+// Overlap filtering on message timestamps happens in scanJSONL.
+func jsonlFiles(root string, s time.Time) []string {
 	var paths []string
 	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
 		if err != nil || !info.Mode().IsRegular() || !strings.HasSuffix(p, ".jsonl") {
 			return nil
 		}
-		mt := info.ModTime()
-		if !mt.Before(s) && mt.Before(e) {
+		if !info.ModTime().Before(s) {
 			paths = append(paths, p)
 		}
 		return nil
@@ -82,7 +85,7 @@ func truncTitle(s string) string {
 // every line of a multi-MB transcript.
 func scanJSONL(root, source string, s, e time.Time, parse func([]byte, *AgentSession)) []AgentSession {
 	out := []AgentSession{}
-	for _, p := range jsonlFiles(root, s, e) {
+	for _, p := range jsonlFiles(root, s) {
 		sess := AgentSession{Source: source, File: p}
 		f, err := os.Open(p)
 		if err != nil {
@@ -98,6 +101,11 @@ func scanJSONL(root, source string, s, e time.Time, parse func([]byte, *AgentSes
 		scanErr := sc.Err()
 		f.Close()
 		if scanErr != nil || sess.Start == 0 {
+			continue
+		}
+		// Buckets are message timestamps, not mtime: keep the session only
+		// when its [Start, End] range overlaps the scanned window.
+		if sess.Start >= e.Unix() || sess.End < s.Unix() {
 			continue
 		}
 		sess.Title = truncTitle(sess.Title)
