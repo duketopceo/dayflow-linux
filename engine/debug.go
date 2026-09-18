@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,7 +46,27 @@ func appendLog(line string) {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), line)
+	fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), sanitizeLogLine(line))
+}
+
+// sanitizeLogLine keeps one log call one line: argv text (or a rendered
+// error) carrying \n/\r or other control chars must not forge extra lines.
+func sanitizeLogLine(s string) string {
+	const max = 500
+	r := []rune(s)
+	out := r[:0]
+	for _, c := range r {
+		if c < 0x20 || c == 0x7f {
+			out = append(out, ' ')
+			continue
+		}
+		out = append(out, c)
+	}
+	s = strings.Join(strings.Fields(string(out)), " ")
+	if len([]rune(s)) > max {
+		s = string([]rune(s)[:max]) + "…"
+	}
+	return s
 }
 
 // pruneLogArchives deletes rotated debug-*.log files past the keep window.

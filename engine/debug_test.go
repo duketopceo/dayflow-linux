@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -51,5 +52,32 @@ func TestPruneLogArchives(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dataDir(), "debug-"+fresh.Format("20060102")+".log")); err != nil {
 		t.Fatal("2-day archive should be kept")
+	}
+}
+
+func TestAppendLogSanitizesControlChars(t *testing.T) {
+	testEnv(t)
+	appendLog("ui: first\nsecond\r\nthird" + string(rune(0)) + "tail")
+
+	data, err := os.ReadFile(debugLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("forged lines: got %d, want 1: %q", len(lines), data)
+	}
+	if !strings.Contains(lines[0], "ui: first second third tail") {
+		t.Fatalf("bad sanitized line: %q", lines[0])
+	}
+}
+
+func TestSanitizeLogLine(t *testing.T) {
+	if got := sanitizeLogLine("a\nb\rc\td"); got != "a b c d" {
+		t.Fatalf("control chars: %q", got)
+	}
+	long := strings.Repeat("x", 600)
+	if got := sanitizeLogLine(long); len([]rune(got)) != 501 {
+		t.Fatalf("cap: %d runes", len([]rune(got)))
 	}
 }
