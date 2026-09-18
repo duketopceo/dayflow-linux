@@ -21,7 +21,7 @@ Wants=graphical-session.target
 
 [Service]
 ExecStart=%s daemon
-Restart=on-failure
+Restart=always
 RestartSec=5
 PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
 Environment="WAYLAND_DISPLAY=wayland-1"

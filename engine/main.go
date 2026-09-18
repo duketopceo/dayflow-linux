@@ -1177,6 +1177,7 @@ func printStatus(cfg Config, asJSON bool) {
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"paused":         paused(),
+			"capture_state":  captureState(db, cfg),
 			"frames_today":   frames,
 			"blocks_done":    blocksDone,
 			"blocks_pending": len(pending),
@@ -1193,12 +1194,8 @@ func printStatus(cfg Config, asJSON bool) {
 		})
 		return
 	}
-	state := "recording"
-	if paused() {
-		state = "PAUSED"
-	}
 	fmt.Printf("state: %s\nframes today: %d\nblocks summarized: %d\nblocks pending: %d\nlast frame: %s\nmodel: %s\nstorage: %s\n",
-		state, frames, blocksDone, len(pending), last, cfg.Model, humanBytes(storage))
+		captureState(db, cfg), frames, blocksDone, len(pending), last, cfg.Model, humanBytes(storage))
 }
 
 func printFailed(cfg Config, asJSON bool) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -385,9 +386,23 @@ func upsertBlockFull(db *sql.DB, start, end time.Time, title, summary, category,
 	return err
 }
 
+// flagFailedBlock gives dead/failed blocks a visible identity at read time
+// (DB rows stay untouched): they render as "Recording failed" entries so
+// gaps in timelines and exports are explainable instead of invisible.
+func flagFailedBlock(b *Block) {
+	if b.Status == "done" {
+		return
+	}
+	b.Title = "Recording failed"
+	b.Category = "failed"
+	if b.Summary == "" && b.Error != "" {
+		b.Summary = strings.SplitN(b.Error, "\n", 2)[0]
+	}
+}
+
 func blockExists(db *sql.DB, start time.Time) (bool, error) {
 	var n int
-	err := db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE start_ts = ? AND status='done'`, start.Unix()).Scan(&n)
+	err := db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE start_ts = ? AND status IN ('done','dead')`, start.Unix()).Scan(&n)
 	return n > 0, err
 }
 
@@ -429,6 +444,8 @@ type Block struct {
 	Productive *bool      `json:"productive,omitempty"`
 	Activities []Activity `json:"activities,omitempty"`
 	FrameCount int        `json:"frame_count"`
+	Status     string     `json:"status"`
+	Error      string     `json:"error,omitempty"`
 }
 
 // IsProductive returns true for blocks the LLM flagged as productive, or
@@ -447,8 +464,8 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 	if desc {
 		order = "DESC"
 	}
-	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive FROM blocks
-	  WHERE start_ts >= ? AND start_ts < ? AND status='done' ORDER BY start_ts ` + order
+	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,status,COALESCE(error,'') FROM blocks
+	  WHERE start_ts >= ? AND start_ts < ? AND status IN ('done','dead','failed') ORDER BY start_ts ` + order
 	rows, err := db.Query(q, start.Unix(), end.Unix())
 	if err != nil {
 		return nil, err
@@ -460,7 +477,7 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 		var s, e int64
 		var acts string
 		var prod sql.NullBool
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod); err != nil {
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &b.Status, &b.Error); err != nil {
 			return nil, err
 		}
 		if prod.Valid {
@@ -469,6 +486,7 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 		if acts != "" {
 			json.Unmarshal([]byte(acts), &b.Activities)
 		}
+		flagFailedBlock(&b)
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
 		b.StartTs = s

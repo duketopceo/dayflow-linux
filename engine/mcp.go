@@ -143,7 +143,8 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		done, _ := countBlocksToday(db, now)
 		pending, _ := pendingBlocks(db, cfg, now)
 		return map[string]any{
-			"paused": paused(), "frames_today": frames, "blocks_done": done,
+			"paused": paused(), "capture_state": captureState(db, cfg),
+			"frames_today": frames, "blocks_done": done,
 			"blocks_pending": len(pending), "model": cfg.Model,
 		}, nil
 

@@ -27,6 +27,30 @@ func paused() bool {
 	return err == nil
 }
 
+// captureState reports capture-loop health for status surfaces. Paused wins;
+// a locked screen with auto-pause is a legitimately quiet loop; otherwise the
+// events heartbeat (written every tick, dedup included) going stale means the
+// daemon process is gone — the failure mode that otherwise stays invisible.
+func captureState(db *sql.DB, cfg Config) string {
+	if paused() {
+		return "paused"
+	}
+	if cfg.AutoPauseLocked && screenLocked() {
+		return "locked"
+	}
+	var last int64
+	db.QueryRow(`SELECT COALESCE(MAX(ts),0) FROM events
+	  WHERE type IN ('capture_saved','capture_deduped','capture_ignored','capture_error')`).Scan(&last)
+	stale := int64(60)
+	if s := int64(3 * cfg.CaptureIntervalSec); s > stale {
+		stale = s
+	}
+	if last == 0 || time.Now().Unix()-last > stale {
+		return "down"
+	}
+	return "recording"
+}
+
 func setPaused(p bool) {
 	if p {
 		os.MkdirAll(dataDir(), 0o700)

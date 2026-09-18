@@ -556,6 +556,7 @@ Panel {
       case "system":        return Qt.rgba(0.50, 0.50, 0.55, 1.0)
       case "idle":          return dayflow.dim
       case "personal":      return Color.urgent !== undefined ? Color.urgent : Qt.rgba(0.95, 0.25, 0.35, 1.0)
+      case "failed":        return Color.urgent !== undefined ? Color.urgent : Qt.rgba(0.95, 0.25, 0.35, 1.0)
       case "other":         return Qt.darker(dayflow.foreground, 1.4)
       default:              return dayflow.foreground
     }

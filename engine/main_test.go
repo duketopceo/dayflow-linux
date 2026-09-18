@@ -420,3 +420,57 @@ func TestStandupAndInsights(t *testing.T) {
 		t.Fatalf("insights apps=%v", in.Apps)
 	}
 }
+
+func TestPendingBlocksSkipsDeadBlocks(t *testing.T) {
+	cfg := testEnv(t)
+	db, _ := openDB()
+	defer db.Close()
+	now := time.Now()
+	start := blockStart(now, cfg.BlockMinutes).Add(-time.Duration(cfg.BlockMinutes) * time.Minute)
+	end := start.Add(time.Duration(cfg.BlockMinutes) * time.Minute)
+
+	// a terminal dead block with a frame still on record must not be
+	// re-candidated — otherwise it is re-marked dead and re-logged forever.
+	p := writeFrame(t, t.TempDir(), "f.jpg", start)
+	insertFrame(db, start.Add(time.Minute), p)
+	upsertBlockFull(db, start, end, "", "", "", "", "", 0, 3, "dead", "api 500", nil)
+
+	pending, err := pendingBlocks(db, cfg, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("dead block re-candidated: %v", pending)
+	}
+	// failed (non-terminal) blocks still retry
+	upsertBlockFull(db, start.Add(-time.Duration(cfg.BlockMinutes)*time.Minute),
+		start, "", "", "", "", "", 0, 1, "failed", "api 500", nil)
+	p2 := writeFrame(t, t.TempDir(), "g.jpg", start.Add(-time.Duration(cfg.BlockMinutes)*time.Minute))
+	insertFrame(db, start.Add(-time.Duration(cfg.BlockMinutes)*time.Minute).Add(time.Minute), p2)
+	pending, _ = pendingBlocks(db, cfg, now)
+	if len(pending) != 1 {
+		t.Fatalf("failed block should remain pending, got %v", pending)
+	}
+}
+
+func TestBlocksForDayFlagsDeadBlocks(t *testing.T) {
+	testEnv(t)
+	db, _ := openDB()
+	defer db.Close()
+	day := time.Now()
+	start := blockStart(day, 15).Add(-15 * time.Minute)
+	end := start.Add(15 * time.Minute)
+	upsertBlockFull(db, start, end, "", "", "", "", "", 0, 3, "dead", "api 500: boom\nsecond line", nil)
+
+	blocks, err := blocksForDay(db, day, false)
+	if err != nil || len(blocks) != 1 {
+		t.Fatalf("blocks=%v err=%v", blocks, err)
+	}
+	b := blocks[0]
+	if b.Status != "dead" || b.Title != "Recording failed" || b.Category != "failed" {
+		t.Fatalf("flag fields: %+v", b)
+	}
+	if b.Summary != "api 500: boom" {
+		t.Fatalf("summary should be error first line, got %q", b.Summary)
+	}
+}
