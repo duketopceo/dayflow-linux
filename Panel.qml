@@ -1251,7 +1251,7 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: { dayflow.uilog("full view open"); dayflow.fullViewOpen = true }
+              onClicked: { dayflow.uilog("full view open"); dayflow.fullViewOpen = true; dayflow.close() }
             }
           }
 
@@ -1294,13 +1294,5 @@ Panel {
         }
       }
     }
-  }
-
-  // Expanded full-view window — created lazily on first "Full view" click.
-  Loader {
-    id: fullViewLoader
-    active: dayflow.fullViewOpen
-    source: "FullView.qml"
-    onLoaded: item.dayflow = dayflow
   }
 }
