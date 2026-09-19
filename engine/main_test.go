@@ -24,7 +24,7 @@ func testEnv(t *testing.T) Config {
 	cfg := defaultConfig()
 	cfg.OpenRouterAPIKey = "test-key"
 	// Jev calls must never egress from tests — point at a dead endpoint so
-	// decide()/classifyWithJev fail fast and every judge path degrades.
+	// decide() fails fast and every judge path degrades.
 	// Tests that exercise decide() point decisionsURL at their own server.
 	old := decisionsURL
 	decisionsURL = "http://127.0.0.1:1/"
