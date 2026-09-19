@@ -12,7 +12,7 @@ import (
 )
 
 func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
-	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,status,COALESCE(error,'') FROM blocks
+	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,category_confidence,quality_confidence,same_as_prev,status,COALESCE(error,'') FROM blocks
 	  WHERE start_ts >= ? AND start_ts < ? AND status IN ('done','dead','failed') ORDER BY start_ts`,
 		start.Unix(), end.Unix())
 	if err != nil {
@@ -25,16 +25,31 @@ func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
 		var s, e int64
 		var acts string
 		var prod sql.NullBool
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &b.Status, &b.Error); err != nil {
+		var conf, qual sql.NullFloat64
+		var same sql.NullInt64
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &conf, &qual, &same, &b.Status, &b.Error); err != nil {
 			return nil, err
 		}
 		if prod.Valid {
 			b.Productive = &prod.Bool
 		}
+		if conf.Valid {
+			v := conf.Float64
+			b.CategoryConfidence = &v
+		}
+		if qual.Valid {
+			v := qual.Float64
+			b.QualityConfidence = &v
+		}
+		if same.Valid {
+			v := same.Int64 == 1
+			b.SameAsPrev = &v
+		}
 		if acts != "" {
 			json.Unmarshal([]byte(acts), &b.Activities)
 		}
 		flagFailedBlock(&b)
+		b.LowConfidence = blockLowConfidence(b)
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
 		b.StartTs = s
@@ -75,24 +90,27 @@ func monthBounds(t time.Time) (time.Time, time.Time) {
 // Card is a merged activity card: consecutive blocks about the same thing
 // (same title, or same dominant app + category) folded into one span.
 type Card struct {
-	Start      time.Time `json:"-"`
-	End        time.Time `json:"-"`
-	StartStr   string    `json:"start"`
-	EndStr     string    `json:"end"`
-	App        string    `json:"app"`
-	AppName    string    `json:"app_name"`
-	Title      string    `json:"title"`
-	Summary    string    `json:"summary"`
-	Category   string    `json:"category"`
-	Productive bool      `json:"productive"`
-	Blocks     int       `json:"blocks"`
-	Minutes    int       `json:"minutes"`
-	Children   []Block   `json:"children"`
+	Start         time.Time `json:"-"`
+	End           time.Time `json:"-"`
+	StartStr      string    `json:"start"`
+	EndStr        string    `json:"end"`
+	App           string    `json:"app"`
+	AppName       string    `json:"app_name"`
+	Title         string    `json:"title"`
+	Summary       string    `json:"summary"`
+	Category      string    `json:"category"`
+	Productive    bool      `json:"productive"`
+	Blocks        int       `json:"blocks"`
+	Minutes       int       `json:"minutes"`
+	LowConfidence bool      `json:"low_confidence,omitempty"`
+	Children      []Block   `json:"children"`
 }
 
-// mergeCards folds adjacent blocks with the same title or the same dominant
-// app + category into one span. The latest block's title/summary win since
-// they describe where the span ended up; children keep the raw blocks.
+// mergeCards folds adjacent blocks into one span when Jev judged continuity
+// (same_as_prev) or the title/app+category heuristic matches. A Jev "no"
+// never vetoes the heuristic — the judgment informs, it doesn't hide data.
+// The latest block's title/summary win since they describe where the span
+// ended up; children keep the raw blocks.
 func mergeCards(blocks []Block) []Card {
 	sorted := make([]Block, len(blocks))
 	copy(sorted, blocks)
@@ -100,8 +118,17 @@ func mergeCards(blocks []Block) []Card {
 	var out []Card
 	for _, b := range sorted {
 		mins := int(b.End.Sub(b.Start).Minutes())
+		// same_as_prev judged continuity vs the previous *done* block — only
+		// merge into the previous card when its last child is that block,
+		// not a failed/dead "Recording failed" card sitting between them.
+		lastDone := false
+		if n := len(out); n > 0 {
+			kids := out[n-1].Children
+			lastDone = len(kids) > 0 && kids[len(kids)-1].Status == "done"
+		}
 		if n := len(out); n > 0 &&
-			(b.Title == out[n-1].Title ||
+			((b.SameAsPrev != nil && *b.SameAsPrev && lastDone) ||
+				b.Title == out[n-1].Title ||
 				(b.App != "" && out[n-1].App == b.App && b.Category == out[n-1].Category)) {
 			out[n-1].End = b.End
 			out[n-1].EndStr = b.EndStr
@@ -111,15 +138,24 @@ func mergeCards(blocks []Block) []Card {
 			out[n-1].Title = b.Title
 			out[n-1].Summary = b.Summary
 			out[n-1].Children = append(out[n-1].Children, b)
+			out[n-1].LowConfidence = out[n-1].LowConfidence || blockLowConfidence(b)
 			continue
 		}
 		out = append(out, Card{
 			Start: b.Start, End: b.End, StartStr: b.StartStr, EndStr: b.EndStr,
 			App: b.App, AppName: b.AppName, Title: b.Title, Summary: b.Summary,
-			Category: b.Category, Productive: b.IsProductive(), Blocks: 1, Minutes: mins, Children: []Block{b},
+			Category: b.Category, Productive: b.IsProductive(), Blocks: 1, Minutes: mins,
+			LowConfidence: blockLowConfidence(b), Children: []Block{b},
 		})
 	}
 	return out
+}
+
+// blockLowConfidence reports whether Jev scored any of the block's judgments
+// below the low-confidence threshold — the UI's flag signal.
+func blockLowConfidence(b Block) bool {
+	return (b.CategoryConfidence != nil && *b.CategoryConfidence < lowConfidenceThreshold) ||
+		(b.QualityConfidence != nil && *b.QualityConfidence < lowConfidenceThreshold)
 }
 
 // writeExportFile writes markdown to path atomically (tmp + rename), creating

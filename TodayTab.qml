@@ -268,7 +268,7 @@ Flickable {
             }
 
             Text {
-              width: parent.width - appIcon.width - categoryPill.width - (productiveMark.visible ? productiveMark.width : 0) - editText.implicitWidth - parent.spacing * (productiveMark.visible ? 4 : 3)
+              width: parent.width - appIcon.width - categoryPill.width - (productiveMark.visible ? productiveMark.width : 0) - (lowConfMark.visible ? lowConfMark.width : 0) - editText.implicitWidth - parent.spacing * ((productiveMark.visible ? 1 : 0) + (lowConfMark.visible ? 1 : 0) + 3)
               text: modelData.start + "–" + modelData.end +
                     " · " + dayflow.fmtDur(modelData.minutes) +
                     (modelData.count > 1 ? " · " + modelData.count + " blocks" : "") +
@@ -307,6 +307,20 @@ Flickable {
               color: dayflow.dim
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+              // Jev scored a judgment on this card below the confidence
+              // threshold — treat the label/summary as suspect.
+              id: lowConfMark
+              visible: modelData.low_confidence === true
+              text: "?"
+              textFormat: Text.PlainText
+              color: Qt.rgba(0.95, 0.70, 0.15, 1.0)
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
               anchors.verticalCenter: parent.verticalCenter
             }
 

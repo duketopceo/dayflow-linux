@@ -2,9 +2,13 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMCPReadOnlyBlocksChat(t *testing.T) {
@@ -172,5 +176,43 @@ func TestUsageSummaryEmpty(t *testing.T) {
 	bd := sum["breakdown"].(map[string]any)
 	if len(bd["by_task"].(map[string]usageRow)) != 0 {
 		t.Fatal("empty ledger should yield empty breakdown maps")
+	}
+}
+
+func TestMCPReadOnlyNoJudgeEgress(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// counting decisions server — any hit means read-only egressed
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"model":"m","answers":{},"usage":{}}`)
+	}))
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	t.Cleanup(func() { decisionsURL = old })
+
+	// seed a done non-idle block yesterday so worthyBlocks would judge
+	y := time.Now().AddDate(0, 0, -1)
+	start := time.Date(y.Year(), y.Month(), y.Day(), 10, 0, 0, 0, time.Local)
+	if err := upsertBlockFull(db, start, start.Add(15*time.Minute),
+		"Deep work", "s", "coding", "neovim", "", 3, 0, "done", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tool := range []string{"get_standup", "get_forecast"} {
+		if _, err := mcpCall(db, cfg, true, tool, map[string]any{}); err != nil {
+			t.Fatalf("%s: %v", tool, err)
+		}
+	}
+	if hits != 0 {
+		t.Fatalf("read-only MCP egressed to the decisions endpoint %d times", hits)
 	}
 }

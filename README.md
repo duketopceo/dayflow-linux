@@ -182,7 +182,7 @@ All query commands accept `--json`.
 | `output` | `""` | restrict capture to one monitor (`grim -o`) |
 | `capture_command` | `""` | custom screenshot command (writes image to stdout) |
 | `openrouter_api_key` | `""` | API key |
-| `jev_classification` | `true` | use Jev for category + productive after vision summarization |
+| `jev_classification` | `true` | TypeSafe Jev calibrated judgments — category, merge, quality, triage, forecast. Judge calls egress to OpenRouter's decisions endpoint; set `false` to keep every block local. |
 | `classification_model` | `typesafe/jev-1.13` | Jev model slug (OpenRouter decisions API) |
 | `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
 

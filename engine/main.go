@@ -282,7 +282,7 @@ func main() {
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
-		printForecast(db, d, jsonOut)
+		printForecast(db, cfg, d, jsonOut)
 
 	case "blocks":
 		printFailed(cfg, jsonOut)

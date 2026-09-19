@@ -51,6 +51,8 @@ func TestMigrateFreshDB(t *testing.T) {
 	for _, tc := range [][2]string{
 		{"frames", "app"}, {"blocks", "attempts"}, {"blocks", "app"},
 		{"blocks", "activities"}, {"blocks", "productive"},
+		{"blocks", "category_confidence"}, {"blocks", "quality_confidence"},
+		{"blocks", "same_as_prev"}, {"blocks", "triaged"},
 	} {
 		has, err := hasColumn(db, tc[0], tc[1])
 		if err != nil {
