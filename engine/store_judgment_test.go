@@ -20,7 +20,7 @@ func TestSetBlockJudgmentRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	conf := 0.83
-	if err := setBlockJudgment(db, start, &conf, &tru); err != nil {
+	if err := setBlockJudgment(db, start, &conf, nil, &tru); err != nil {
 		t.Fatal(err)
 	}
 	blocks, err := blocksForDay(db, start, false)
@@ -54,12 +54,12 @@ func TestSetBlockJudgmentNilPreservesColumn(t *testing.T) {
 	}
 	conf := 0.9
 	tru := true
-	if err := setBlockJudgment(db, start, &conf, &tru); err != nil {
+	if err := setBlockJudgment(db, start, &conf, nil, &tru); err != nil {
 		t.Fatal(err)
 	}
 	// A later judgment with only confidence must not NULL same_as_prev.
 	conf2 := 0.5
-	if err := setBlockJudgment(db, start, &conf2, nil); err != nil {
+	if err := setBlockJudgment(db, start, &conf2, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var same int64

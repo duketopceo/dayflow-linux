@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS blocks (
   created_at  INTEGER NOT NULL,
   productive  INTEGER DEFAULT NULL,
   category_confidence REAL DEFAULT NULL,
+  quality_confidence REAL DEFAULT NULL,
   same_as_prev INTEGER DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS blocks_status ON blocks(status);
@@ -177,6 +178,7 @@ var columnPatches = []struct {
 	{"blocks", "activities", `ALTER TABLE blocks ADD COLUMN activities TEXT NOT NULL DEFAULT ''`},
 	{"blocks", "productive", `ALTER TABLE blocks ADD COLUMN productive INTEGER DEFAULT NULL`},
 	{"blocks", "category_confidence", `ALTER TABLE blocks ADD COLUMN category_confidence REAL DEFAULT NULL`},
+	{"blocks", "quality_confidence", `ALTER TABLE blocks ADD COLUMN quality_confidence REAL DEFAULT NULL`},
 	{"blocks", "same_as_prev", `ALTER TABLE blocks ADD COLUMN same_as_prev INTEGER DEFAULT NULL`},
 }
 
@@ -393,12 +395,16 @@ func upsertBlockFull(db *sql.DB, start, end time.Time, title, summary, category,
 // setBlockJudgment stores Jev's calibrated judgments on an existing block row.
 // Nil pointers leave the column NULL — "no opinion" stays distinguishable
 // from a confident zero.
-func setBlockJudgment(db *sql.DB, start time.Time, confidence *float64, sameAsPrev *bool) error {
+func setBlockJudgment(db *sql.DB, start time.Time, confidence, quality *float64, sameAsPrev *bool) error {
 	sets := []string{}
 	args := []any{}
 	if confidence != nil {
 		sets = append(sets, "category_confidence = ?")
 		args = append(args, *confidence)
+	}
+	if quality != nil {
+		sets = append(sets, "quality_confidence = ?")
+		args = append(args, *quality)
 	}
 	if sameAsPrev != nil {
 		v := int64(0)
@@ -473,6 +479,7 @@ type Block struct {
 	AppName            string     `json:"app_name"`
 	Productive         *bool      `json:"productive,omitempty"`
 	CategoryConfidence *float64   `json:"category_confidence,omitempty"`
+	QualityConfidence  *float64   `json:"quality_confidence,omitempty"`
 	SameAsPrev         *bool      `json:"same_as_prev,omitempty"`
 	Activities         []Activity `json:"activities,omitempty"`
 	FrameCount         int        `json:"frame_count"`
@@ -496,7 +503,7 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 	if desc {
 		order = "DESC"
 	}
-	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,category_confidence,same_as_prev,status,COALESCE(error,'') FROM blocks
+	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,category_confidence,quality_confidence,same_as_prev,status,COALESCE(error,'') FROM blocks
 	  WHERE start_ts >= ? AND start_ts < ? AND status IN ('done','dead','failed') ORDER BY start_ts ` + order
 	rows, err := db.Query(q, start.Unix(), end.Unix())
 	if err != nil {
@@ -509,9 +516,9 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 		var s, e int64
 		var acts string
 		var prod sql.NullBool
-		var conf sql.NullFloat64
+		var conf, qual sql.NullFloat64
 		var same sql.NullInt64
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &conf, &same, &b.Status, &b.Error); err != nil {
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &conf, &qual, &same, &b.Status, &b.Error); err != nil {
 			return nil, err
 		}
 		if prod.Valid {
@@ -520,6 +527,10 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 		if conf.Valid {
 			v := conf.Float64
 			b.CategoryConfidence = &v
+		}
+		if qual.Valid {
+			v := qual.Float64
+			b.QualityConfidence = &v
 		}
 		if same.Valid {
 			v := same.Int64 == 1

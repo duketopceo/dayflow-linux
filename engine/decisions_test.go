@@ -177,3 +177,114 @@ func TestBoundState(t *testing.T) {
 		t.Fatal("short passthrough failed")
 	}
 }
+
+func judgeTestCfg() Config {
+	return Config{
+		OpenRouterAPIKey: "k",
+		Categories: []Category{
+			{Name: "coding", Description: "Software development"},
+			{Name: "comms", Description: "Communication"},
+			{Name: "browsing", Description: "Web browsing"},
+			{Name: "idle", Description: "Idle or locked"},
+		},
+	}
+}
+
+func TestJudgeBlockArgmax(t *testing.T) {
+	testEnv(t)
+	srv, bodies := decisionsTestServer(200, `{"model":"m","answers":{
+		"cat_coding":{"type":"noul","noul":0.9},
+		"cat_comms":{"type":"noul","noul":0.05},
+		"cat_browsing":{"type":"noul","noul":0.03},
+		"cat_idle":{"type":"noul","noul":0.02},
+		"productive":{"type":"noul","noul":0.8},
+		"quality":{"type":"noul","noul":0.7},
+		"same_as_prev":{"type":"noul","noul":0.6}
+	},"usage":{}}`)
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+
+	res := &blockResult{Title: "Refactor engine", Summary: "Split store.go", Category: "browsing"}
+	j, err := judgeBlock(nil, judgeTestCfg(), res, "neovim", "Earlier coding", "neovim", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Category != "coding" || j.Confidence == nil || *j.Confidence != 0.9 {
+		t.Fatalf("j = %+v", j)
+	}
+	if j.Productive == nil || !*j.Productive {
+		t.Fatalf("productive = %v", j.Productive)
+	}
+	if j.Quality == nil || *j.Quality != 0.7 {
+		t.Fatalf("quality = %v", j.Quality)
+	}
+	if j.SameAsPrev == nil || !*j.SameAsPrev {
+		t.Fatalf("same_as_prev = %v", j.SameAsPrev)
+	}
+	// same_as_prev question present only because hasPrev
+	if !strings.Contains((*bodies)[0], "same_as_prev") {
+		t.Fatal("same_as_prev question missing")
+	}
+}
+
+func TestJudgeBlockNoPrev(t *testing.T) {
+	testEnv(t)
+	srv, bodies := decisionsTestServer(200, `{"model":"m","answers":{"cat_coding":{"type":"noul","noul":0.9}},"usage":{}}`)
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+
+	res := &blockResult{Title: "t", Summary: "s", Category: "coding"}
+	j, err := judgeBlock(nil, judgeTestCfg(), res, "neovim", "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains((*bodies)[0], "same_as_prev") {
+		t.Fatal("same_as_prev question sent without prev block")
+	}
+	if j.SameAsPrev != nil {
+		t.Fatalf("same_as_prev = %v", j.SameAsPrev)
+	}
+}
+
+func TestJudgeBlockPartialAnswers(t *testing.T) {
+	testEnv(t)
+	// Jev answers only the category questions — productive/quality absent.
+	srv, _ := decisionsTestServer(200, `{"model":"m","answers":{"cat_coding":{"type":"noul","noul":0.9}},"usage":{}}`)
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+
+	res := &blockResult{Title: "t", Summary: "s", Category: "browsing"}
+	j, err := judgeBlock(nil, judgeTestCfg(), res, "neovim", "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Category != "coding" {
+		t.Fatalf("category = %q", j.Category)
+	}
+	if j.Productive != nil || j.Quality != nil {
+		t.Fatalf("absent answers should be nil: %+v", j)
+	}
+}
+
+func TestApplyJudgmentFallback(t *testing.T) {
+	chatProd := true
+	res := &blockResult{Title: "t", Summary: "s", Category: "browsing", Productive: &chatProd}
+	// jev has no opinion — chat fields stand
+	applyJudgment(res, &blockJudgment{})
+	if res.Category != "browsing" || res.Productive == nil || !*res.Productive {
+		t.Fatalf("res = %+v", res)
+	}
+	// jev overrides
+	jevProd := false
+	conf := 0.9
+	applyJudgment(res, &blockJudgment{Category: "coding", Confidence: &conf, Productive: &jevProd})
+	if res.Category != "coding" || *res.Productive != false {
+		t.Fatalf("res = %+v", res)
+	}
+}

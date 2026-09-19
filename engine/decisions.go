@@ -120,3 +120,93 @@ func boundState(s string, limit int) string {
 	}
 	return s[:limit] + "\n…"
 }
+
+// lowConfidenceThreshold marks a judgment (or produced artifact) the user
+// should treat as suspect. Shared by engine consumers and mirrored in QML.
+const lowConfidenceThreshold = 0.55
+
+// blockJudgment carries Jev's calibrated take on one block. Nil fields mean
+// "no opinion" — never conflate with a confident zero.
+type blockJudgment struct {
+	Category   string
+	Confidence *float64
+	Productive *bool
+	Quality    *float64
+	SameAsPrev *bool
+}
+
+// prevBlock returns the title and dominant app of the most recent done block
+// before start — the merge-continuity anchor for the same_as_prev judgment.
+func prevBlock(db *sql.DB, start time.Time) (title, app string, ok bool) {
+	err := db.QueryRow(`SELECT title, app FROM blocks
+	  WHERE start_ts < ? AND status='done' ORDER BY start_ts DESC LIMIT 1`, start.Unix()).
+		Scan(&title, &app)
+	return title, app, err == nil
+}
+
+// judgeBlock asks Jev for the per-block judgment batch: category enum,
+// productivity, summary quality, and merge continuity. One decisions call
+// carries all questions. Returns nil + error on any API failure — callers
+// keep the chat model's fields as the fallback baseline.
+func judgeBlock(db *sql.DB, cfg Config, res *blockResult, app, prevTitle, prevApp string, hasPrev bool) (*blockJudgment, error) {
+	qs := map[string]string{}
+	for _, c := range cfg.Categories {
+		qs["cat_"+c.Name] = fmt.Sprintf("The primary activity category for this block is %q (%s).", c.Name, c.Description)
+	}
+	qs["productive"] = "This block represents focused, intentional task work rather than distraction or idle drift."
+	qs["quality"] = "The generated title and summary are specific and accurate — they name the actual activity rather than a generic label."
+	if hasPrev {
+		qs["same_as_prev"] = fmt.Sprintf("This block continues the same activity as the previous block (previous: %q in %s).", prevTitle, prevApp)
+	}
+	var acts strings.Builder
+	for _, a := range res.Activities {
+		fmt.Fprintf(&acts, "- %s: %s — %s\n", a.App, a.Title, a.Summary)
+	}
+	state := boundState(fmt.Sprintf("Dominant app: %s\nTitle: %s\nSummary: %s\nModel's category guess: %s\nActivities:\n%s",
+		app, res.Title, res.Summary, res.Category, acts.String()), 4000)
+
+	ans, _, err := decide(db, cfg, "block", state, qs)
+	if err != nil {
+		return nil, err
+	}
+	j := &blockJudgment{}
+	best, bestScore := "", -1.0
+	for _, c := range cfg.Categories {
+		if s, ok := ans["cat_"+c.Name]; ok && s > bestScore {
+			best, bestScore = c.Name, s
+		}
+	}
+	if best != "" {
+		j.Category = best
+		s := bestScore
+		j.Confidence = &s
+	}
+	if s, ok := ans["productive"]; ok {
+		v := s >= 0.5
+		j.Productive = &v
+	}
+	if s, ok := ans["quality"]; ok {
+		v := s
+		j.Quality = &v
+	}
+	if s, ok := ans["same_as_prev"]; ok {
+		v := s >= 0.5
+		j.SameAsPrev = &v
+	}
+	return j, nil
+}
+
+// applyJudgment merges jev's verdict into the chat-produced result. Jev
+// overrides category and productivity when it has an opinion; the chat
+// values stand otherwise.
+func applyJudgment(res *blockResult, j *blockJudgment) {
+	if j == nil {
+		return
+	}
+	if j.Category != "" {
+		res.Category = j.Category
+	}
+	if j.Productive != nil {
+		res.Productive = j.Productive
+	}
+}

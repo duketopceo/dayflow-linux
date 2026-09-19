@@ -354,6 +354,40 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		logAPICall(db, start, cfg.Model, len(paths), pt, ct, latency, "ok", "")
 		logEvent(db, "summarized", start.Format("15:04")+" "+res.Title)
 		app := dominantApp(db, start, end)
+
+		// Jev judgment batch — calibrated category/productivity/quality/merge.
+		// Any failure keeps the chat model's fields (degrade-safe).
+		var j *blockJudgment
+		if res.Category != "idle" {
+			prevTitle, prevApp, hasPrev := prevBlock(db, start)
+			jj, jerr := judgeBlock(db, cfg, res, app, prevTitle, prevApp, hasPrev)
+			if jerr != nil {
+				debugf(cfg, "summarize %s: judge failed: %v", start.Format("15:04"), jerr)
+			} else {
+				j = jj
+				applyJudgment(res, j)
+				// Quality gate: a low-confidence title/summary earns one
+				// regeneration; whichever result Jev scores higher wins.
+				if j.Quality != nil && *j.Quality < lowConfidenceThreshold {
+					t1 := time.Now()
+					res2, pt2, ct2, err2 := callOpenRouter(cfg, paths)
+					lat2 := int(time.Since(t1).Milliseconds())
+					if err2 == nil {
+						logAPICall(db, start, cfg.Model, len(paths), pt2, ct2, lat2, "ok", "")
+						logEvent(db, "judge_retry", start.Format("15:04"))
+						j2, jerr2 := judgeBlock(db, cfg, res2, app, prevTitle, prevApp, hasPrev)
+						if jerr2 == nil && j2.Quality != nil && *j2.Quality > *j.Quality {
+							res = res2
+							j = j2
+							applyJudgment(res, j)
+						}
+					} else {
+						logAPICall(db, start, cfg.Model, len(paths), 0, 0, lat2, "error", err2.Error())
+					}
+				}
+			}
+		}
+
 		actsJSON := ""
 		if len(res.Activities) > 0 {
 			if b, e := json.Marshal(res.Activities); e == nil {
@@ -365,6 +399,9 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		}
 		if err := upsertBlockFull(db, start, end, res.Title, res.Summary, res.Category, app, actsJSON, len(frames), 0, "done", "", res.Productive); err != nil {
 			return done, err
+		}
+		if j != nil {
+			setBlockJudgment(db, start, j.Confidence, j.Quality, j.SameAsPrev)
 		}
 		done++
 		log.Printf("summarized %s-%s: %s", start.Format("15:04"), end.Format("15:04"), res.Title)
