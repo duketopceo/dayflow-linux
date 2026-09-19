@@ -1,0 +1,12 @@
+{
+    "schema_version": 2,
+    "commit": "88d82ae96a19eabbe9ad545e032fa3d8257001c0",
+    "indexed_at": "2026-09-18T05:45:42Z",
+    "project": "home-lukekimball-Documents-github-personal-dayflow-linux",
+    "nodes": 1208,
+    "edges": 4441,
+    "original_size": 5701632,
+    "compressed_size": 1079043,
+    "compression_level": 9,
+    "reconcile_basis": "git-clean-head"
+}

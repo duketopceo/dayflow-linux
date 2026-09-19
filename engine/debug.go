@@ -30,14 +30,22 @@ func appendLog(line string) {
 			arch := filepath.Join(dataDir(),
 				"debug-"+fi.ModTime().Format("20060102")+".log")
 			// A second same-day rotation must not clobber the first archive.
+			skip := false
 			for n := 2; ; n++ {
-				if _, err := os.Stat(arch); os.IsNotExist(err) {
+				_, err := os.Stat(arch)
+				if os.IsNotExist(err) {
+					break
+				}
+				if err != nil {
+					skip = true // persistent I/O error — don't loop holding debugMu
 					break
 				}
 				arch = filepath.Join(dataDir(), fmt.Sprintf(
 					"debug-%s-%d.log", fi.ModTime().Format("20060102"), n))
 			}
-			os.Rename(p, arch)
+			if !skip {
+				os.Rename(p, arch)
+			}
 			pruneLogArchives()
 		}
 	}

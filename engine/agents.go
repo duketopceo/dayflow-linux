@@ -73,9 +73,8 @@ func jsonlFiles(root string, s time.Time) []string {
 func truncTitle(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	const max = 120
-	if len(s) > max {
-		// Truncate on a rune boundary — a mid-rune cut emits invalid UTF-8.
-		return string([]rune(s)[:max]) + "…"
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
 	}
 	return s
 }

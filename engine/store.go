@@ -539,11 +539,11 @@ func logAPICall(db *sql.DB, blockStart time.Time, model string, framesSent, prom
 }
 
 type usageRow struct {
-	Calls      int `json:"calls"`
-	OK         int `json:"ok"`
-	Failed     int `json:"failed"`
-	PromptTok  int `json:"prompt_tokens"`
-	ComplTok   int `json:"completion_tokens"`
+	Calls     int `json:"calls"`
+	OK        int `json:"ok"`
+	Failed    int `json:"failed"`
+	PromptTok int `json:"prompt_tokens"`
+	ComplTok  int `json:"completion_tokens"`
 }
 
 // usageGroup aggregates one ledger grouped by a column. The select must

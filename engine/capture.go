@@ -438,11 +438,20 @@ func deleteFramesUntil(db *sql.DB, list []frameRow, total *int64, limit int64) (
 		if *total-freed <= limit {
 			break
 		}
-		if fi, err := os.Stat(fr.path); err == nil && os.Remove(fr.path) == nil {
-			freed += fi.Size()
+		fi, serr := os.Stat(fr.path)
+		rerr := error(nil)
+		if serr == nil {
+			rerr = os.Remove(fr.path)
 		}
-		if _, err := tx.Exec(`DELETE FROM frames WHERE ts=? AND path=?`, fr.ts, fr.path); err == nil {
-			removed++
+		// Delete the row only when the file is actually gone — otherwise the
+		// row is dropped but the file stays, an orphan no later pass can find.
+		if (serr == nil && rerr == nil) || os.IsNotExist(serr) || os.IsNotExist(rerr) {
+			if serr == nil && rerr == nil {
+				freed += fi.Size()
+			}
+			if _, err := tx.Exec(`DELETE FROM frames WHERE ts=? AND path=?`, fr.ts, fr.path); err == nil {
+				removed++
+			}
 		}
 	}
 	tx.Commit()
