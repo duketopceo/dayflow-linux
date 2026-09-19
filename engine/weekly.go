@@ -104,6 +104,7 @@ func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPa
 		}
 	}
 	p.ContextShifts, p.ContextShiftCount = buildContextShifts(filtered)
+	p.ContextShifts = salientShifts(db, cfg, p.ContextShifts)
 	p.Heatmap = buildHeatmap(filtered, start, cfg)
 
 	highlights := buildHighlights(in)

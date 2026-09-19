@@ -432,3 +432,33 @@ func TestJudgeForecast(t *testing.T) {
 		t.Fatal("unreachable judge should return nil")
 	}
 }
+
+func TestSalientShifts(t *testing.T) {
+	testEnv(t)
+	shifts := []ContextShift{
+		{Source: "coding", Target: "comms", Count: 5, Minutes: 40},
+		{Source: "coding", Target: "browsing", Count: 2, Minutes: 10},
+		{Source: "idle", Target: "coding", Count: 3, Minutes: 20},
+	}
+	srv, _ := decisionsTestServer(200, `{"model":"m","answers":{
+		"real_shift_0":{"type":"noul","noul":0.7},
+		"real_shift_1":{"type":"noul","noul":0.1},
+		"real_shift_2":{"type":"noul","noul":0.6}
+	},"usage":{}}`)
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+
+	out := salientShifts(nil, Config{OpenRouterAPIKey: "k"}, shifts)
+	if len(out) != 2 || out[0].Target != "comms" || out[1].Target != "coding" {
+		t.Fatalf("out = %+v", out)
+	}
+	// judge down → unfiltered
+	srv2, _ := decisionsTestServer(500, `{}`)
+	defer srv2.Close()
+	decisionsURL = srv2.URL
+	if out := salientShifts(nil, Config{OpenRouterAPIKey: "k"}, shifts); len(out) != 3 {
+		t.Fatalf("out = %d", len(out))
+	}
+}

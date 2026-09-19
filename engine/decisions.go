@@ -306,3 +306,41 @@ func judgeForecast(db *sql.DB, cfg Config, fc Forecast) *float64 {
 	}
 	return nil
 }
+
+// salientShifts filters context-shift edges to those Jev judges as real
+// context changes. The top 12 edges by minutes are scored; explicit low
+// scores drop, unjudged edges pass through. Judge failure returns the input.
+func salientShifts(db *sql.DB, cfg Config, shifts []ContextShift) []ContextShift {
+	const judgeCap = 12
+	n := len(shifts)
+	if n > judgeCap {
+		n = judgeCap
+	}
+	if n == 0 {
+		return shifts
+	}
+	var st strings.Builder
+	qs := map[string]string{}
+	for i := 0; i < n; i++ {
+		s := shifts[i]
+		fmt.Fprintf(&st, "- %s -> %s: %d transitions, %.0f min downstream\n", s.Source, s.Target, s.Count, s.Minutes)
+		qs[fmt.Sprintf("real_shift_%d", i)] = fmt.Sprintf(
+			"A %s -> %s transition is a meaningful context change — a real switch in the kind of work, not incidental app noise.",
+			s.Source, s.Target)
+	}
+	ans, _, err := decide(db, cfg, "shifts", boundState(st.String(), 3000), qs)
+	if err != nil {
+		debugf(cfg, "shifts judge failed: %v", err)
+		return shifts
+	}
+	out := make([]ContextShift, 0, len(shifts))
+	for i, s := range shifts {
+		if i < judgeCap {
+			if v, ok := ans[fmt.Sprintf("real_shift_%d", i)]; ok && v < 0.4 {
+				continue
+			}
+		}
+		out = append(out, s)
+	}
+	return out
+}
