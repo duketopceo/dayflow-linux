@@ -121,6 +121,83 @@ func TestStorageCapRunsWithRetentionOff(t *testing.T) {
 	}
 }
 
+// Frames under terminal-but-unsummarized blocks (failed/dead — e.g. during a
+// provider outage) must be cap-reclaimable; otherwise the cap starves and
+// phase 3 eats journal blocks while dead frames sit unreclaimed.
+func TestStorageCapReclaimsDeadBlockFrames(t *testing.T) {
+	cfg := testEnv(t)
+	cfg.MaxStorageMB = 1
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	base := time.Now().Add(-24 * time.Hour)
+	var dead []string
+	for i := 0; i < 4; i++ {
+		ts := base.Add(time.Duration(i) * time.Minute)
+		bs := blockStart(ts, cfg.BlockMinutes)
+		if err := upsertBlock(db, bs, bs.Add(time.Duration(cfg.BlockMinutes)*time.Minute),
+			"", "", "", 1, "dead", "provider down"); err != nil {
+			t.Fatal(err)
+		}
+		dead = append(dead, addFrameFile(t, db, ts, 400))
+	}
+	pending := addFrameFile(t, db, base.Add(30*time.Minute), 400)
+
+	enforceStorageCap(db, cfg)
+	kept := 0
+	for _, p := range dead {
+		if _, err := os.Stat(p); err == nil {
+			kept++
+		}
+	}
+	if kept == len(dead) {
+		t.Fatal("dead-block frames were never reclaimed")
+	}
+	if _, err := os.Stat(pending); err != nil {
+		t.Fatal("pending frame deleted while dead-block frames could cover the cap")
+	}
+}
+
+// When terminal frames alone can't cover the cap, the oldest remaining
+// frames go too — a screenshot is cheaper to lose than a journal block.
+func TestStorageCapFallsBackToPendingFrames(t *testing.T) {
+	cfg := testEnv(t)
+	cfg.MaxStorageMB = 1
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	base := time.Now().Add(-24 * time.Hour)
+	ts := base
+	bs := blockStart(ts, cfg.BlockMinutes)
+	if err := upsertBlock(db, bs, bs.Add(time.Duration(cfg.BlockMinutes)*time.Minute),
+		"", "", "", 1, "dead", "provider down"); err != nil {
+		t.Fatal(err)
+	}
+	deadPath := addFrameFile(t, db, ts, 400)
+	// Pending frames alone still exceed the cap once the dead one is gone.
+	var pending []string
+	for i := 1; i <= 4; i++ {
+		pending = append(pending, addFrameFile(t, db, base.Add(time.Duration(i*10)*time.Minute), 400))
+	}
+
+	enforceStorageCap(db, cfg)
+	if _, err := os.Stat(deadPath); err == nil {
+		t.Fatal("terminal frame not reclaimed first")
+	}
+	if _, err := os.Stat(pending[len(pending)-1]); err != nil {
+		t.Fatal("newest pending frame deleted — oldest-first ordering broken")
+	}
+	if dataDirSize() > int64(cfg.MaxStorageMB)<<20 {
+		t.Fatal("cap still not met — pending frames were not reclaimed")
+	}
+}
+
 func TestStorageCapPreservesUnsummarized(t *testing.T) {
 	cfg := testEnv(t)
 	cfg.MaxStorageMB = 1

@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,17 +120,25 @@ func TestBackupPrunesOld(t *testing.T) {
 
 	dest := t.TempDir()
 	for i := 0; i < backupKeep+3; i++ {
-		d := filepath.Join(dest, "dayflow-2020010"+string(rune('0'+i)))
+		d := filepath.Join(dest, fmt.Sprintf("dayflow-2020010%d-120000", i))
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// Unrelated entries sharing the prefix are never pruned.
+	stray := filepath.Join(dest, "dayflow-notes")
+	if err := os.MkdirAll(stray, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := runBackup(db, cfg, dest, false); err != nil {
 		t.Fatal(err)
 	}
-	matches, _ := filepath.Glob(filepath.Join(dest, "dayflow-*"))
+	matches, _ := filepath.Glob(filepath.Join(dest, "dayflow-????????-??????"))
 	if len(matches) > backupKeep {
 		t.Fatalf("%d backups kept, want <= %d", len(matches), backupKeep)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Fatalf("unrelated dayflow-* entry was pruned: %v", err)
 	}
 }
 

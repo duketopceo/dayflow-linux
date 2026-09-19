@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -60,6 +61,13 @@ CREATE TABLE IF NOT EXISTS api_calls (
   error             TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS api_calls_ts ON api_calls(ts);
+
+-- Small key/value scratch table for engine bookkeeping (e.g. one-time
+-- backfill flags). Created in the base schema so every open converges.
+CREATE TABLE IF NOT EXISTS meta (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL DEFAULT ''
+);
 `
 
 // schemaV2 is migration version 2: chat, standup, journal, goals, LLM-call
@@ -144,7 +152,13 @@ CREATE INDEX IF NOT EXISTS block_edits_start_ts ON block_edits(start_ts);
 // recently inserted) and replace the plain date index with a unique one so
 // concurrent upserts can't create dupes.
 const schemaV3 = `
-DELETE FROM day_goals WHERE id NOT IN (SELECT MAX(id) FROM day_goals GROUP BY date);
+DELETE FROM day_goals WHERE id NOT IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY date ORDER BY completed DESC, id DESC
+    ) rn FROM day_goals
+  ) WHERE rn = 1
+);
 DROP INDEX IF EXISTS day_goals_date;
 CREATE UNIQUE INDEX IF NOT EXISTS day_goals_date ON day_goals(date);
 `
@@ -155,6 +169,7 @@ var columnPatches = []struct {
 	table, column, ddl string
 }{
 	{"frames", "app", `ALTER TABLE frames ADD COLUMN app TEXT NOT NULL DEFAULT ''`},
+	{"frames", "bytes", `ALTER TABLE frames ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0`},
 	{"blocks", "attempts", `ALTER TABLE blocks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`},
 	{"blocks", "app", `ALTER TABLE blocks ADD COLUMN app TEXT NOT NULL DEFAULT ''`},
 	{"blocks", "activities", `ALTER TABLE blocks ADD COLUMN activities TEXT NOT NULL DEFAULT ''`},
@@ -299,8 +314,8 @@ func insertFrame(db *sql.DB, ts time.Time, path string) error {
 	return err
 }
 
-func insertFrameApp(db *sql.DB, ts time.Time, path, app string) error {
-	_, err := db.Exec(`INSERT INTO frames(ts, path, app) VALUES(?, ?, ?)`, ts.Unix(), path, app)
+func insertFrameApp(db *sql.DB, ts time.Time, path, app string, bytes int64) error {
+	_, err := db.Exec(`INSERT INTO frames(ts, path, app, bytes) VALUES(?, ?, ?, ?)`, ts.Unix(), path, app, bytes)
 	return err
 }
 
@@ -371,9 +386,23 @@ func upsertBlockFull(db *sql.DB, start, end time.Time, title, summary, category,
 	return err
 }
 
+// flagFailedBlock gives dead/failed blocks a visible identity at read time
+// (DB rows stay untouched): they render as "Recording failed" entries so
+// gaps in timelines and exports are explainable instead of invisible.
+func flagFailedBlock(b *Block) {
+	if b.Status == "done" {
+		return
+	}
+	b.Title = "Recording failed"
+	b.Category = "failed"
+	if b.Summary == "" && b.Error != "" {
+		b.Summary = strings.SplitN(b.Error, "\n", 2)[0]
+	}
+}
+
 func blockExists(db *sql.DB, start time.Time) (bool, error) {
 	var n int
-	err := db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE start_ts = ? AND status='done'`, start.Unix()).Scan(&n)
+	err := db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE start_ts = ? AND status IN ('done','dead')`, start.Unix()).Scan(&n)
 	return n > 0, err
 }
 
@@ -415,6 +444,8 @@ type Block struct {
 	Productive *bool      `json:"productive,omitempty"`
 	Activities []Activity `json:"activities,omitempty"`
 	FrameCount int        `json:"frame_count"`
+	Status     string     `json:"status"`
+	Error      string     `json:"error,omitempty"`
 }
 
 // IsProductive returns true for blocks the LLM flagged as productive, or
@@ -433,8 +464,8 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 	if desc {
 		order = "DESC"
 	}
-	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive FROM blocks
-	  WHERE start_ts >= ? AND start_ts < ? AND status='done' ORDER BY start_ts ` + order
+	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,status,COALESCE(error,'') FROM blocks
+	  WHERE start_ts >= ? AND start_ts < ? AND status IN ('done','dead','failed') ORDER BY start_ts ` + order
 	rows, err := db.Query(q, start.Unix(), end.Unix())
 	if err != nil {
 		return nil, err
@@ -446,7 +477,7 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 		var s, e int64
 		var acts string
 		var prod sql.NullBool
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod); err != nil {
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &b.Status, &b.Error); err != nil {
 			return nil, err
 		}
 		if prod.Valid {
@@ -455,6 +486,7 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 		if acts != "" {
 			json.Unmarshal([]byte(acts), &b.Activities)
 		}
+		flagFailedBlock(&b)
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
 		b.StartTs = s
@@ -504,6 +536,111 @@ func logAPICall(db *sql.DB, blockStart time.Time, model string, framesSent, prom
 	db.Exec(`INSERT INTO api_calls(ts, block_start, model, frames_sent, prompt_tokens, completion_tokens, latency_ms, status, error)
 	  VALUES(?,?,?,?,?,?,?,?,?)`,
 		time.Now().Unix(), blockStart.Unix(), model, framesSent, promptTok, completionTok, latencyMs, status, errStr)
+}
+
+type usageRow struct {
+	Calls     int `json:"calls"`
+	OK        int `json:"ok"`
+	Failed    int `json:"failed"`
+	PromptTok int `json:"prompt_tokens"`
+	ComplTok  int `json:"completion_tokens"`
+}
+
+// usageGroup aggregates one ledger grouped by a column. The select must
+// return (key, calls, ok, failed, prompt_tokens, completion_tokens).
+func usageGroup(db *sql.DB, query string) (map[string]usageRow, error) {
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]usageRow{}
+	for rows.Next() {
+		var k string
+		var r usageRow
+		if err := rows.Scan(&k, &r.Calls, &r.OK, &r.Failed, &r.PromptTok, &r.ComplTok); err != nil {
+			return nil, err
+		}
+		if k == "" {
+			k = "unknown"
+		}
+		out[k] = r
+	}
+	return out, rows.Err()
+}
+
+const usageGroupSelect = `SELECT %s, COUNT(1),
+  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0),
+  COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
+  COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0)
+  FROM %s GROUP BY %s`
+
+// usageSummary aggregates both LLM ledgers: api_calls (block summarization,
+// always OpenRouter) and llm_calls (chat/review/standup, any provider).
+func usageSummary(db *sql.DB) (map[string]any, error) {
+	var calls, pt, ct, okn, failed int
+	if err := db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
+	  FROM api_calls`).Scan(&calls, &pt, &ct, &okn, &failed); err != nil {
+		return nil, err
+	}
+	var lcalls, lpt, lct, lok, lfailed int
+	db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
+	  FROM llm_calls`).Scan(&lcalls, &lpt, &lct, &lok, &lfailed)
+
+	byTask, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "task", "llm_calls", "task"))
+	if err != nil {
+		return nil, err
+	}
+	if calls > 0 {
+		r := byTask["summarize"]
+		r.Calls += calls
+		r.OK += okn
+		r.Failed += failed
+		r.PromptTok += pt
+		r.ComplTok += ct
+		byTask["summarize"] = r
+	}
+	byProvider, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "provider", "llm_calls", "provider"))
+	if err != nil {
+		return nil, err
+	}
+	if calls > 0 {
+		r := byProvider["openrouter"]
+		r.Calls += calls
+		r.OK += okn
+		r.Failed += failed
+		r.PromptTok += pt
+		r.ComplTok += ct
+		byProvider["openrouter"] = r
+	}
+	byModel := map[string]usageRow{}
+	for _, tbl := range []string{"api_calls", "llm_calls"} {
+		g, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "model", tbl, "model"))
+		if err != nil {
+			return nil, err
+		}
+		for k, r := range g {
+			m := byModel[k]
+			m.Calls += r.Calls
+			m.OK += r.OK
+			m.Failed += r.Failed
+			m.PromptTok += r.PromptTok
+			m.ComplTok += r.ComplTok
+			byModel[k] = m
+		}
+	}
+	return map[string]any{
+		"api_calls": calls, "ok": okn, "failed": failed,
+		"prompt_tokens": pt, "completion_tokens": ct,
+		"other_llm_calls": lcalls, "other_ok": lok, "other_failed": lfailed,
+		"other_prompt_tokens": lpt, "other_completion_tokens": lct,
+		"total_prompt_tokens": pt + lpt, "total_completion_tokens": ct + lct,
+		"breakdown": map[string]any{
+			"by_task": byTask, "by_provider": byProvider, "by_model": byModel,
+		},
+	}, nil
 }
 
 // framesBefore deletes frame rows (and optionally files) older than cutoff.

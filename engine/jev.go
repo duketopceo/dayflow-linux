@@ -25,16 +25,16 @@ type jevRequest struct {
 }
 
 type jevQuestion struct {
-	Type         string            `json:"type"`
-	Instructions string            `json:"instructions"`
-	Criteria     any               `json:"criteria,omitempty"`
-	True         string            `json:"true,omitempty"`
-	False        string            `json:"false,omitempty"`
+	Type         string `json:"type"`
+	Instructions string `json:"instructions"`
+	Criteria     any    `json:"criteria,omitempty"`
+	True         string `json:"true,omitempty"`
+	False        string `json:"false,omitempty"`
 }
 
 type jevResponse struct {
-	Model   string                       `json:"model"`
-	Answers map[string]json.RawMessage   `json:"answers"`
+	Model   string                     `json:"model"`
+	Answers map[string]json.RawMessage `json:"answers"`
 	Usage   *struct {
 		PromptTokens int     `json:"prompt_tokens"`
 		Cost         float64 `json:"cost"`

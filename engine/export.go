@@ -12,8 +12,8 @@ import (
 )
 
 func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
-	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive FROM blocks
-	  WHERE start_ts >= ? AND start_ts < ? AND status='done' ORDER BY start_ts`,
+	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,status,COALESCE(error,'') FROM blocks
+	  WHERE start_ts >= ? AND start_ts < ? AND status IN ('done','dead','failed') ORDER BY start_ts`,
 		start.Unix(), end.Unix())
 	if err != nil {
 		return nil, err
@@ -25,7 +25,7 @@ func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
 		var s, e int64
 		var acts string
 		var prod sql.NullBool
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod); err != nil {
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &b.Status, &b.Error); err != nil {
 			return nil, err
 		}
 		if prod.Valid {
@@ -34,6 +34,7 @@ func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
 		if acts != "" {
 			json.Unmarshal([]byte(acts), &b.Activities)
 		}
+		flagFailedBlock(&b)
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
 		b.StartTs = s

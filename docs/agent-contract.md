@@ -5,6 +5,10 @@ layer, and no remote transport — a client launches it as a child process and
 talks JSON-RPC over stdin/stdout. It reads the local journal at
 `~/.local/share/dayflow/dayflow.db`.
 
+Requests are newline-delimited JSON-RPC. A request line larger than **8 MiB**
+is rejected with a `-32600` error and the server keeps serving — malformed or
+oversized input never kills the process.
+
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 ```
@@ -17,7 +21,9 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 | `get_status` | frames, blocks, pause flag | — |
 | `search_journal` | blocks | — |
 | `get_events` | events (may include local paths, provider error strings) | — |
-| `get_usage` | api_calls | — |
+| `get_log` | debug.log tail (UI actions, debug lines) | — |
+| `get_frames` | frames index + frame file existence | — |
+| `get_usage` | api_calls + llm_calls (all providers, all tasks; `breakdown` groups by task/provider/model) | — |
 | `get_stats` | db stats, storage, config (no secrets) | — |
 | `get_standup` | blocks | — |
 | `get_insights` | blocks | — |
@@ -85,10 +91,13 @@ Notes:
 
 ## Data contract for agents
 
-- Times are Unix seconds (UTC) in the db; CLI/MCP output is local time.
+- Times are Unix seconds (UTC) in the db. CLI/MCP JSON outputs carry Unix
+  seconds in `*_ts` fields (and `AgentSession.start`/`end`, frame `ts`);
+  human-readable string fields (`start`, `end`, `time`) are local time.
 - `blocks.status`: `done` (summarized), `failed` (retryable), `dead` (gave up).
 - Frame files under `frames/` exist only until their block is summarized
   unless `keep_frames` is on; files under `quarantine/` are untracked
   orphans awaiting review, not live data.
-- Do not write to the db directly — use the CLI (`edit`, `scrub`, `retry`,
-  `reconcile`) or MCP tools. Direct writes bypass the event log.
+- Do not write to the db directly. MCP exposes no journal-mutation tools;
+  corrections require the CLI (`edit`, `scrub`, `retry`, `reconcile`),
+  e.g. over SSH. Direct writes bypass the event log.

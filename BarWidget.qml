@@ -95,6 +95,16 @@ BarWidget {
     }
   }
 
+  // The floating full view lives here, not inside the popup PanelWindow —
+  // a window created inside the popup is transient-parented to it and gets
+  // unmapped the moment the popup auto-dismisses.
+  Loader {
+    id: fullViewLoader
+    active: panelLoader.item && panelLoader.item.fullViewOpen === true
+    source: Qt.resolvedUrl("FullView.qml")
+    onLoaded: item.dayflow = panelLoader.item
+  }
+
   WidgetButton {
     id: button
     anchors.fill: parent

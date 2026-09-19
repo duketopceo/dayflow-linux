@@ -23,6 +23,11 @@ func testEnv(t *testing.T) Config {
 	t.Setenv("OPENROUTER_API_KEY", "")
 	cfg := defaultConfig()
 	cfg.OpenRouterAPIKey = "test-key"
+	// Jev calls must never egress from tests — point at a dead endpoint so
+	// classifyWithJev fails fast and degrades to vision labels.
+	old := decisionsURL
+	decisionsURL = "http://127.0.0.1:1/"
+	t.Cleanup(func() { decisionsURL = old })
 	return cfg
 }
 
@@ -330,6 +335,27 @@ func TestConfigPatchPreservesMaskedProviderKeys(t *testing.T) {
 			t.Fatalf("sentinel persisted for %q", p.ID)
 		}
 	}
+
+	// The panel strips the sentinel before patching, so the engine must also
+	// preserve the stored key when api_key is simply absent from the entry.
+	patch = `{"providers":[{"id":"default","name":"Default","kind":"openrouter","model":"m3","enabled":true}]}`
+	if err := patchConfig(patch); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = loadConfig()
+	if cfg.Providers[0].APIKey != "sk-real-key-123" {
+		t.Fatalf("absent api_key clobbered the stored key: %q", cfg.Providers[0].APIKey)
+	}
+
+	// Top-level masked sentinel is likewise ignored on round-trip.
+	patch = `{"openrouter_api_key":"***redacted***"}`
+	if err := patchConfig(patch); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = loadConfig()
+	if cfg.OpenRouterAPIKey != "sk-real-key-123" {
+		t.Fatalf("top-level sentinel clobbered the key: %q", cfg.OpenRouterAPIKey)
+	}
 }
 
 func TestRetention(t *testing.T) {
@@ -397,5 +423,59 @@ func TestStandupAndInsights(t *testing.T) {
 	}
 	if len(in.Apps) != 1 || in.Apps[0].Name != "neovim" {
 		t.Fatalf("insights apps=%v", in.Apps)
+	}
+}
+
+func TestPendingBlocksSkipsDeadBlocks(t *testing.T) {
+	cfg := testEnv(t)
+	db, _ := openDB()
+	defer db.Close()
+	now := time.Now()
+	start := blockStart(now, cfg.BlockMinutes).Add(-time.Duration(cfg.BlockMinutes) * time.Minute)
+	end := start.Add(time.Duration(cfg.BlockMinutes) * time.Minute)
+
+	// a terminal dead block with a frame still on record must not be
+	// re-candidated — otherwise it is re-marked dead and re-logged forever.
+	p := writeFrame(t, t.TempDir(), "f.jpg", start)
+	insertFrame(db, start.Add(time.Minute), p)
+	upsertBlockFull(db, start, end, "", "", "", "", "", 0, 3, "dead", "api 500", nil)
+
+	pending, err := pendingBlocks(db, cfg, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("dead block re-candidated: %v", pending)
+	}
+	// failed (non-terminal) blocks still retry
+	upsertBlockFull(db, start.Add(-time.Duration(cfg.BlockMinutes)*time.Minute),
+		start, "", "", "", "", "", 0, 1, "failed", "api 500", nil)
+	p2 := writeFrame(t, t.TempDir(), "g.jpg", start.Add(-time.Duration(cfg.BlockMinutes)*time.Minute))
+	insertFrame(db, start.Add(-time.Duration(cfg.BlockMinutes)*time.Minute).Add(time.Minute), p2)
+	pending, _ = pendingBlocks(db, cfg, now)
+	if len(pending) != 1 {
+		t.Fatalf("failed block should remain pending, got %v", pending)
+	}
+}
+
+func TestBlocksForDayFlagsDeadBlocks(t *testing.T) {
+	testEnv(t)
+	db, _ := openDB()
+	defer db.Close()
+	day := time.Now()
+	start := blockStart(day, 15).Add(-15 * time.Minute)
+	end := start.Add(15 * time.Minute)
+	upsertBlockFull(db, start, end, "", "", "", "", "", 0, 3, "dead", "api 500: boom\nsecond line", nil)
+
+	blocks, err := blocksForDay(db, day, false)
+	if err != nil || len(blocks) != 1 {
+		t.Fatalf("blocks=%v err=%v", blocks, err)
+	}
+	b := blocks[0]
+	if b.Status != "dead" || b.Title != "Recording failed" || b.Category != "failed" {
+		t.Fatalf("flag fields: %+v", b)
+	}
+	if b.Summary != "api 500: boom" {
+		t.Fatalf("summary should be error first line, got %q", b.Summary)
 	}
 }

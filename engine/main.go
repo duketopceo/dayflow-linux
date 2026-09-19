@@ -2,17 +2,45 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const version = "1.1.0"
+
+// positionalArgs returns non-flag argv entries; an empty arg is not a flag
+// and is skipped (a[0] on "" panics).
+func positionalArgs(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if a != "" && a[0] != '-' {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// dateArg scans args for a YYYY-MM-DD date, erroring on malformed positional
+// args so a typo never silently reports the wrong day.
+func dateArg(args []string, def time.Time) (time.Time, error) {
+	d := def
+	for _, a := range positionalArgs(args) {
+		parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
+		if err != nil {
+			return d, fmt.Errorf("bad date %q (want YYYY-MM-DD)", a)
+		}
+		d = parsed
+	}
+	return d, nil
+}
 
 // readStdin reads one line from stdin — used by `config set -`,
 // `config patch -`, and `provider set <id> <key> -` so secrets never appear
@@ -36,6 +64,7 @@ Engine:
 
 Query:
   today [--json]      Print today's timeline
+  timeline [--json] [YYYY-MM-DD]   Print a day's timeline
   day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
   frames [YYYY-MM-DD] [--json]   List captured frames for a day
@@ -61,8 +90,12 @@ Control:
                           retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
                           output, capture_command, openrouter_api_key, provider,
                           filter_inappropriate, panel_expanded, debug)
+                          Use "-" as the value to read it from stdin (keeps
+                          secrets out of argv and shell history)
+  config patch <json|-> Merge a JSON object into the config
   key set|status|del    Store/inspect API keys in OmaSeal instead of config.json
   log <msg>             Append a UI action line to debug.log
+  log [--limit N] [--json]   Tail debug.log (default last 50 lines)
   provider [list]       List configured providers and routing
   provider add <id> <kind>          Add a provider (openrouter, local, custom,
                                     gemini, chatgpt, claude, mcp)
@@ -80,7 +113,8 @@ Control:
   stats [--json]          Storage, block counts, date range, and API usage
   week | month [--json]   Timeline rollups
   weekly [--json]        Weekly analytics payload (donut, treemap, context shifts, highlights)
-  export [day|YYYY-MM-DD|week|month]   Markdown export to stdout
+  export [day|YYYY-MM-DD|week|month] [--brief] [--out <file>|--copy]
+                                    Markdown export (--brief = one line per span)
   mcp [--read-only]       Run the MCP server over stdio (for agents);
                           --read-only hides and blocks the chat tool
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
@@ -102,7 +136,8 @@ Control:
 Setup & health:
   setup                   Interactive AI-provider onboarding (OpenRouter or local endpoint)
   models                  List vision-capable models on your OpenRouter account
-  doctor [--json]         Check session, grim, key, model, and endpoint support
+  doctor [--json] [--deep]  Check session, grim, key, model, endpoint;
+                          --deep runs a full sqlite integrity check
   detect [--json]         Probe for local model endpoints (Ollama, LM Studio)
 
 Config: %s
@@ -113,6 +148,9 @@ Data:   %s
 
 func hasFlag(args []string, f string) bool {
 	for _, a := range args {
+		if a == "--" {
+			return false // everything after -- is positional, not flags
+		}
 		if a == f {
 			return true
 		}
@@ -123,6 +161,9 @@ func hasFlag(args []string, f string) bool {
 // flagValue returns the value following a `--name value` or `--name=value` flag.
 func flagValue(args []string, name string) string {
 	for i, a := range args {
+		if a == "--" {
+			return "" // everything after -- is positional, not flags
+		}
 		if a == name && i+1 < len(args) {
 			return args[i+1]
 		}
@@ -166,20 +207,14 @@ func main() {
 
 	case "timeline":
 		// timeline [--json] [YYYY-MM-DD]
-		d := time.Now()
-		for _, a := range args {
-			if len(a) == 10 && a[4] == '-' {
-				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
-				fatal(err)
-				d = parsed
-			}
-		}
+		d, err := dateArg(args, time.Now())
+		fatal(err)
 		printTimeline(cfg, d, jsonOut)
 
 	case "day":
 		var d time.Time
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				var err error
 				d, err = time.ParseInLocation("2006-01-02", a, time.Local)
 				fatal(err)
@@ -203,14 +238,8 @@ func main() {
 
 	case "frames":
 		// frames [YYYY-MM-DD] [--json] — list captured frames for a day
-		d := time.Now()
-		for _, a := range args {
-			if len(a) == 10 && a[4] == '-' {
-				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
-				fatal(err)
-				d = parsed
-			}
-		}
+		d, err := dateArg(args, time.Now())
+		fatal(err)
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
@@ -221,7 +250,7 @@ func main() {
 		// timelapse playback; enabling applies the standard storage cap.
 		sub := "status"
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				sub = a
 			}
 		}
@@ -241,27 +270,15 @@ func main() {
 
 	case "agents":
 		// agents [YYYY-MM-DD] [--json] — coding-agent session recaps
-		d := time.Now()
-		for _, a := range args {
-			if len(a) == 10 && a[4] == '-' {
-				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
-				fatal(err)
-				d = parsed
-			}
-		}
+		d, err := dateArg(args, time.Now())
+		fatal(err)
 		printAgentSessions(d, jsonOut)
 
 	case "forecast":
 		// forecast [YYYY-MM-DD] [--json] — predict a day's category mix from
 		// same-weekday history (default: tomorrow)
-		d := time.Now().AddDate(0, 0, 1)
-		for _, a := range args {
-			if len(a) == 10 && a[4] == '-' {
-				parsed, err := time.ParseInLocation("2006-01-02", a, time.Local)
-				fatal(err)
-				d = parsed
-			}
-		}
+		d, err := dateArg(args, time.Now().AddDate(0, 0, 1))
+		fatal(err)
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
@@ -301,6 +318,9 @@ func main() {
 			args = args[1:]
 		}
 		if len(args) >= 2 && args[0] == "set" {
+			if len(args) < 3 {
+				fatal(fmt.Errorf("usage: dayflow config set <key> <value|->"))
+			}
 			val := args[2]
 			if val == "-" {
 				val = strings.TrimSpace(readStdin())
@@ -315,6 +335,9 @@ func main() {
 			break
 		}
 		if len(args) >= 1 && args[0] == "patch" {
+			if len(args) < 2 {
+				fatal(fmt.Errorf("usage: dayflow config patch <json|->"))
+			}
 			patch := args[1]
 			if patch == "-" {
 				patch = readStdin() // keeps key material out of argv
@@ -348,7 +371,7 @@ func main() {
 		for _, a := range args {
 			if a == "--active" {
 				cls = activeWindowClass()
-			} else if a[0] != '-' {
+			} else if a != "" && a[0] != '-' {
 				cls = a
 			}
 		}
@@ -515,7 +538,7 @@ func main() {
 					i++
 					continue
 				}
-				if a[0] != '-' {
+				if a != "" && a[0] != '-' {
 					text = a
 					break
 				}
@@ -555,7 +578,7 @@ func main() {
 		label := "dayflow insights"
 		sel := "week"
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				sel = a
 			}
 		}
@@ -591,7 +614,7 @@ func main() {
 		rangeLabel := "this week"
 		sel := "week"
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				sel = a
 			}
 		}
@@ -642,10 +665,23 @@ func main() {
 			}
 		}
 		var msgParts []string
-		for _, a := range args {
-			if a[0] != '-' {
-				msgParts = append(msgParts, a)
+		endOfFlags := false
+		for i := 0; i < len(args); i++ {
+			a := args[i]
+			if !endOfFlags {
+				if a == "--" {
+					endOfFlags = true
+					continue
+				}
+				if a == "--conversation-id" {
+					i++ // consume the value — it is not message text
+					continue
+				}
+				if strings.HasPrefix(a, "--conversation-id=") || (a != "" && a[0] == '-') {
+					continue // flag, not message text
+				}
 			}
+			msgParts = append(msgParts, a)
 		}
 		msg := strings.Join(msgParts, " ")
 		if msg == "" {
@@ -699,7 +735,7 @@ func main() {
 		// conversation <id> [--json] — print one thread's messages
 		var pos []string
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				pos = append(pos, a)
 			}
 		}
@@ -739,7 +775,7 @@ func main() {
 		// edit <start_ts|"YYYY-MM-DD HH:MM"> <field> <value...>
 		var pos []string
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				pos = append(pos, a)
 			}
 		}
@@ -766,7 +802,7 @@ func main() {
 	case "edits":
 		var pos []string
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				pos = append(pos, a)
 			}
 		}
@@ -934,7 +970,7 @@ func main() {
 	case "provider":
 		var pargs []string
 		for _, a := range args {
-			if a[0] != '-' {
+			if a != "" && a[0] != '-' {
 				pargs = append(pargs, a)
 			}
 		}
@@ -987,11 +1023,13 @@ func main() {
 			}
 			fmt.Println("stored in keyring:", account)
 		case "status":
-			out, err := exec.Command("omaseal", "list", keyringService).CombinedOutput()
-			fmt.Print(string(out))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			out, err := exec.CommandContext(ctx, "omaseal", "list", keyringService).CombinedOutput()
+			cancel()
 			if err != nil {
-				fatal(fmt.Errorf("omaseal list failed"))
+				fatal(fmt.Errorf("omaseal list failed: %s", strings.TrimSpace(string(out))))
 			}
+			fmt.Print(string(out))
 		case "del":
 			if len(args) < 2 {
 				fatal(fmt.Errorf("usage: dayflow key del <account>"))
@@ -1005,9 +1043,31 @@ func main() {
 	case "log":
 		// UI action log channel — the panel calls this for clicks/actions.
 		// Always on (actions are sparse); gated by nothing so it works even
-		// when engine debug is off.
-		if len(args) >= 1 {
+		// when engine debug is off. Any flag arg (e.g. --limit) means this is
+		// the read path: tail the log instead of appending.
+		writeMode := len(args) >= 1
+		for _, a := range args {
+			if a == "" || a[0] == '-' {
+				writeMode = false
+			}
+		}
+		if writeMode {
 			appendLog("ui: " + strings.Join(args, " "))
+			break
+		}
+		limit := 50
+		if s := flagValue(args, "--limit"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 500 {
+				limit = n
+			}
+		}
+		lines := tailLogLines(limit)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(map[string]any{"lines": lines})
+		} else {
+			for _, l := range lines {
+				fmt.Println(l)
+			}
 		}
 
 	case "doctor":
@@ -1119,10 +1179,11 @@ func printStatus(cfg Config, asJSON bool) {
 	}
 	var blocksTotal int
 	db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE status='done'`).Scan(&blocksTotal)
-	storage := dataDirSize()
+	storage := storageBytesFast(db)
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"paused":         paused(),
+			"capture_state":  captureState(db, cfg),
 			"frames_today":   frames,
 			"blocks_done":    blocksDone,
 			"blocks_pending": len(pending),
@@ -1139,12 +1200,8 @@ func printStatus(cfg Config, asJSON bool) {
 		})
 		return
 	}
-	state := "recording"
-	if paused() {
-		state = "PAUSED"
-	}
 	fmt.Printf("state: %s\nframes today: %d\nblocks summarized: %d\nblocks pending: %d\nlast frame: %s\nmodel: %s\nstorage: %s\n",
-		state, frames, blocksDone, len(pending), last, cfg.Model, humanBytes(storage))
+		captureState(db, cfg), frames, blocksDone, len(pending), last, cfg.Model, humanBytes(storage))
 }
 
 func printFailed(cfg Config, asJSON bool) {
@@ -1256,19 +1313,40 @@ func printUsage(asJSON bool) {
 	db, err := openDB()
 	fatal(err)
 	defer db.Close()
-	var calls, prompt, completion, ok, failed int
-	fatal(db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
-	  FROM api_calls`).Scan(&calls, &prompt, &completion, &ok, &failed))
+	sum, err := usageSummary(db)
+	fatal(err)
 	if asJSON {
-		json.NewEncoder(os.Stdout).Encode(map[string]int{
-			"api_calls": calls, "ok": ok, "failed": failed,
-			"prompt_tokens": prompt, "completion_tokens": completion,
-		})
+		json.NewEncoder(os.Stdout).Encode(sum)
 		return
 	}
-	fmt.Printf("api calls: %d (%d ok, %d failed)\nprompt tokens: %d\ncompletion tokens: %d\n",
-		calls, ok, failed, prompt, completion)
+	calls := sum["api_calls"].(int)
+	fmt.Printf("api calls: %d (%d ok, %d failed)\n", calls, sum["ok"], sum["failed"])
+	other := sum["other_llm_calls"].(int)
+	if other > 0 {
+		fmt.Printf("other llm calls: %d (%d ok, %d failed)\n", other, sum["other_ok"], sum["other_failed"])
+	}
+	fmt.Printf("prompt tokens: %d\ncompletion tokens: %d\n",
+		sum["total_prompt_tokens"], sum["total_completion_tokens"])
+	breakdown, _ := sum["breakdown"].(map[string]any)
+	for _, dim := range []struct {
+		label, key string
+	}{{"by task", "by_task"}, {"by provider", "by_provider"}, {"by model", "by_model"}} {
+		rows, _ := breakdown[dim.key].(map[string]usageRow)
+		if len(rows) == 0 {
+			continue
+		}
+		names := make([]string, 0, len(rows))
+		for name := range rows {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		fmt.Printf("%s:\n", dim.label)
+		for _, name := range names {
+			r := rows[name]
+			fmt.Printf("  %-32s %d calls (%d ok, %d failed)\n",
+				name, r.Calls, r.OK, r.Failed)
+		}
+	}
 }
 
 // printStats reports storage usage, journal counts, date coverage, and API

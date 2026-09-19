@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -29,14 +30,30 @@ func framesForDay(db *sql.DB, d time.Time) ([]frameEntry, error) {
 	}
 	defer rows.Close()
 
-	var out []frameEntry
+	// One directory listing instead of a stat per row — a heavy capture day
+	// is ~8.6k frames.
+	dir := filepath.Join(framesDir(), d.Local().Format("2006-01-02"))
+	present := map[string]bool{}
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if e.Type().IsRegular() {
+				present[e.Name()] = true
+			}
+		}
+	}
+
+	out := []frameEntry{}
 	for rows.Next() {
 		var f frameEntry
 		if err := rows.Scan(&f.TS, &f.Path); err != nil {
 			return nil, err
 		}
-		_, err := os.Stat(f.Path)
-		f.Exists = err == nil
+		if filepath.Dir(f.Path) == dir {
+			f.Exists = present[filepath.Base(f.Path)]
+		} else {
+			_, err := os.Stat(f.Path)
+			f.Exists = err == nil
+		}
 		out = append(out, f)
 	}
 	return out, rows.Err()

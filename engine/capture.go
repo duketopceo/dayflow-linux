@@ -27,6 +27,30 @@ func paused() bool {
 	return err == nil
 }
 
+// captureState reports capture-loop health for status surfaces. Paused wins;
+// a locked screen with auto-pause is a legitimately quiet loop; otherwise the
+// events heartbeat (written every tick, dedup included) going stale means the
+// daemon process is gone — the failure mode that otherwise stays invisible.
+func captureState(db *sql.DB, cfg Config) string {
+	if paused() {
+		return "paused"
+	}
+	if cfg.AutoPauseLocked && screenLocked() {
+		return "locked"
+	}
+	var last int64
+	db.QueryRow(`SELECT COALESCE(MAX(ts),0) FROM events
+	  WHERE type IN ('capture_saved','capture_deduped','capture_ignored','capture_error')`).Scan(&last)
+	stale := int64(60)
+	if s := int64(3 * cfg.CaptureIntervalSec); s > stale {
+		stale = s
+	}
+	if last == 0 || time.Now().Unix()-last > stale {
+		return "down"
+	}
+	return "recording"
+}
+
 func setPaused(p bool) {
 	if p {
 		os.MkdirAll(dataDir(), 0o700)
@@ -231,7 +255,7 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) 
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		return lastHash, err
 	}
-	if err := insertFrameApp(db, now, path, cls); err != nil {
+	if err := insertFrameApp(db, now, path, cls, int64(len(raw))); err != nil {
 		os.Remove(path)
 		return lastHash, err
 	}
@@ -304,38 +328,33 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 		return
 	}
 
-	// phase 1: oldest already-summarized frames, stopping at the boundary
+	// phase 1: oldest frames, batched. Frames under terminal blocks
+	// (done/failed/dead — will never be re-summarized) are reclaimed first;
+	// if that is not enough, the oldest frames go regardless — a screenshot
+	// is cheaper to lose than a journal block (and during a provider outage
+	// pending-only protection would let frames starve the journal).
+	blocks, berr := terminalBlockStarts(db)
+	if berr != nil {
+		logEvent(db, "storage_cap_error", "block index: "+berr.Error())
+	}
 	rows, err := db.Query(`SELECT ts, path FROM frames ORDER BY ts ASC`)
 	if err == nil {
-		var toDelete [][2]any
-		var planned int64
-		for rows.Next() && total-planned > limit {
-			var ts int64
-			var p string
-			if err := rows.Scan(&ts, &p); err != nil {
+		var reclaim, rest []frameRow
+		for rows.Next() {
+			var fr frameRow
+			if err := rows.Scan(&fr.ts, &fr.path); err != nil {
 				continue
 			}
-			done, err := blockExists(db, blockStart(time.Unix(ts, 0), cfg.BlockMinutes))
-			if err != nil || !done {
-				continue
+			if blocks[blockStart(time.Unix(fr.ts, 0), cfg.BlockMinutes).Unix()] {
+				reclaim = append(reclaim, fr)
+			} else {
+				rest = append(rest, fr)
 			}
-			if fi, err := os.Stat(p); err == nil {
-				planned += fi.Size()
-			}
-			toDelete = append(toDelete, [2]any{ts, p})
 		}
 		rows.Close()
-		var freed int64
-		for _, d := range toDelete {
-			p := d[1].(string)
-			if fi, err := os.Stat(p); err == nil && os.Remove(p) == nil {
-				freed += fi.Size()
-			}
-			db.Exec(`DELETE FROM frames WHERE ts=? AND path=?`, d[0], d[1])
-		}
-		total -= freed
-		if len(toDelete) > 0 {
-			logEvent(db, "storage_cap_frames", fmt.Sprintf("%d frames", len(toDelete)))
+		freed, removed := deleteFramesUntil(db, append(reclaim, rest...), &total, limit)
+		if removed > 0 {
+			logEvent(db, "storage_cap_frames", fmt.Sprintf("%d frames, %s", removed, humanBytes(freed)))
 		}
 	}
 	if total <= limit {
@@ -385,10 +404,139 @@ func enforceStorageCap(db *sql.DB, cfg Config) {
 	}
 }
 
+type frameRow struct {
+	ts   int64
+	path string
+}
+
+// terminalBlockStarts returns the start_ts set of blocks in a terminal state.
+func terminalBlockStarts(db *sql.DB) (map[int64]bool, error) {
+	rows, err := db.Query(`SELECT start_ts FROM blocks WHERE status IN ('done','failed','dead')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[int64]bool{}
+	for rows.Next() {
+		var ts int64
+		if err := rows.Scan(&ts); err != nil {
+			return m, err
+		}
+		m[ts] = true
+	}
+	return m, rows.Err()
+}
+
+// deleteFramesUntil removes frames oldest-first until *total <= limit,
+// batching the row deletes in a single transaction.
+func deleteFramesUntil(db *sql.DB, list []frameRow, total *int64, limit int64) (freed int64, removed int) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, 0
+	}
+	for _, fr := range list {
+		if *total-freed <= limit {
+			break
+		}
+		fi, serr := os.Stat(fr.path)
+		rerr := error(nil)
+		if serr == nil {
+			rerr = os.Remove(fr.path)
+		}
+		// Delete the row only when the file is actually gone — otherwise the
+		// row is dropped but the file stays, an orphan no later pass can find.
+		if (serr == nil && rerr == nil) || os.IsNotExist(serr) || os.IsNotExist(rerr) {
+			if serr == nil && rerr == nil {
+				freed += fi.Size()
+			}
+			if _, err := tx.Exec(`DELETE FROM frames WHERE ts=? AND path=?`, fr.ts, fr.path); err == nil {
+				removed++
+			}
+		}
+	}
+	tx.Commit()
+	*total -= freed
+	return freed, removed
+}
+
 func dataDirSize() int64 {
 	var total int64
 	filepath.Walk(dataDir(), func(_ string, fi os.FileInfo, _ error) error {
 		if fi != nil && fi.Mode().IsRegular() {
+			total += fi.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// backfillFrameBytes populates frames.bytes once for databases created before
+// the column existed. A meta flag bounds it to a single walk ever.
+func backfillFrameBytes(db *sql.DB) {
+	var v string
+	if err := db.QueryRow(`SELECT v FROM meta WHERE k='frames_bytes_v1'`).Scan(&v); err != nil || v == "1" {
+		return
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return
+	}
+	filepath.Walk(framesDir(), func(p string, fi os.FileInfo, err error) error {
+		if err == nil && fi != nil && fi.Mode().IsRegular() {
+			tx.Exec(`UPDATE frames SET bytes=? WHERE path=? AND bytes=0`, fi.Size(), p)
+		}
+		return nil
+	})
+	tx.Exec(`INSERT INTO meta(k,v) VALUES('frames_bytes_v1','1')
+		ON CONFLICT(k) DO UPDATE SET v='1'`)
+	tx.Commit()
+}
+
+// frameStats returns total bytes and file count across all recorded frames.
+// Prefers the frames.bytes column; falls back to a dir walk when the column
+// is unavailable (read-only opens of pre-column databases).
+func frameStats(db *sql.DB) (int64, int) {
+	has, err := hasColumn(db, "frames", "bytes")
+	if err == nil && has {
+		var b int64
+		var n int
+		if db.QueryRow(`SELECT COALESCE(SUM(bytes),0), COUNT(1) FROM frames`).Scan(&b, &n) == nil {
+			return b, n
+		}
+	}
+	return dirStats(framesDir())
+}
+
+// storageBytesFast approximates dataDirSize without walking the frames tree:
+// SUM(frames.bytes) + the db files + a walk of everything outside frames/.
+// `status` runs on the bar's 60s poll, so the O(files) walk belongs to the
+// hourly retention pass, not here. Falls back to the exact walk when the
+// bytes column is unavailable (read-only opens of pre-column databases).
+func storageBytesFast(db *sql.DB) int64 {
+	has, err := hasColumn(db, "frames", "bytes")
+	if err != nil || !has {
+		return dataDirSize()
+	}
+	backfillFrameBytes(db)
+	var total int64
+	db.QueryRow(`SELECT COALESCE(SUM(bytes),0) FROM frames`).Scan(&total)
+	for _, p := range []string{dbPath(), dbPath() + "-wal", dbPath() + "-shm"} {
+		if fi, err := os.Stat(p); err == nil {
+			total += fi.Size()
+		}
+	}
+	framesRoot := framesDir()
+	filepath.Walk(dataDir(), func(p string, fi os.FileInfo, err error) error {
+		if err != nil || fi == nil {
+			return nil
+		}
+		if fi.IsDir() {
+			if p == framesRoot {
+				return filepath.SkipDir // already counted via the frames table
+			}
+			return nil
+		}
+		if fi.Mode().IsRegular() {
 			total += fi.Size()
 		}
 		return nil
