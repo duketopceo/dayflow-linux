@@ -25,6 +25,15 @@ func decisionsTestServer(status int, respBody string) (*httptest.Server, *[]stri
 	return srv, &bodies
 }
 
+// pointDecisionsAt redirects the decisions endpoint to srv for the test's
+// duration and registers cleanup. Returns srv (already closed on failure).
+func pointDecisionsAt(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	t.Cleanup(func() { decisionsURL = old })
+}
+
 func TestDecideHappy(t *testing.T) {
 	testEnv(t)
 	srv, bodies := decisionsTestServer(200, `{
@@ -34,9 +43,7 @@ func TestDecideHappy(t *testing.T) {
 		"provider": "TypeSafe"
 	}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	db, err := openDB()
 	if err != nil {
@@ -93,9 +100,7 @@ func TestDecideMissingKey(t *testing.T) {
 	testEnv(t)
 	srv, _ := decisionsTestServer(200, `{"model":"m","answers":{"a":{"type":"noul","noul":0.9}},"usage":{}}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	cfg := Config{OpenRouterAPIKey: "k"}
 	ans, _, err := decide(nil, cfg, "k", "s", map[string]string{"a": "x", "missing": "y"})
@@ -124,9 +129,7 @@ func TestDecideHTTPError(t *testing.T) {
 	testEnv(t)
 	srv, _ := decisionsTestServer(400, `{"error":"questions: expected record"}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	db, err := openDB()
 	if err != nil {
@@ -153,9 +156,7 @@ func TestDecideTimeout(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}))
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	// decide uses a 15s timeout; for the test we can't wait that long, so we
 	// verify a mid-request abort produces an error rather than a hang by
@@ -202,9 +203,7 @@ func TestJudgeBlockArgmax(t *testing.T) {
 		"same_as_prev":{"type":"noul","noul":0.6}
 	},"usage":{}}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	res := &blockResult{Title: "Refactor engine", Summary: "Split store.go", Category: "browsing"}
 	j, err := judgeBlock(nil, judgeTestCfg(), res, "neovim", "Earlier coding", "neovim", true)
@@ -233,9 +232,7 @@ func TestJudgeBlockNoPrev(t *testing.T) {
 	testEnv(t)
 	srv, bodies := decisionsTestServer(200, `{"model":"m","answers":{"cat_coding":{"type":"noul","noul":0.9}},"usage":{}}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	res := &blockResult{Title: "t", Summary: "s", Category: "coding"}
 	j, err := judgeBlock(nil, judgeTestCfg(), res, "neovim", "", "", false)
@@ -255,9 +252,7 @@ func TestJudgeBlockPartialAnswers(t *testing.T) {
 	// Jev answers only the category questions — productive/quality absent.
 	srv, _ := decisionsTestServer(200, `{"model":"m","answers":{"cat_coding":{"type":"noul","noul":0.9}},"usage":{}}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	res := &blockResult{Title: "t", Summary: "s", Category: "browsing"}
 	j, err := judgeBlock(nil, judgeTestCfg(), res, "neovim", "", "", false)
@@ -317,9 +312,7 @@ func TestJudgeRetryable(t *testing.T) {
 	// judge unreachable → false (dead, the pre-Jev behavior)
 	srv, _ := decisionsTestServer(500, `{}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 	if judgeRetryable(nil, Config{OpenRouterAPIKey: "k"}, start, "boom") {
 		t.Fatal("unreachable judge should return false")
 	}
@@ -342,9 +335,7 @@ func TestWorthyBlocks(t *testing.T) {
 		"worthy_%d":{"type":"noul","noul":0.8}
 	},"usage":{}}`, blocks[0].StartTs, blocks[1].StartTs, blocks[2].StartTs))
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
 	if len(out) != 2 || out[0].Title != "Deep work" || out[1].Title != "More work" {
@@ -357,9 +348,7 @@ func TestWorthyBlocksAllDroppedFallback(t *testing.T) {
 	blocks := []Block{standupBlock(0, "a"), standupBlock(15, "b"), standupBlock(30, "c"), standupBlock(45, "d")}
 	srv, _ := decisionsTestServer(200, `{"model":"m","answers":{},"usage":{}}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 	// empty answers → nothing scored <0.5 → all pass through (no-opinion rule)
 	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
 	if len(out) != 4 {
@@ -371,9 +360,7 @@ func TestWorthyBlocksJudgeDown(t *testing.T) {
 	testEnv(t)
 	srv, _ := decisionsTestServer(500, `{}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 	blocks := []Block{standupBlock(0, "a"), standupBlock(15, "b")}
 	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
 	if len(out) != 2 {
@@ -395,9 +382,7 @@ func TestWorthyBlocksTop3Fallback(t *testing.T) {
 	ans += `},"usage":{}}`
 	srv, _ := decisionsTestServer(200, ans)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
 	if len(out) != 3 {
 		t.Fatalf("out = %d", len(out))
@@ -412,9 +397,7 @@ func TestJudgeForecast(t *testing.T) {
 	}
 	srv, _ := decisionsTestServer(200, `{"model":"m","answers":{"confident":{"type":"noul","noul":0.72}},"usage":{}}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	s := judgeForecast(nil, Config{OpenRouterAPIKey: "k"}, fc)
 	if s == nil || *s != 0.72 {
@@ -427,7 +410,7 @@ func TestJudgeForecast(t *testing.T) {
 	// judge down → nil
 	srv2, _ := decisionsTestServer(500, `{}`)
 	defer srv2.Close()
-	decisionsURL = srv2.URL
+	pointDecisionsAt(t, srv2)
 	if judgeForecast(nil, Config{OpenRouterAPIKey: "k"}, fc) != nil {
 		t.Fatal("unreachable judge should return nil")
 	}
@@ -446,9 +429,7 @@ func TestSalientShifts(t *testing.T) {
 		"real_shift_2":{"type":"noul","noul":0.6}
 	},"usage":{}}`)
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	defer func() { decisionsURL = old }()
+	pointDecisionsAt(t, srv)
 
 	out := salientShifts(nil, Config{OpenRouterAPIKey: "k"}, shifts)
 	if len(out) != 2 || out[0].Target != "comms" || out[1].Target != "coding" {
@@ -457,7 +438,7 @@ func TestSalientShifts(t *testing.T) {
 	// judge down → unfiltered
 	srv2, _ := decisionsTestServer(500, `{}`)
 	defer srv2.Close()
-	decisionsURL = srv2.URL
+	pointDecisionsAt(t, srv2)
 	if out := salientShifts(nil, Config{OpenRouterAPIKey: "k"}, shifts); len(out) != 3 {
 		t.Fatalf("out = %d", len(out))
 	}
