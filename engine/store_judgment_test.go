@@ -77,7 +77,8 @@ func TestMergeCardsSameAsPrev(t *testing.T) {
 		s := base.Add(time.Duration(i*15) * time.Minute)
 		e := s.Add(15 * time.Minute)
 		return Block{Start: s, End: e, Title: title, App: app, Category: cat,
-			SameAsPrev: same, StartStr: s.Format("15:04"), EndStr: e.Format("15:04")}
+			SameAsPrev: same, Status: "done",
+			StartStr: s.Format("15:04"), EndStr: e.Format("15:04")}
 	}
 	tru, fal := true, false
 
@@ -106,5 +107,28 @@ func TestMergeCardsSameAsPrev(t *testing.T) {
 	})
 	if len(cards) != 1 {
 		t.Fatalf("cards = %d", len(cards))
+	}
+
+	// same_as_prev is anchored to the previous *done* block — a failed/dead
+	// card sitting between them must not absorb the judged block.
+	mkS := func(i int, title string, same *bool, status string) Block {
+		b := mk(i, title, "app", "cat", same)
+		b.Status = status
+		if status != "done" {
+			b.Title = "Recording failed"
+			b.Category = "failed"
+		}
+		return b
+	}
+	cards = mergeCards([]Block{
+		mkS(0, "Refactor engine", nil, "done"),
+		mkS(1, "Recording failed", nil, "dead"),
+		mkS(2, "Still refactoring", &tru, "done"),
+	})
+	if len(cards) != 3 {
+		t.Fatalf("cards = %d, want 3 (dead card must break the merge)", len(cards))
+	}
+	if cards[2].Blocks != 1 || cards[2].Title != "Still refactoring" {
+		t.Fatalf("block merged into dead card: %+v", cards[2])
 	}
 }

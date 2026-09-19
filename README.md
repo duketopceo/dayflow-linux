@@ -181,6 +181,7 @@ All query commands accept `--json`.
 | `output` | `""` | restrict capture to one monitor (`grim -o`) |
 | `capture_command` | `""` | custom screenshot command (writes image to stdout) |
 | `openrouter_api_key` | `""` | API key |
+| `jev_model` | `jev-latest` | TypeSafe Jev decision model for calibrated judgments (category, merge, quality, triage, forecast). Judge calls egress to OpenRouter's decisions endpoint — set `"off"` to disable all judgments and keep every block local. |
 | `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
 
 ## Backups

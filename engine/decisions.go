@@ -10,10 +10,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // decisionsURL is the OpenRouter decisions endpoint (alpha). Overridable in tests.
 var decisionsURL = "https://openrouter.ai/api/alpha/decisions"
+var decisionsTimeout = 15 * time.Second
 
 // judgeQuestion describes one calibrated noul judgment requested from Jev.
 type judgeQuestion struct {
@@ -48,16 +50,22 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 	if len(questions) == 0 {
 		return map[string]float64{}, "", nil
 	}
+	if cfg.DisableJudges {
+		return nil, "", nil // deliberate suppression (read-only MCP) — no opinion, not a failure
+	}
 	if cfg.OpenRouterAPIKey == "" {
 		return nil, "", fmt.Errorf("no OpenRouter API key")
 	}
 	model := cfg.JevModel
+	if model == "off" {
+		return nil, "", nil // user opted out — no opinion, not a failure
+	}
 	if model == "" {
 		model = "jev-latest"
 	}
 	qs := make(map[string]judgeQuestion, len(questions))
 	for k, ins := range questions {
-		qs[k] = judgeQuestion{Instructions: ins, Type: "noul"}
+		qs[k] = judgeQuestion{Instructions: truncate(ins, 300), Type: "noul"}
 	}
 	payload := decisionsRequest{Model: model, State: state, Questions: qs}
 	body, err := json.Marshal(payload)
@@ -72,8 +80,10 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.OpenRouterAPIKey)
+	req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
+	req.Header.Set("X-Title", cfg.SiteName)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: decisionsTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		logLLMCall(db, "judge:"+kind, "typesafe", model, 0, 0, int(time.Since(start).Milliseconds()), "error", err.Error())
@@ -103,7 +113,9 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 	}
 	out := make(map[string]float64, len(dr.Answers))
 	for k, a := range dr.Answers {
-		if a.Type == "noul" && a.Noul != nil {
+		// Accept on noul presence alone — a strict type check turns alpha
+		// schema drift into a silent total no-op that fallbacks can't see.
+		if a.Noul != nil {
 			out[k] = *a.Noul
 		}
 	}
@@ -118,6 +130,9 @@ func boundState(s string, limit int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= limit {
 		return s
+	}
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
 	}
 	return s[:limit] + "\n…"
 }
@@ -152,12 +167,14 @@ func prevBlock(db *sql.DB, start time.Time) (title, app string, ok bool) {
 func judgeBlock(db *sql.DB, cfg Config, res *blockResult, app, prevTitle, prevApp string, hasPrev bool) (*blockJudgment, error) {
 	qs := map[string]string{}
 	for _, c := range cfg.Categories {
-		qs["cat_"+c.Name] = fmt.Sprintf("The primary activity category for this block is %q (%s).", c.Name, c.Description)
+		qs["cat_"+c.Name] = fmt.Sprintf("The primary activity category for this block is %q (%s).",
+			c.Name, truncate(c.Description, 200))
 	}
 	qs["productive"] = "This block represents focused, intentional task work rather than distraction or idle drift."
 	qs["quality"] = "The generated title and summary are specific and accurate — they name the actual activity rather than a generic label."
 	if hasPrev {
-		qs["same_as_prev"] = fmt.Sprintf("This block continues the same activity as the previous block (previous: %q in %s).", prevTitle, prevApp)
+		qs["same_as_prev"] = fmt.Sprintf("This block continues the same activity as the previous block (previous: %q in %s).",
+			truncate(prevTitle, 200), truncate(prevApp, 60))
 	}
 	var acts strings.Builder
 	for _, a := range res.Activities {
@@ -216,8 +233,13 @@ func applyJudgment(res *blockResult, j *blockJudgment) {
 // plausibly transient. Judge failure returns false — the block goes dead,
 // which is the pre-Jev behavior.
 func judgeRetryable(db *sql.DB, cfg Config, start time.Time, errText string) bool {
-	state := boundState(fmt.Sprintf("A screen-activity summarization block failed repeatedly.\nTime: %s\nError:\n%s",
-		start.Format("2006-01-02 15:04"), errText), 2000)
+	if errText == "" {
+		return false // nothing to classify — dead, the pre-Jev behavior
+	}
+	// Send only the normalized error class — raw provider errors can echo
+	// paths, LAN URLs, and request content, and must not leave the machine.
+	state := boundState(fmt.Sprintf("A screen-activity summarization block failed repeatedly.\nTime: %s\nError class: %s",
+		start.Format("2006-01-02 15:04"), errorClass(errText)), 2000)
 	ans, _, err := decide(db, cfg, "triage", state, map[string]string{
 		"retryable": "The failure is plausibly transient (rate limit, network, temporary provider error) and one more retry could succeed — not an auth, billing, or config error.",
 	})
@@ -248,12 +270,17 @@ func worthyBlocks(db *sql.DB, cfg Config, blocks []Block) []Block {
 		})
 		judged = judged[:40]
 	}
+	// Only ask about blocks that fit the state bound — a question Jev can't
+	// see the context for returns a score we shouldn't act on.
 	var st strings.Builder
 	qs := map[string]string{}
 	for _, b := range judged {
-		key := fmt.Sprintf("worthy_%d", b.StartTs)
-		fmt.Fprintf(&st, "- %s-%s [%s/%s]: %s — %s\n", b.StartStr, b.EndStr, b.App, b.Category, b.Title, b.Summary)
-		qs[key] = "This block is worth mentioning in a daily standup update — meaningful work or a notable event, not routine drift, idle time, or trivial app-hopping."
+		line := fmt.Sprintf("- %s-%s [%s/%s]: %s — %s\n", b.StartStr, b.EndStr, b.App, b.Category, b.Title, b.Summary)
+		if st.Len()+len(line) > 4000 {
+			break
+		}
+		st.WriteString(line)
+		qs[fmt.Sprintf("worthy_%d", b.StartTs)] = "This block is worth mentioning in a daily standup update — meaningful work or a notable event, not routine drift, idle time, or trivial app-hopping."
 	}
 	ans, _, err := decide(db, cfg, "standup", boundState(st.String(), 4000), qs)
 	if err != nil {
@@ -336,6 +363,8 @@ func salientShifts(db *sql.DB, cfg Config, shifts []ContextShift) []ContextShift
 	out := make([]ContextShift, 0, len(shifts))
 	for i, s := range shifts {
 		if i < judgeCap {
+			// 0.4 is deliberately stricter than the 0.55 flag threshold —
+			// dropping an edge hides data, so only clear "no" votes filter.
 			if v, ok := ans[fmt.Sprintf("real_shift_%d", i)]; ok && v < 0.4 {
 				continue
 			}
@@ -343,4 +372,27 @@ func salientShifts(db *sql.DB, cfg Config, shifts []ContextShift) []ContextShift
 		out = append(out, s)
 	}
 	return out
+}
+
+// errorClass normalizes a provider error for judgment state — the raw text
+// can embed home paths, local endpoint URLs, or provider response echoes,
+// none of which belong in an outbound payload.
+func errorClass(e string) string {
+	l := strings.ToLower(e)
+	switch {
+	case strings.Contains(l, "401"), strings.Contains(l, "403"), strings.Contains(l, "auth"):
+		return "auth"
+	case strings.Contains(l, "402"), strings.Contains(l, "credit"), strings.Contains(l, "billing"):
+		return "billing"
+	case strings.Contains(l, "429"), strings.Contains(l, "rate limit"):
+		return "rate_limit"
+	case strings.Contains(l, "500"), strings.Contains(l, "502"), strings.Contains(l, "503"):
+		return "server_error"
+	case strings.Contains(l, "timeout"), strings.Contains(l, "deadline"):
+		return "timeout"
+	case strings.Contains(l, "dns"), strings.Contains(l, "name resolution"), strings.Contains(l, "connection refused"), strings.Contains(l, "no such host"):
+		return "network"
+	default:
+		return "other"
+	}
 }

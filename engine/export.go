@@ -49,6 +49,7 @@ func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
 			json.Unmarshal([]byte(acts), &b.Activities)
 		}
 		flagFailedBlock(&b)
+		b.LowConfidence = blockLowConfidence(b)
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
 		b.StartTs = s
@@ -117,8 +118,16 @@ func mergeCards(blocks []Block) []Card {
 	var out []Card
 	for _, b := range sorted {
 		mins := int(b.End.Sub(b.Start).Minutes())
+		// same_as_prev judged continuity vs the previous *done* block — only
+		// merge into the previous card when its last child is that block,
+		// not a failed/dead "Recording failed" card sitting between them.
+		lastDone := false
+		if n := len(out); n > 0 {
+			kids := out[n-1].Children
+			lastDone = len(kids) > 0 && kids[len(kids)-1].Status == "done"
+		}
 		if n := len(out); n > 0 &&
-			((b.SameAsPrev != nil && *b.SameAsPrev) ||
+			((b.SameAsPrev != nil && *b.SameAsPrev && lastDone) ||
 				b.Title == out[n-1].Title ||
 				(b.App != "" && out[n-1].App == b.App && b.Category == out[n-1].Category)) {
 			out[n-1].End = b.End

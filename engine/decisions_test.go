@@ -153,15 +153,30 @@ func TestDecideHTTPError(t *testing.T) {
 func TestDecideTimeout(t *testing.T) {
 	testEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(time.Second) // outlives the shrunken client timeout
 	}))
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
 
-	// decide uses a 15s timeout; for the test we can't wait that long, so we
-	// verify a mid-request abort produces an error rather than a hang by
-	// closing the server instead.
+	old := decisionsTimeout
+	decisionsTimeout = 50 * time.Millisecond
+	defer func() { decisionsTimeout = old }()
+
+	start := time.Now()
+	_, _, err := decide(nil, Config{OpenRouterAPIKey: "k"}, "k", "s", map[string]string{"a": "x"})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatal("decide did not respect the client timeout")
+	}
+}
+
+func TestDecideUnreachable(t *testing.T) {
+	testEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close()
+	pointDecisionsAt(t, srv)
 	_, _, err := decide(nil, Config{OpenRouterAPIKey: "k"}, "k", "s", map[string]string{"a": "x"})
 	if err == nil {
 		t.Fatal("expected error on unreachable server")
@@ -343,7 +358,7 @@ func TestWorthyBlocks(t *testing.T) {
 	}
 }
 
-func TestWorthyBlocksAllDroppedFallback(t *testing.T) {
+func TestWorthyBlocksEmptyAnswersPassThrough(t *testing.T) {
 	testEnv(t)
 	blocks := []Block{standupBlock(0, "a"), standupBlock(15, "b"), standupBlock(30, "c"), standupBlock(45, "d")}
 	srv, _ := decisionsTestServer(200, `{"model":"m","answers":{},"usage":{}}`)
@@ -441,5 +456,174 @@ func TestSalientShifts(t *testing.T) {
 	pointDecisionsAt(t, srv2)
 	if out := salientShifts(nil, Config{OpenRouterAPIKey: "k"}, shifts); len(out) != 3 {
 		t.Fatalf("out = %d", len(out))
+	}
+}
+
+func TestRequeueFiresOnce(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Jev keeps judging the failure transient — without the triaged flag
+	// this would requeue forever.
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"model":"m","answers":{"retryable":{"type":"noul","noul":0.9}},"usage":{}}`)
+	}))
+	defer srv.Close()
+	pointDecisionsAt(t, srv)
+
+	now := time.Now()
+	start := blockStart(now, cfg.BlockMinutes).Add(-time.Duration(cfg.BlockMinutes) * time.Minute)
+	// frame on disk keeps the block pending
+	p := writeFrame(t, t.TempDir(), "f.jpg", start)
+	if err := insertFrame(db, start.Add(time.Minute), p); err != nil {
+		t.Fatal(err)
+	}
+	// failed block at the attempt cap — triage territory
+	if err := upsertBlockFull(db, start, start.Add(15*time.Minute), "", "", "", "", "", 1, 3, "failed", "api 429: rate limited", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	stubOpenRouter(t, `{"title":"t","summary":"s","category":"coding"}`)
+	if _, err := summarizePending(db, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Fatalf("judge hits = %d, want 1", hits)
+	}
+	var attempts, triaged int
+	var status string
+	db.QueryRow(`SELECT attempts, triaged, status FROM blocks WHERE start_ts=?`, start.Unix()).
+		Scan(&attempts, &triaged, &status)
+	if attempts != 2 || triaged != 1 || status != "failed" {
+		t.Fatalf("requeue: attempts=%d triaged=%d status=%s", attempts, triaged, status)
+	}
+
+	// Simulate the retried attempt failing again: attempts back at cap.
+	db.Exec(`UPDATE blocks SET attempts=3 WHERE start_ts=?`, start.Unix())
+	if _, err := summarizePending(db, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Fatalf("judge re-fired: hits = %d", hits)
+	}
+	db.QueryRow(`SELECT status FROM blocks WHERE start_ts=?`, start.Unix()).Scan(&status)
+	if status != "dead" {
+		t.Fatalf("status = %q, want dead", status)
+	}
+}
+
+func TestDecideAnswersWithoutType(t *testing.T) {
+	testEnv(t)
+	// alpha drift: the response contract provides noul without a type tag —
+	// a strict type=="noul" filter would silently drop every answer.
+	srv, _ := decisionsTestServer(200, `{
+		"model": "typesafe/jev-x",
+		"answers": {"a": {"noul": 0.9}, "b": {"noul": 0.1}},
+		"usage": {}
+	}`)
+	defer srv.Close()
+	pointDecisionsAt(t, srv)
+
+	ans, _, err := decide(nil, Config{OpenRouterAPIKey: "k"}, "k", "s",
+		map[string]string{"a": "q", "b": "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans["a"] != 0.9 || ans["b"] != 0.1 {
+		t.Fatalf("answers = %v", ans)
+	}
+}
+
+func TestDecideOff(t *testing.T) {
+	testEnv(t)
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+	}))
+	defer srv.Close()
+	pointDecisionsAt(t, srv)
+
+	// jev_model: "off" must never egress
+	ans, _, err := decide(nil, Config{OpenRouterAPIKey: "k", JevModel: "off"}, "k", "s",
+		map[string]string{"a": "q"})
+	if err != nil || ans != nil {
+		t.Fatalf("off: ans=%v err=%v", ans, err)
+	}
+	// DisableJudges (read-only MCP) must never egress
+	ans, _, err = decide(nil, Config{OpenRouterAPIKey: "k", DisableJudges: true}, "k", "s",
+		map[string]string{"a": "q"})
+	if err != nil || ans != nil {
+		t.Fatalf("disabled: ans=%v err=%v", ans, err)
+	}
+	if hits != 0 {
+		t.Fatalf("egress despite off switch: %d hits", hits)
+	}
+}
+
+func TestQualityGateRegenAdoptsBetter(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// first judgment scores quality .3 (below gate) → one regen; second
+	// judgment scores .8 → the regenerated result wins and .8 persists.
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		q := 0.8
+		if hits == 1 {
+			q = 0.3
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"m","answers":{"quality":{"type":"noul","noul":%f},
+			"category:coding":{"type":"noul","noul":0.95}},"usage":{}}`, q)
+	}))
+	defer srv.Close()
+	pointDecisionsAt(t, srv)
+
+	chatHits := 0
+	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chatHits++
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": `{"title":"T","summary":"s","category":"coding"}`}},
+			},
+			"usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5},
+		})
+	}))
+	defer chat.Close()
+	oldOR := openRouterURL
+	openRouterURL = chat.URL
+	t.Cleanup(func() { openRouterURL = oldOR })
+
+	now := time.Now()
+	start := blockStart(now, cfg.BlockMinutes).Add(-time.Duration(cfg.BlockMinutes) * time.Minute)
+	p := writeFrame(t, t.TempDir(), "f.jpg", start)
+	if err := insertFrame(db, start.Add(time.Minute), p); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := summarizePending(db, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if chatHits != 2 {
+		t.Fatalf("expected exactly one regen call, got %d", chatHits)
+	}
+	var qual float64
+	if err := db.QueryRow(`SELECT quality_confidence FROM blocks WHERE start_ts=?`, start.Unix()).Scan(&qual); err != nil {
+		t.Fatal(err)
+	}
+	if qual != 0.8 {
+		t.Fatalf("quality_confidence = %v, want 0.8 (better judgment wins)", qual)
 	}
 }

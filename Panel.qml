@@ -222,9 +222,16 @@ Panel {
     for (var i = 0; i < list.length; i++) {
       var b = list[i]
       var prev = spans.length ? spans[spans.length - 1] : null
-      var lowConf = (b.category_confidence !== undefined && b.category_confidence < 0.55) ||
-                    (b.quality_confidence !== undefined && b.quality_confidence < 0.55)
-      var same = prev && (b.same_as_prev === true || b.title === prev.title ||
+      // low_confidence is computed in Go (blockLowConfidence) — the UI reads
+      // the flag so the threshold lives in exactly one place.
+      var lowConf = b.low_confidence === true
+      // same_as_prev judged continuity vs the previous *done* block — only
+      // merge into the previous span when its last child is that block, not
+      // a "Recording failed" card sitting between them.
+      var prevKidDone = prev && prev.children.length > 0 &&
+        prev.children[prev.children.length - 1].status === "done"
+      var same = prev && ((b.same_as_prev === true && prevKidDone) ||
+        b.title === prev.title ||
         (b.app === prev.app && b.category === prev.category))
       if (same) {
         prev.children.push(b)

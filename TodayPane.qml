@@ -76,7 +76,7 @@ Flickable {
         Column {
           anchors.left: parent.left
           anchors.leftMargin: Style.space(150)
-          anchors.right: durText.left
+          anchors.right: lowConfMark.visible ? lowConfMark.left : durText.left
           anchors.rightMargin: Style.space(8)
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(1)

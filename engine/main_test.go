@@ -23,6 +23,12 @@ func testEnv(t *testing.T) Config {
 	t.Setenv("OPENROUTER_API_KEY", "")
 	cfg := defaultConfig()
 	cfg.OpenRouterAPIKey = "test-key"
+	// Judge calls must never egress from tests — point at a dead endpoint;
+	// decide() fails fast and every judge path degrades. Tests that exercise
+	// decide() point decisionsURL at their own httptest server.
+	old := decisionsURL
+	decisionsURL = "http://127.0.0.1:1/"
+	t.Cleanup(func() { decisionsURL = old })
 	return cfg
 }
 

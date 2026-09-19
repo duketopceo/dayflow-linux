@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS blocks (
   productive  INTEGER DEFAULT NULL,
   category_confidence REAL DEFAULT NULL,
   quality_confidence REAL DEFAULT NULL,
+  triaged     INTEGER NOT NULL DEFAULT 0,
   same_as_prev INTEGER DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS blocks_status ON blocks(status);
@@ -179,6 +180,7 @@ var columnPatches = []struct {
 	{"blocks", "productive", `ALTER TABLE blocks ADD COLUMN productive INTEGER DEFAULT NULL`},
 	{"blocks", "category_confidence", `ALTER TABLE blocks ADD COLUMN category_confidence REAL DEFAULT NULL`},
 	{"blocks", "quality_confidence", `ALTER TABLE blocks ADD COLUMN quality_confidence REAL DEFAULT NULL`},
+	{"blocks", "triaged", `ALTER TABLE blocks ADD COLUMN triaged INTEGER NOT NULL DEFAULT 0`},
 	{"blocks", "same_as_prev", `ALTER TABLE blocks ADD COLUMN same_as_prev INTEGER DEFAULT NULL`},
 }
 
@@ -481,6 +483,7 @@ type Block struct {
 	CategoryConfidence *float64   `json:"category_confidence,omitempty"`
 	QualityConfidence  *float64   `json:"quality_confidence,omitempty"`
 	SameAsPrev         *bool      `json:"same_as_prev,omitempty"`
+	LowConfidence      bool       `json:"low_confidence,omitempty"`
 	Activities         []Activity `json:"activities,omitempty"`
 	FrameCount         int        `json:"frame_count"`
 	Status             string     `json:"status"`
@@ -540,6 +543,7 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 			json.Unmarshal([]byte(acts), &b.Activities)
 		}
 		flagFailedBlock(&b)
+		b.LowConfidence = blockLowConfidence(b)
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
 		b.StartTs = s

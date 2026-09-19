@@ -107,6 +107,7 @@ func mcpText(v any) map[string]any {
 }
 
 func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string]any) (any, error) {
+	cfg.DisableJudges = readOnly // judge calls egress to OpenRouter — read-only sessions stay local
 	if readOnly && mcpMutating[name] {
 		return nil, fmt.Errorf("tool %q is disabled in read-only mode", name)
 	}

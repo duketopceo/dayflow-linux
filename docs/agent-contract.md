@@ -98,8 +98,10 @@ Notes:
 - Jev judgment fields on blocks (all nullable — absent means "no opinion",
   never conflate with zero): `category_confidence` (0-1, Jev's argmax
   category score), `quality_confidence` (0-1, title/summary quality gate),
-  `same_as_prev` (bool, merge continuity). `low_confidence` on timeline
-  cards is true when any child judgment scored < 0.55.
+  `same_as_prev` (bool, merge continuity). `low_confidence` on blocks is
+  true when any judgment scored < 0.55; on timeline cards it aggregates
+  the children. Read-only MCP sessions never egress to Jev — the fields
+  are simply absent there.
 - `get_forecast` / `dayflow forecast --json`: `confidence_score` is Jev's
   calibrated probability (0-1) that the predicted mix is plausible;
   `confidence` remains the sample-count heuristic. Jev unreachable → field
