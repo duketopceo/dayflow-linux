@@ -148,6 +148,9 @@ Data:   %s
 
 func hasFlag(args []string, f string) bool {
 	for _, a := range args {
+		if a == "--" {
+			return false // everything after -- is positional, not flags
+		}
 		if a == f {
 			return true
 		}
@@ -158,6 +161,9 @@ func hasFlag(args []string, f string) bool {
 // flagValue returns the value following a `--name value` or `--name=value` flag.
 func flagValue(args []string, name string) string {
 	for i, a := range args {
+		if a == "--" {
+			return "" // everything after -- is positional, not flags
+		}
 		if a == name && i+1 < len(args) {
 			return args[i+1]
 		}

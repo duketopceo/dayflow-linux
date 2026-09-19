@@ -268,7 +268,7 @@ Flickable {
             }
 
             Text {
-              width: parent.width - appIcon.width - categoryPill.width - (productiveMark.visible ? productiveMark.width : 0) - (lowConfMark.visible ? lowConfMark.width : 0) - editLink.implicitWidth - parent.spacing * ((productiveMark.visible ? 1 : 0) + (lowConfMark.visible ? 1 : 0) + 3)
+              width: parent.width - appIcon.width - categoryPill.width - (productiveMark.visible ? productiveMark.width : 0) - (lowConfMark.visible ? lowConfMark.width : 0) - editText.implicitWidth - parent.spacing * ((productiveMark.visible ? 1 : 0) + (lowConfMark.visible ? 1 : 0) + 3)
               text: modelData.start + "–" + modelData.end +
                     " · " + dayflow.fmtDur(modelData.minutes) +
                     (modelData.count > 1 ? " · " + modelData.count + " blocks" : "") +
@@ -325,6 +325,7 @@ Flickable {
             }
 
             Text {
+              id: editText
               text: cardRoot.editing ? "close" : "edit"
               textFormat: Text.PlainText
               color: editLink.containsMouse ? dayflow.foreground : dayflow.dim

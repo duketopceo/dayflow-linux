@@ -51,7 +51,7 @@ func TestDecideHappy(t *testing.T) {
 	}
 	defer db.Close()
 
-	cfg := Config{OpenRouterAPIKey: "k", JevModel: "jev-latest"}
+	cfg := Config{OpenRouterAPIKey: "k", JevClassification: true, ClassificationModel: "typesafe/jev-1.13"}
 	ans, model, err := decide(db, cfg, "category", "state text", map[string]string{"a": "q a", "b": "q b"})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestDecideHappy(t *testing.T) {
 	if err := json.Unmarshal([]byte((*bodies)[0]), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.Model != "jev-latest" || req.State != "state text" {
+	if req.Model != "typesafe/jev-1.13" || req.State != "state text" {
 		t.Fatalf("req = %+v", req)
 	}
 	if req.Questions["a"].Type != "noul" || req.Questions["a"].Instructions != "q a" {
@@ -102,7 +102,7 @@ func TestDecideMissingKey(t *testing.T) {
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
 
-	cfg := Config{OpenRouterAPIKey: "k"}
+	cfg := Config{OpenRouterAPIKey: "k", JevClassification: true}
 	ans, _, err := decide(nil, cfg, "k", "s", map[string]string{"a": "x", "missing": "y"})
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestDecideMissingKey(t *testing.T) {
 }
 
 func TestDecideEmptyQuestions(t *testing.T) {
-	ans, _, err := decide(nil, Config{OpenRouterAPIKey: "k"}, "k", "s", nil)
+	ans, _, err := decide(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, "k", "s", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestDecideHTTPError(t *testing.T) {
 	}
 	defer db.Close()
 
-	_, _, err = decide(db, Config{OpenRouterAPIKey: "k"}, "category", "s", map[string]string{"a": "x"})
+	_, _, err = decide(db, Config{OpenRouterAPIKey: "k", JevClassification: true}, "category", "s", map[string]string{"a": "x"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -163,7 +163,7 @@ func TestDecideTimeout(t *testing.T) {
 	defer func() { decisionsTimeout = old }()
 
 	start := time.Now()
-	_, _, err := decide(nil, Config{OpenRouterAPIKey: "k"}, "k", "s", map[string]string{"a": "x"})
+	_, _, err := decide(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, "k", "s", map[string]string{"a": "x"})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -177,7 +177,7 @@ func TestDecideUnreachable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close()
 	pointDecisionsAt(t, srv)
-	_, _, err := decide(nil, Config{OpenRouterAPIKey: "k"}, "k", "s", map[string]string{"a": "x"})
+	_, _, err := decide(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, "k", "s", map[string]string{"a": "x"})
 	if err == nil {
 		t.Fatal("expected error on unreachable server")
 	}
@@ -196,7 +196,8 @@ func TestBoundState(t *testing.T) {
 
 func judgeTestCfg() Config {
 	return Config{
-		OpenRouterAPIKey: "k",
+		OpenRouterAPIKey:  "k",
+		JevClassification: true,
 		Categories: []Category{
 			{Name: "coding", Description: "Software development"},
 			{Name: "comms", Description: "Communication"},
@@ -318,7 +319,7 @@ func TestJudgeRetryable(t *testing.T) {
 			old := decisionsURL
 			decisionsURL = srv.URL
 			defer func() { decisionsURL = old }()
-			cfg := Config{OpenRouterAPIKey: "k"}
+			cfg := Config{OpenRouterAPIKey: "k", JevClassification: true}
 			if got := judgeRetryable(nil, cfg, start, "api error"); got != tc.want {
 				t.Fatalf("judgeRetryable = %v, want %v", got, tc.want)
 			}
@@ -328,7 +329,7 @@ func TestJudgeRetryable(t *testing.T) {
 	srv, _ := decisionsTestServer(500, `{}`)
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
-	if judgeRetryable(nil, Config{OpenRouterAPIKey: "k"}, start, "boom") {
+	if judgeRetryable(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, start, "boom") {
 		t.Fatal("unreachable judge should return false")
 	}
 }
@@ -352,7 +353,7 @@ func TestWorthyBlocks(t *testing.T) {
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
 
-	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
+	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, blocks)
 	if len(out) != 2 || out[0].Title != "Deep work" || out[1].Title != "More work" {
 		t.Fatalf("out = %+v", out)
 	}
@@ -365,7 +366,7 @@ func TestWorthyBlocksEmptyAnswersPassThrough(t *testing.T) {
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
 	// empty answers → nothing scored <0.5 → all pass through (no-opinion rule)
-	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
+	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, blocks)
 	if len(out) != 4 {
 		t.Fatalf("out = %d", len(out))
 	}
@@ -377,7 +378,7 @@ func TestWorthyBlocksJudgeDown(t *testing.T) {
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
 	blocks := []Block{standupBlock(0, "a"), standupBlock(15, "b")}
-	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
+	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, blocks)
 	if len(out) != 2 {
 		t.Fatalf("out = %d", len(out))
 	}
@@ -398,7 +399,7 @@ func TestWorthyBlocksTop3Fallback(t *testing.T) {
 	srv, _ := decisionsTestServer(200, ans)
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
-	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
+	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, blocks)
 	if len(out) != 3 {
 		t.Fatalf("out = %d", len(out))
 	}
@@ -414,19 +415,19 @@ func TestJudgeForecast(t *testing.T) {
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
 
-	s := judgeForecast(nil, Config{OpenRouterAPIKey: "k"}, fc)
+	s := judgeForecast(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, fc)
 	if s == nil || *s != 0.72 {
 		t.Fatalf("score = %v", s)
 	}
 	// no items → nil without a call
-	if judgeForecast(nil, Config{OpenRouterAPIKey: "k"}, Forecast{}) != nil {
+	if judgeForecast(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, Forecast{}) != nil {
 		t.Fatal("empty forecast should return nil")
 	}
 	// judge down → nil
 	srv2, _ := decisionsTestServer(500, `{}`)
 	defer srv2.Close()
 	pointDecisionsAt(t, srv2)
-	if judgeForecast(nil, Config{OpenRouterAPIKey: "k"}, fc) != nil {
+	if judgeForecast(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, fc) != nil {
 		t.Fatal("unreachable judge should return nil")
 	}
 }
@@ -446,7 +447,7 @@ func TestSalientShifts(t *testing.T) {
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
 
-	out := salientShifts(nil, Config{OpenRouterAPIKey: "k"}, shifts)
+	out := salientShifts(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, shifts)
 	if len(out) != 2 || out[0].Target != "comms" || out[1].Target != "coding" {
 		t.Fatalf("out = %+v", out)
 	}
@@ -454,7 +455,7 @@ func TestSalientShifts(t *testing.T) {
 	srv2, _ := decisionsTestServer(500, `{}`)
 	defer srv2.Close()
 	pointDecisionsAt(t, srv2)
-	if out := salientShifts(nil, Config{OpenRouterAPIKey: "k"}, shifts); len(out) != 3 {
+	if out := salientShifts(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, shifts); len(out) != 3 {
 		t.Fatalf("out = %d", len(out))
 	}
 }
@@ -531,7 +532,7 @@ func TestDecideAnswersWithoutType(t *testing.T) {
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
 
-	ans, _, err := decide(nil, Config{OpenRouterAPIKey: "k"}, "k", "s",
+	ans, _, err := decide(nil, Config{OpenRouterAPIKey: "k", JevClassification: true}, "k", "s",
 		map[string]string{"a": "q", "b": "q"})
 	if err != nil {
 		t.Fatal(err)
@@ -550,14 +551,14 @@ func TestDecideOff(t *testing.T) {
 	defer srv.Close()
 	pointDecisionsAt(t, srv)
 
-	// jev_model: "off" must never egress
-	ans, _, err := decide(nil, Config{OpenRouterAPIKey: "k", JevModel: "off"}, "k", "s",
+	// jev_classification: false must never egress
+	ans, _, err := decide(nil, Config{OpenRouterAPIKey: "k", JevClassification: false}, "k", "s",
 		map[string]string{"a": "q"})
 	if err != nil || ans != nil {
 		t.Fatalf("off: ans=%v err=%v", ans, err)
 	}
 	// DisableJudges (read-only MCP) must never egress
-	ans, _, err = decide(nil, Config{OpenRouterAPIKey: "k", DisableJudges: true}, "k", "s",
+	ans, _, err = decide(nil, Config{OpenRouterAPIKey: "k", JevClassification: true, DisableJudges: true}, "k", "s",
 		map[string]string{"a": "q"})
 	if err != nil || ans != nil {
 		t.Fatalf("disabled: ans=%v err=%v", ans, err)

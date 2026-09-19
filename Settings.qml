@@ -61,6 +61,7 @@ Flickable {
     root.pendingProviderWrites = root.pendingProviderWrites.concat([cmd])
     if (!providerSetProc.running) {
       providerSetProc.command = root.pendingProviderWrites[0]
+      providerSetProc.didStart = false
       providerSetProc.running = true
     }
   }
@@ -70,6 +71,7 @@ Flickable {
     root.pendingProviderWrites = root.pendingProviderWrites.slice(1)
     if (root.pendingProviderWrites.length > 0) {
       providerSetProc.command = root.pendingProviderWrites[0]
+      providerSetProc.didStart = false // reset before arming — a failed start must drain
       providerSetProc.running = true
     }
   }

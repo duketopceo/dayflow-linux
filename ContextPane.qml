@@ -133,6 +133,10 @@ Column {
     Component.onCompleted: requestPaint()
 
     Connections {
+      target: pane
+      function onDayflowChanged() { ctxCanvas.requestPaint() }
+    }
+    Connections {
       target: pane.dayflow
       function onWeeklyPayloadChanged() { ctxCanvas.requestPaint() }
     }

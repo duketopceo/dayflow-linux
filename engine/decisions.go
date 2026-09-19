@@ -14,6 +14,8 @@ import (
 )
 
 // decisionsURL is the OpenRouter decisions endpoint (alpha). Overridable in tests.
+const defaultJevModel = "typesafe/jev-1.13"
+
 var decisionsURL = "https://openrouter.ai/api/alpha/decisions"
 var decisionsTimeout = 15 * time.Second
 
@@ -50,18 +52,16 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 	if len(questions) == 0 {
 		return map[string]float64{}, "", nil
 	}
-	if cfg.DisableJudges {
-		return nil, "", nil // deliberate suppression (read-only MCP) — no opinion, not a failure
+	if cfg.DisableJudges || !cfg.JevClassification {
+		return nil, "", nil // deliberate suppression (read-only MCP / jev_classification off) — no opinion, not a failure
 	}
-	if cfg.OpenRouterAPIKey == "" {
-		return nil, "", fmt.Errorf("no OpenRouter API key")
+	apiKey := jevAPIKey(cfg)
+	if apiKey == "" {
+		return nil, "", fmt.Errorf("no API key for Jev decisions")
 	}
-	model := cfg.JevModel
-	if model == "off" {
-		return nil, "", nil // user opted out — no opinion, not a failure
-	}
+	model := cfg.ClassificationModel
 	if model == "" {
-		model = "jev-latest"
+		model = defaultJevModel
 	}
 	qs := make(map[string]judgeQuestion, len(questions))
 	for k, ins := range questions {
@@ -79,7 +79,7 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 		return nil, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.OpenRouterAPIKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
 	req.Header.Set("X-Title", cfg.SiteName)
 
@@ -395,4 +395,17 @@ func errorClass(e string) string {
 	default:
 		return "other"
 	}
+}
+
+// jevAPIKey resolves the decisions-API credential through the provider chain
+// (classification task → chat → vision) then the legacy OpenRouter key.
+func jevAPIKey(cfg Config) string {
+	for _, task := range []string{"classification", "chat", "vision"} {
+		if p, err := providerForTask(cfg, task); err == nil {
+			if k := resolveProviderKey(p); k != "" {
+				return k
+			}
+		}
+	}
+	return cfg.OpenRouterAPIKey
 }
