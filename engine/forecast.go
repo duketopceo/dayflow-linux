@@ -22,12 +22,13 @@ type ForecastItem struct {
 
 // Forecast is the predicted shape of the target day.
 type Forecast struct {
-	Date         string         `json:"date"`
-	Weekday      string         `json:"weekday"`
-	TotalMinutes float64        `json:"total_minutes"`
-	Items        []ForecastItem `json:"items"`
-	Samples      int            `json:"samples"`    // same-weekday days seen
-	Confidence   string         `json:"confidence"` // low | medium | high
+	Date            string         `json:"date"`
+	Weekday         string         `json:"weekday"`
+	TotalMinutes    float64        `json:"total_minutes"`
+	Items           []ForecastItem `json:"items"`
+	Samples         int            `json:"samples"`                    // same-weekday days seen
+	Confidence      string         `json:"confidence"`                 // low | medium | high
+	ConfidenceScore *float64       `json:"confidence_score,omitempty"` // jev-calibrated 0-1
 }
 
 // forecast predicts the category mix for target by blending same-weekday
@@ -137,9 +138,10 @@ func forecast(db *sql.DB, target time.Time) (Forecast, error) {
 	return fc, nil
 }
 
-func printForecast(db *sql.DB, d time.Time, jsonOut bool) {
+func printForecast(db *sql.DB, cfg Config, d time.Time, jsonOut bool) {
 	fc, err := forecast(db, d)
 	fatal(err)
+	fc.ConfidenceScore = judgeForecast(db, cfg, fc)
 	if jsonOut {
 		json.NewEncoder(os.Stdout).Encode(fc)
 		return
@@ -152,7 +154,11 @@ func printForecast(db *sql.DB, d time.Time, jsonOut bool) {
 	for _, it := range fc.Items {
 		parts = append(parts, fmt.Sprintf("%s %.0f%%", it.Category, it.Pct))
 	}
-	fmt.Printf("forecast %s (%s, %s confidence): %s — ~%s total\n",
-		fc.Date, fc.Weekday, fc.Confidence, strings.Join(parts, ", "),
+	conf := fc.Confidence + " confidence"
+	if fc.ConfidenceScore != nil {
+		conf += fmt.Sprintf(", jev %.0f%%", *fc.ConfidenceScore*100)
+	}
+	fmt.Printf("forecast %s (%s, %s): %s — ~%s total\n",
+		fc.Date, fc.Weekday, conf, strings.Join(parts, ", "),
 		fmtDur(int(fc.TotalMinutes+0.5)))
 }

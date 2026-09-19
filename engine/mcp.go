@@ -351,6 +351,7 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if err != nil {
 			return nil, err
 		}
+		fc.ConfidenceScore = judgeForecast(db, cfg, fc)
 		return fc, nil
 
 	case "chat":

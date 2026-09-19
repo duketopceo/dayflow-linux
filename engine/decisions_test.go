@@ -403,3 +403,32 @@ func TestWorthyBlocksTop3Fallback(t *testing.T) {
 		t.Fatalf("out = %d", len(out))
 	}
 }
+
+func TestJudgeForecast(t *testing.T) {
+	testEnv(t)
+	fc := Forecast{
+		Date: "2026-09-19", Weekday: "Friday", Samples: 4, TotalMinutes: 300,
+		Items: []ForecastItem{{Category: "coding", Pct: 60, Minutes: 180}},
+	}
+	srv, _ := decisionsTestServer(200, `{"model":"m","answers":{"confident":{"type":"noul","noul":0.72}},"usage":{}}`)
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+
+	s := judgeForecast(nil, Config{OpenRouterAPIKey: "k"}, fc)
+	if s == nil || *s != 0.72 {
+		t.Fatalf("score = %v", s)
+	}
+	// no items → nil without a call
+	if judgeForecast(nil, Config{OpenRouterAPIKey: "k"}, Forecast{}) != nil {
+		t.Fatal("empty forecast should return nil")
+	}
+	// judge down → nil
+	srv2, _ := decisionsTestServer(500, `{}`)
+	defer srv2.Close()
+	decisionsURL = srv2.URL
+	if judgeForecast(nil, Config{OpenRouterAPIKey: "k"}, fc) != nil {
+		t.Fatal("unreachable judge should return nil")
+	}
+}

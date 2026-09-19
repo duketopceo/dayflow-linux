@@ -280,3 +280,29 @@ func worthyBlocks(db *sql.DB, cfg Config, blocks []Block) []Block {
 	}
 	return worthy
 }
+
+// judgeForecast asks Jev whether the predicted category mix plausibly matches
+// the target day's likely shape. Returns nil on any failure or no-opinion —
+// the forecast's heuristic confidence stands alone.
+func judgeForecast(db *sql.DB, cfg Config, fc Forecast) *float64 {
+	if len(fc.Items) == 0 {
+		return nil
+	}
+	var st strings.Builder
+	fmt.Fprintf(&st, "Forecast for %s (%s) from %d same-weekday samples over %d days of history (~%.0f min predicted):\n",
+		fc.Date, fc.Weekday, fc.Samples, forecastWindowDays, fc.TotalMinutes)
+	for _, it := range fc.Items {
+		fmt.Fprintf(&st, "- %s: %.0f%% (~%.0f min)\n", it.Category, it.Pct, it.Minutes)
+	}
+	ans, _, err := decide(db, cfg, "forecast", boundState(st.String(), 3000), map[string]string{
+		"confident": "This predicted category mix is a plausible forecast for the target day given typical weekly work patterns.",
+	})
+	if err != nil {
+		debugf(cfg, "forecast judge failed: %v", err)
+		return nil
+	}
+	if s, ok := ans["confident"]; ok {
+		return &s
+	}
+	return nil
+}
