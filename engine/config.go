@@ -40,6 +40,8 @@ type Config struct {
 	Debug                bool       `json:"debug"`                // verbose engine log to debug.log
 	Categories           []Category `json:"categories"`
 	ClassificationPrompt string     `json:"classification_prompt"` // extra instructions for the vision model
+	JevClassification    bool       `json:"jev_classification"`    // use Jev for category/productive (default true)
+	ClassificationModel  string     `json:"classification_model"`  // Jev model slug; default typesafe/jev-1.13
 	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
 	PanelExpanded        bool       `json:"panel_expanded"` // remember the panel Expand/Shrink toggle
@@ -110,6 +112,8 @@ func defaultConfig() Config {
 		FilterInappropriate:  true,
 		Categories:           defaultCategories(),
 		ClassificationPrompt: defaultClassificationPrompt,
+		JevClassification:    true,
+		ClassificationModel:  defaultJevModel,
 	}
 }
 
@@ -181,6 +185,12 @@ func loadConfig() (Config, error) {
 	// max_storage_mb: absent config gets the 10GB default; explicit 0 means unlimited.
 	if cfg.MaxStorageMB == 0 && !strings.Contains(string(b), "max_storage_mb") {
 		cfg.MaxStorageMB = 10240
+	}
+	if !strings.Contains(string(b), "jev_classification") {
+		cfg.JevClassification = true
+	}
+	if cfg.ClassificationModel == "" {
+		cfg.ClassificationModel = defaultJevModel
 	}
 	migrateLegacyProviders(&cfg)
 	return cfg, nil
@@ -390,6 +400,14 @@ func setConfigValue(key, value string) error {
 		cfg.SiteName = value
 	case "classification_prompt":
 		cfg.ClassificationPrompt = value
+	case "jev_classification":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("jev_classification must be true or false")
+		}
+		cfg.JevClassification = b
+	case "classification_model":
+		cfg.ClassificationModel = value
 	case "categories":
 		if err := json.Unmarshal([]byte(value), &cfg.Categories); err != nil {
 			return fmt.Errorf("categories must be a JSON array of {name, description, color?}: %w", err)

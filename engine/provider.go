@@ -214,7 +214,7 @@ func findProvider(cfg Config, id string) *Provider {
 	return nil
 }
 
-var providerTasks = []string{"vision", "summary", "detailed", "chat", "review", "standup"}
+var providerTasks = []string{"vision", "summary", "detailed", "chat", "review", "standup", "classification"}
 
 func isProviderTask(s string) bool {
 	for _, t := range providerTasks {
