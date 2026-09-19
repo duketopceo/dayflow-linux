@@ -43,6 +43,7 @@ type Config struct {
 	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
 	PanelExpanded        bool       `json:"panel_expanded"` // remember the panel Expand/Shrink toggle
+	JevModel             string     `json:"jev_model,omitempty"` // decisions model; default jev-latest
 }
 
 // normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1
