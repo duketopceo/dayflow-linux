@@ -44,8 +44,8 @@ type Config struct {
 	ClassificationModel  string     `json:"classification_model"`  // Jev model slug; default typesafe/jev-1.13
 	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
-	PanelExpanded        bool       `json:"panel_expanded"`      // remember the panel Expand/Shrink toggle
-	DisableJudges        bool       `json:"-"`                   // runtime-only: read-only MCP sessions must not egress
+	PanelExpanded        bool       `json:"panel_expanded"` // remember the panel Expand/Shrink toggle
+	DisableJudges        bool       `json:"-"`              // runtime-only: read-only MCP sessions must not egress
 }
 
 // normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1
