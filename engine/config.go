@@ -237,9 +237,10 @@ func patchConfig(patch string) error {
 			delete(patchMap, "openrouter_api_key")
 		}
 	}
-	// The panel round-trips providers with masked api_key fields. A sentinel
-	// inside the providers array must keep the existing key for that id —
-	// otherwise a settings save silently clobbers the real credential.
+	// The panel round-trips providers with masked api_key fields — and strips
+	// the sentinel before patching, so a missing/empty api_key must keep the
+	// existing key for that id. Otherwise a settings save silently clobbers
+	// the real credential.
 	if v, ok := patchMap["providers"]; ok {
 		var provs []map[string]json.RawMessage
 		if json.Unmarshal(v, &provs) == nil {
@@ -247,23 +248,26 @@ func patchConfig(patch string) error {
 			changed := false
 			for _, p := range provs {
 				rawKey, hasKey := p["api_key"]
-				var key, id string
-				if !hasKey || json.Unmarshal(rawKey, &key) != nil || key != "***redacted***" {
+				var key string
+				hasReal := hasKey && json.Unmarshal(rawKey, &key) == nil &&
+					key != "" && key != "***redacted***"
+				if hasReal {
 					continue
 				}
-				fixed := false
+				var id string
+				restored := false
 				if json.Unmarshal(p["id"], &id) == nil {
 					for _, e := range existing {
 						if e.ID == id && e.APIKey != "" {
 							p["api_key"], _ = json.Marshal(e.APIKey)
-							fixed = true
+							restored = true
 							break
 						}
 					}
 				}
-				if !fixed {
-					// no stored key to preserve — drop the sentinel so the
-					// masked value is never persisted
+				if !restored {
+					// no stored key to preserve — drop the placeholder so a
+					// masked/empty value is never persisted
 					delete(p, "api_key")
 				}
 				changed = true

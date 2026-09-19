@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,7 +29,23 @@ func appendLog(line string) {
 		if newDay || fi.Size() > 8<<20 {
 			arch := filepath.Join(dataDir(),
 				"debug-"+fi.ModTime().Format("20060102")+".log")
-			os.Rename(p, arch)
+			// A second same-day rotation must not clobber the first archive.
+			skip := false
+			for n := 2; ; n++ {
+				_, err := os.Stat(arch)
+				if os.IsNotExist(err) {
+					break
+				}
+				if err != nil {
+					skip = true // persistent I/O error — don't loop holding debugMu
+					break
+				}
+				arch = filepath.Join(dataDir(), fmt.Sprintf(
+					"debug-%s-%d.log", fi.ModTime().Format("20060102"), n))
+			}
+			if !skip {
+				os.Rename(p, arch)
+			}
 			pruneLogArchives()
 		}
 	}
@@ -36,7 +54,27 @@ func appendLog(line string) {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), line)
+	fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), sanitizeLogLine(line))
+}
+
+// sanitizeLogLine keeps one log call one line: argv text (or a rendered
+// error) carrying \n/\r or other control chars must not forge extra lines.
+func sanitizeLogLine(s string) string {
+	const max = 500
+	r := []rune(s)
+	out := r[:0]
+	for _, c := range r {
+		if c < 0x20 || c == 0x7f {
+			out = append(out, ' ')
+			continue
+		}
+		out = append(out, c)
+	}
+	s = strings.Join(strings.Fields(string(out)), " ")
+	if len([]rune(s)) > max {
+		s = string([]rune(s)[:max]) + "…"
+	}
+	return s
 }
 
 // pruneLogArchives deletes rotated debug-*.log files past the keep window.
@@ -48,6 +86,30 @@ func pruneLogArchives() {
 			os.Remove(m)
 		}
 	}
+}
+
+// tailLogLines returns the last n lines of debug.log — the read side of the
+// `dayflow log` write channel, also exposed as the MCP get_log tool.
+func tailLogLines(n int) []string {
+	f, err := os.Open(debugLogPath())
+	if err != nil {
+		return []string{}
+	}
+	defer f.Close()
+	// The file rotates at 8MB, so a full scan is bounded.
+	var lines []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	if lines == nil {
+		return []string{}
+	}
+	return lines
 }
 
 // debugf appends a timestamped line to debug.log when config debug is on.

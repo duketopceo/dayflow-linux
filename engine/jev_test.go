@@ -23,7 +23,7 @@ func stubJev(t *testing.T, category string, noul float64) *httptest.Server {
 			"model": "typesafe/jev-1.13",
 			"answers": map[string]any{
 				"category": map[string]any{
-					"choice": category,
+					"choice":        category,
 					"probabilities": map[string]float64{category: 0.92},
 				},
 				"productive": map[string]any{"noul": noul},

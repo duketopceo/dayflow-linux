@@ -79,3 +79,42 @@ func TestAgentSessionsCodex(t *testing.T) {
 		t.Fatalf("bad session: %+v", s)
 	}
 }
+
+func TestAgentSessionsDayBucketing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DAYFLOW_CLAUDE_DIR", dir)
+	t.Setenv("DAYFLOW_CODEX_DIR", filepath.Join(dir, "empty-codex"))
+
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+	next := day.Add(24 * time.Hour)
+	line := func(ts, text string) string {
+		return `{"type":"user","timestamp":"` + ts + `","cwd":"/home/x/p","message":{"role":"user","content":"` + text + `"}}`
+	}
+
+	// Session spanning local midnight (bounds are local; timestamps are UTC):
+	// appears on both days.
+	writeJSONL(t, filepath.Join(dir, "-p", "span.jsonl"), []string{
+		line(day.Add(23*time.Hour+30*time.Minute).UTC().Format(time.RFC3339Nano), "late work"),
+		line(next.Add(30*time.Minute).UTC().Format(time.RFC3339Nano), "after midnight"),
+	}, next.Add(time.Hour)) // mtime next day
+
+	// File modified next day but session fully inside the day — the dropped
+	// mtime < e bound used to lose this on both days.
+	writeJSONL(t, filepath.Join(dir, "-p", "carryover.jsonl"), []string{
+		line(day.Add(14*time.Hour).UTC().Format(time.RFC3339Nano), "afternoon session"),
+	}, next.Add(2*time.Hour))
+
+	// mtime in-range but all messages before the day — excluded by overlap.
+	writeJSONL(t, filepath.Join(dir, "-p", "stale.jsonl"), []string{
+		line("2026-09-10T09:00:00Z", "old session"),
+	}, day.Add(3*time.Hour))
+
+	today := agentSessionsForDay(day)
+	if len(today) != 2 {
+		t.Fatalf("expected 2 sessions on day, got %d: %+v", len(today), today)
+	}
+	tomorrow := agentSessionsForDay(next)
+	if len(tomorrow) != 1 || tomorrow[0].Title != "late work" {
+		t.Fatalf("expected only the spanning session tomorrow, got %+v", tomorrow)
+	}
+}

@@ -114,6 +114,33 @@ func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPa
 	p.Highlights = highlights
 	p.Suggestions = buildSuggestions(in)
 
+	// JSON marshals nil slices as null — consumers bind .length on these,
+	// so emit empty arrays instead.
+	if p.CategoryDonut == nil {
+		p.CategoryDonut = []DonutItem{}
+	}
+	if p.AppTreemap == nil {
+		p.AppTreemap = []TreemapItem{}
+	}
+	if p.ContextShifts == nil {
+		p.ContextShifts = []ContextShift{}
+	}
+	if p.TopDistractions == nil {
+		p.TopDistractions = []map[string]any{}
+	}
+	if p.FocusBlocks == nil {
+		p.FocusBlocks = []Block{}
+	}
+	if p.Highlights == nil {
+		p.Highlights = []string{}
+	}
+	if p.Suggestions == nil {
+		p.Suggestions = []string{}
+	}
+	if p.Heatmap == nil {
+		p.Heatmap = []DayHeatmap{}
+	}
+
 	return p, nil
 }
 

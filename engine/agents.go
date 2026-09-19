@@ -40,26 +40,29 @@ func codexDir() string {
 	return filepath.Join(h, ".codex", "sessions")
 }
 
-// agentSessionsForDay collects Claude Code and Codex sessions whose
-// transcript file was modified inside the given day, oldest first.
+// agentSessionsForDay collects Claude Code and Codex sessions active inside
+// the given day — a session counts when its [Start, End] message-timestamp
+// range overlaps the day, so one spanning midnight appears on both days.
 func agentSessionsForDay(d time.Time) []AgentSession {
 	s, e := dayBounds(d)
-	var out []AgentSession
+	out := []AgentSession{}
 	out = append(out, scanClaude(claudeDir(), s, e)...)
 	out = append(out, scanCodex(codexDir(), s, e)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Start < out[j].Start })
 	return out
 }
 
-// jsonlFiles walks root for *.jsonl files modified within [s, e).
-func jsonlFiles(root string, s, e time.Time) []string {
+// jsonlFiles walks root for *.jsonl files modified at or after s. No upper
+// bound: a file written after e can still hold messages timestamped inside
+// [s, e) — a session spanning midnight would otherwise drop off both days.
+// Overlap filtering on message timestamps happens in scanJSONL.
+func jsonlFiles(root string, s time.Time) []string {
 	var paths []string
 	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(p, ".jsonl") {
+		if err != nil || !info.Mode().IsRegular() || !strings.HasSuffix(p, ".jsonl") {
 			return nil
 		}
-		mt := info.ModTime()
-		if !mt.Before(s) && mt.Before(e) {
+		if !info.ModTime().Before(s) {
 			paths = append(paths, p)
 		}
 		return nil
@@ -67,145 +70,160 @@ func jsonlFiles(root string, s, e time.Time) []string {
 	return paths
 }
 
-func firstUserText(parts []any) string {
-	for _, p := range parts {
-		m, ok := p.(map[string]any)
-		if !ok {
+func truncTitle(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	const max = 120
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
+}
+
+// scanJSONL walks JSONL transcripts under root, letting parse fold each line
+// into the session accumulator. Typed decode only — no map[string]any over
+// every line of a multi-MB transcript.
+func scanJSONL(root, source string, s, e time.Time, parse func([]byte, *AgentSession)) []AgentSession {
+	out := []AgentSession{}
+	for _, p := range jsonlFiles(root, s) {
+		sess := AgentSession{Source: source, File: p}
+		f, err := os.Open(p)
+		if err != nil {
 			continue
 		}
-		t, _ := m["type"].(string)
-		if t == "text" || t == "input_text" {
-			if s, ok := m["text"].(string); ok && strings.TrimSpace(s) != "" {
-				return s
-			}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 1<<20), 1<<20)
+		for sc.Scan() {
+			parse(sc.Bytes(), &sess)
+		}
+		// A scan error (e.g. a line over the 1MB buffer) means the session
+		// data is truncated — skip it rather than report partials.
+		scanErr := sc.Err()
+		f.Close()
+		if scanErr != nil || sess.Start == 0 {
+			continue
+		}
+		// Buckets are message timestamps, not mtime: keep the session only
+		// when its [Start, End] range overlaps the scanned window.
+		if sess.Start >= e.Unix() || sess.End < s.Unix() {
+			continue
+		}
+		sess.Title = truncTitle(sess.Title)
+		sess.Project = projectName(sess.Cwd, p)
+		out = append(out, sess)
+	}
+	return out
+}
+
+func trackRange(sess *AgentSession, ts string) {
+	if ts == "" {
+		return
+	}
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		u := t.Unix()
+		if sess.Start == 0 || u < sess.Start {
+			sess.Start = u
+		}
+		if u > sess.End {
+			sess.End = u
+		}
+	}
+}
+
+// contentText extracts plain text from a message content value that is either
+// a string or an array of {type, text} parts.
+func contentText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) != nil {
+		return ""
+	}
+	for _, p := range parts {
+		if (p.Type == "text" || p.Type == "input_text") && strings.TrimSpace(p.Text) != "" {
+			return p.Text
 		}
 	}
 	return ""
 }
 
-func truncTitle(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	const max = 120
-	if len(s) > max {
-		return s[:max] + "…"
-	}
-	return s
+type claudeLine struct {
+	Timestamp string          `json:"timestamp"`
+	Cwd       string          `json:"cwd"`
+	Type      string          `json:"type"`
+	Message   json.RawMessage `json:"message"`
+}
+
+type claudeMessage struct {
+	Content json.RawMessage `json:"content"`
 }
 
 func scanClaude(root string, s, e time.Time) []AgentSession {
-	var out []AgentSession
-	for _, p := range jsonlFiles(root, s, e) {
-		sess := AgentSession{Source: "claude", File: p}
-		f, err := os.Open(p)
-		if err != nil {
-			continue
+	return scanJSONL(root, "claude", s, e, func(raw []byte, sess *AgentSession) {
+		var line claudeLine
+		if json.Unmarshal(raw, &line) != nil {
+			return
 		}
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 1<<20), 1<<20)
-		for sc.Scan() {
-			var line map[string]any
-			if json.Unmarshal(sc.Bytes(), &line) != nil {
-				continue
-			}
-			if ts, ok := line["timestamp"].(string); ok {
-				if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-					u := t.Unix()
-					if sess.Start == 0 || u < sess.Start {
-						sess.Start = u
-					}
-					if u > sess.End {
-						sess.End = u
-					}
-				}
-			}
-			if sess.Cwd == "" {
-				if c, ok := line["cwd"].(string); ok {
-					sess.Cwd = c
-				}
-			}
-			typ, _ := line["type"].(string)
-			if typ == "user" || typ == "assistant" {
-				sess.Messages++
-			}
-			if sess.Title == "" && typ == "user" {
-				if msg, ok := line["message"].(map[string]any); ok {
-					switch c := msg["content"].(type) {
-					case string:
-						sess.Title = c
-					case []any:
-						sess.Title = firstUserText(c)
-					}
-				}
+		trackRange(sess, line.Timestamp)
+		if sess.Cwd == "" {
+			sess.Cwd = line.Cwd
+		}
+		if line.Type == "user" || line.Type == "assistant" {
+			sess.Messages++
+		}
+		if sess.Title == "" && line.Type == "user" && len(line.Message) > 0 {
+			var msg claudeMessage
+			if json.Unmarshal(line.Message, &msg) == nil {
+				sess.Title = contentText(msg.Content)
 			}
 		}
-		f.Close()
-		if sess.Start == 0 {
-			continue
-		}
-		sess.Title = truncTitle(sess.Title)
-		sess.Project = projectName(sess.Cwd, p)
-		out = append(out, sess)
-	}
-	return out
+	})
+}
+
+type codexLine struct {
+	Timestamp string          `json:"timestamp"`
+	Type      string          `json:"type"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+type codexPayload struct {
+	Type    string          `json:"type"`
+	Role    string          `json:"role"`
+	Cwd     string          `json:"cwd"`
+	Content json.RawMessage `json:"content"`
 }
 
 func scanCodex(root string, s, e time.Time) []AgentSession {
-	var out []AgentSession
-	for _, p := range jsonlFiles(root, s, e) {
-		sess := AgentSession{Source: "codex", File: p}
-		f, err := os.Open(p)
-		if err != nil {
-			continue
+	return scanJSONL(root, "codex", s, e, func(raw []byte, sess *AgentSession) {
+		var line codexLine
+		if json.Unmarshal(raw, &line) != nil {
+			return
 		}
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 1<<20), 1<<20)
-		for sc.Scan() {
-			var line map[string]any
-			if json.Unmarshal(sc.Bytes(), &line) != nil {
-				continue
+		trackRange(sess, line.Timestamp)
+		if len(line.Payload) == 0 {
+			return
+		}
+		var p codexPayload
+		if json.Unmarshal(line.Payload, &p) != nil {
+			return
+		}
+		if line.Type == "session_meta" {
+			if sess.Cwd == "" {
+				sess.Cwd = p.Cwd
 			}
-			if ts, ok := line["timestamp"].(string); ok {
-				if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-					u := t.Unix()
-					if sess.Start == 0 || u < sess.Start {
-						sess.Start = u
-					}
-					if u > sess.End {
-						sess.End = u
-					}
-				}
-			}
-			typ, _ := line["type"].(string)
-			payload, _ := line["payload"].(map[string]any)
-			if typ == "session_meta" && payload != nil {
-				if c, ok := payload["cwd"].(string); ok {
-					sess.Cwd = c
-				}
-				continue
-			}
-			if payload == nil {
-				continue
-			}
-			ptype, _ := payload["type"].(string)
-			role, _ := payload["role"].(string)
-			if ptype == "message" && (role == "user" || role == "assistant") {
-				sess.Messages++
-				if sess.Title == "" && role == "user" {
-					if parts, ok := payload["content"].([]any); ok {
-						sess.Title = firstUserText(parts)
-					}
-				}
+			return
+		}
+		if p.Type == "message" && (p.Role == "user" || p.Role == "assistant") {
+			sess.Messages++
+			if sess.Title == "" && p.Role == "user" {
+				sess.Title = contentText(p.Content)
 			}
 		}
-		f.Close()
-		if sess.Start == 0 {
-			continue
-		}
-		sess.Title = truncTitle(sess.Title)
-		sess.Project = projectName(sess.Cwd, p)
-		out = append(out, sess)
-	}
-	return out
+	})
 }
 
 func projectName(cwd, file string) string {

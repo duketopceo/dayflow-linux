@@ -197,6 +197,7 @@ Flickable {
             id: convText
             anchors.centerIn: parent
             text: modelData.title
+            textFormat: Text.PlainText
             color: dayflow ? dayflow.foreground : Color.foreground
             font.family: dayflow ? dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
@@ -274,6 +275,7 @@ Flickable {
         anchors.fill: parent
         anchors.margins: Style.space(7)
         text: root.recapText()
+        textFormat: Text.PlainText
         color: dayflow ? dayflow.foreground : Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
@@ -427,6 +429,11 @@ Flickable {
         if (dayflow) dayflow.notice = "chat error"
       }
     }
+    // FailedToStart emits neither exited nor streamFinished — clear the
+    // flag so the busy bar can't stick.
+    onRunningChanged: {
+      if (!chatProc.running) root.chatLoading = false
+    }
   }
 
   Process {
@@ -441,6 +448,9 @@ Flickable {
         root.chatLoading = false
         if (dayflow) dayflow.notice = "could not load conversation"
       }
+    }
+    onRunningChanged: {
+      if (!convProc.running) root.chatLoading = false
     }
   }
 

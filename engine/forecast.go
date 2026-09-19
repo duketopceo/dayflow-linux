@@ -30,30 +30,6 @@ type Forecast struct {
 	Confidence   string         `json:"confidence"` // low | medium | high
 }
 
-// dayCatMinutes returns category -> minutes for a single day.
-func dayCatMinutes(db *sql.DB, d time.Time) (map[string]float64, float64, error) {
-	s, e := dayBounds(d)
-	rows, err := db.Query(`SELECT category, SUM(end_ts - start_ts) FROM blocks
-		WHERE start_ts>=? AND start_ts<? AND status='done' AND category NOT IN ('','idle')
-		GROUP BY category`, s.Unix(), e.Unix())
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-	m := map[string]float64{}
-	total := 0.0
-	for rows.Next() {
-		var c string
-		var secs float64
-		if err := rows.Scan(&c, &secs); err != nil {
-			return nil, 0, err
-		}
-		m[c] = secs / 60
-		total += secs / 60
-	}
-	return m, total, rows.Err()
-}
-
 // forecast predicts the category mix for target by blending same-weekday
 // history (weight 0.6) with the all-days average (weight 0.4) over the
 // recent window. Empty-category and idle time are excluded.
@@ -61,25 +37,53 @@ func forecast(db *sql.DB, target time.Time) (Forecast, error) {
 	fc := Forecast{
 		Date:    target.Local().Format("2006-01-02"),
 		Weekday: target.Local().Weekday().String(),
+		Items:   []ForecastItem{},
 	}
 	type dayProfile struct {
 		m     map[string]float64
 		total float64
 	}
 	var same, all []dayProfile
-	for i := 1; i <= forecastWindowDays; i++ {
-		d := target.AddDate(0, 0, -i)
-		m, tot, err := dayCatMinutes(db, d)
-		if err != nil {
+	// One range query over the whole window instead of a query per day.
+	winStart, _ := dayBounds(target.AddDate(0, 0, -forecastWindowDays))
+	winEnd, _ := dayBounds(target)
+	rows, err := db.Query(`SELECT start_ts, end_ts, category FROM blocks
+		WHERE start_ts>=? AND start_ts<? AND status='done' AND category NOT IN ('','idle')`,
+		winStart.Unix(), winEnd.Unix())
+	if err != nil {
+		return fc, err
+	}
+	defer rows.Close()
+	byDay := map[int64]*dayProfile{}
+	for rows.Next() {
+		var st, en int64
+		var cat string
+		if err := rows.Scan(&st, &en, &cat); err != nil {
 			return fc, err
 		}
-		if tot == 0 {
+		ds, _ := dayBounds(time.Unix(st, 0))
+		dp := byDay[ds.Unix()]
+		if dp == nil {
+			dp = &dayProfile{m: map[string]float64{}}
+			byDay[ds.Unix()] = dp
+		}
+		mins := float64(en-st) / 60
+		dp.m[cat] += mins
+		dp.total += mins
+	}
+	if err := rows.Err(); err != nil {
+		return fc, err
+	}
+	for i := 1; i <= forecastWindowDays; i++ {
+		d := target.AddDate(0, 0, -i)
+		ds, _ := dayBounds(d)
+		dp := byDay[ds.Unix()]
+		if dp == nil {
 			continue
 		}
-		p := dayProfile{m: m, total: tot}
-		all = append(all, p)
+		all = append(all, *dp)
 		if d.Weekday() == target.Weekday() {
-			same = append(same, p)
+			same = append(same, *dp)
 		}
 	}
 	fc.Samples = len(same)
@@ -150,18 +154,5 @@ func printForecast(db *sql.DB, d time.Time, jsonOut bool) {
 	}
 	fmt.Printf("forecast %s (%s, %s confidence): %s — ~%s total\n",
 		fc.Date, fc.Weekday, fc.Confidence, strings.Join(parts, ", "),
-		fmtDurMin(fc.TotalMinutes))
-}
-
-// fmtDurMin renders minutes as "5h 20m".
-func fmtDurMin(m float64) string {
-	h := int(m) / 60
-	r := int(m) % 60
-	if h == 0 {
-		return fmt.Sprintf("%dm", r)
-	}
-	if r == 0 {
-		return fmt.Sprintf("%dh", h)
-	}
-	return fmt.Sprintf("%dh %dm", h, r)
+		fmtDur(int(fc.TotalMinutes+0.5)))
 }

@@ -50,8 +50,9 @@ Flickable {
   Process {
     id: applyProc
     property string pendingPatch: ""
+    property bool didStart: false
     stdinEnabled: true
-    onStarted: { write(pendingPatch + "\n"); pendingPatch = "" }
+    onStarted: { write(pendingPatch + "\n"); pendingPatch = ""; applyProc.didStart = true }
     onExited: function(exitCode) {
       if (exitCode === 0) {
         testProc.running = true
@@ -60,11 +61,22 @@ Flickable {
         root.testing = false
       }
     }
+    // FailedToStart fires no exited/streamFinished — surface it instead of
+    // stranding "Testing..." forever.
+    onRunningChanged: {
+      if (!applyProc.running && !applyProc.didStart) {
+        root.testResult = "config write failed"
+        root.testing = false
+      }
+      if (!applyProc.running) applyProc.didStart = false
+    }
   }
 
   Process {
     id: testProc
+    property bool didStart: false
     command: ["dayflow", "doctor", "--json"]
+    onStarted: testProc.didStart = true
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -85,6 +97,13 @@ Flickable {
         }
       }
     }
+    onRunningChanged: {
+      if (!testProc.running && !testProc.didStart) {
+        root.testResult = "connection test failed to run"
+        root.testing = false
+      }
+      if (!testProc.running) testProc.didStart = false
+    }
     stderr: StdioCollector {}
   }
 
@@ -102,11 +121,20 @@ Flickable {
   Process {
     id: keySetProc
     property string pendingKey: ""
+    property bool didStart: false
     stdinEnabled: true
-    onStarted: { write(pendingKey + "\n"); pendingKey = "" }
+    onStarted: { write(pendingKey + "\n"); pendingKey = ""; keySetProc.didStart = true }
     onExited: function(exitCode) {
       if (exitCode !== 0) root.keyInPatch = true
       root.applyPatch()
+    }
+    // FailedToStart — keep the chain moving via the config-patch fallback.
+    onRunningChanged: {
+      if (!keySetProc.running && !keySetProc.didStart) {
+        root.keyInPatch = true
+        root.applyPatch()
+      }
+      if (!keySetProc.running) keySetProc.didStart = false
     }
   }
 

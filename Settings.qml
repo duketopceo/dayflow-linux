@@ -61,19 +61,31 @@ Flickable {
     root.pendingProviderWrites = root.pendingProviderWrites.concat([cmd])
     if (!providerSetProc.running) {
       providerSetProc.command = root.pendingProviderWrites[0]
+      providerSetProc.didStart = false
+      providerSetProc.running = true
+    }
+  }
+
+  function drainProviderWrites(exitCode) {
+    if (exitCode !== 0 && root.dayflow) root.dayflow.notice = "prompt override save failed"
+    root.pendingProviderWrites = root.pendingProviderWrites.slice(1)
+    if (root.pendingProviderWrites.length > 0) {
+      providerSetProc.command = root.pendingProviderWrites[0]
+      providerSetProc.didStart = false // reset before arming — a failed start must drain
       providerSetProc.running = true
     }
   }
 
   Process {
     id: providerSetProc
-    onExited: function(exitCode) {
-      if (exitCode !== 0 && root.dayflow) root.dayflow.notice = "prompt override save failed"
-      root.pendingProviderWrites = root.pendingProviderWrites.slice(1)
-      if (root.pendingProviderWrites.length > 0) {
-        providerSetProc.command = root.pendingProviderWrites[0]
-        providerSetProc.running = true
-      }
+    property bool didStart: false
+    onStarted: providerSetProc.didStart = true
+    onExited: function(exitCode) { root.drainProviderWrites(exitCode) }
+    // FailedToStart emits no exited — drain the queue anyway so queued
+    // writes are not stranded forever.
+    onRunningChanged: {
+      if (!providerSetProc.running && !providerSetProc.didStart) root.drainProviderWrites(-1)
+      if (!providerSetProc.running) providerSetProc.didStart = false
     }
   }
 

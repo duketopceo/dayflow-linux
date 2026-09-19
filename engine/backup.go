@@ -157,10 +157,18 @@ func redactSecrets(m map[string]json.RawMessage) {
 }
 
 // pruneBackups removes all but the newest backupKeep snapshots under dest.
+// Only timestamped snapshot dirs are touched — a user-chosen dest may hold
+// unrelated entries that happen to start with "dayflow-".
 func pruneBackups(dest string) {
-	matches, _ := filepath.Glob(filepath.Join(dest, "dayflow-*"))
-	sort.Strings(matches) // timestamps sort chronologically
-	for _, d := range matches[:max(0, len(matches)-backupKeep)] {
+	matches, _ := filepath.Glob(filepath.Join(dest, "dayflow-????????-??????"))
+	var dirs []string
+	for _, m := range matches {
+		if fi, err := os.Stat(m); err == nil && fi.IsDir() {
+			dirs = append(dirs, m)
+		}
+	}
+	sort.Strings(dirs) // timestamps sort chronologically
+	for _, d := range dirs[:max(0, len(dirs)-backupKeep)] {
 		os.RemoveAll(d)
 	}
 }
