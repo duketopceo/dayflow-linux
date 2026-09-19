@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -225,4 +226,57 @@ func judgeRetryable(db *sql.DB, cfg Config, start time.Time, errText string) boo
 		return false
 	}
 	return ans["retryable"] >= 0.5
+}
+
+// worthyBlocks filters a day's blocks to those Jev judges worth mentioning in
+// a standup. Only explicit low scores drop a block — unjudged or unscored
+// blocks pass through, and an all-dropped day falls back to the top-3 spans
+// by minutes so the report is never empty. Judge failure returns the input.
+func worthyBlocks(db *sql.DB, cfg Config, blocks []Block) []Block {
+	var judged []Block
+	for _, b := range blocks {
+		if b.Status == "done" && b.Category != "idle" {
+			judged = append(judged, b)
+		}
+	}
+	if len(judged) == 0 {
+		return blocks
+	}
+	if len(judged) > 40 {
+		sort.Slice(judged, func(i, k int) bool {
+			return judged[i].End.Sub(judged[i].Start) > judged[k].End.Sub(judged[k].Start)
+		})
+		judged = judged[:40]
+	}
+	var st strings.Builder
+	qs := map[string]string{}
+	for _, b := range judged {
+		key := fmt.Sprintf("worthy_%d", b.StartTs)
+		fmt.Fprintf(&st, "- %s-%s [%s/%s]: %s — %s\n", b.StartStr, b.EndStr, b.App, b.Category, b.Title, b.Summary)
+		qs[key] = "This block is worth mentioning in a daily standup update — meaningful work or a notable event, not routine drift, idle time, or trivial app-hopping."
+	}
+	ans, _, err := decide(db, cfg, "standup", boundState(st.String(), 4000), qs)
+	if err != nil {
+		debugf(cfg, "standup judge failed: %v", err)
+		return blocks
+	}
+	var worthy []Block
+	for _, b := range blocks {
+		if s, ok := ans[fmt.Sprintf("worthy_%d", b.StartTs)]; ok && s < 0.5 {
+			continue
+		}
+		worthy = append(worthy, b)
+	}
+	if len(worthy) == 0 {
+		sorted := make([]Block, len(blocks))
+		copy(sorted, blocks)
+		sort.Slice(sorted, func(i, k int) bool {
+			return sorted[i].End.Sub(sorted[i].Start) > sorted[k].End.Sub(sorted[k].Start)
+		})
+		if len(sorted) > 3 {
+			sorted = sorted[:3]
+		}
+		return sorted
+	}
+	return worthy
 }

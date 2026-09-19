@@ -324,3 +324,82 @@ func TestJudgeRetryable(t *testing.T) {
 		t.Fatal("unreachable judge should return false")
 	}
 }
+
+func standupBlock(startMin int, title string) Block {
+	s := time.Date(2026, 9, 18, 9, 0, 0, 0, time.Local).Add(time.Duration(startMin) * time.Minute)
+	return Block{Start: s, End: s.Add(15 * time.Minute), StartTs: s.Unix(),
+		StartStr: s.Format("15:04"), EndStr: s.Add(15 * time.Minute).Format("15:04"),
+		Title: title, Summary: "did " + title, Category: "coding", Status: "done", App: "neovim"}
+}
+
+func TestWorthyBlocks(t *testing.T) {
+	testEnv(t)
+	blocks := []Block{standupBlock(0, "Deep work"), standupBlock(15, "Trivia"), standupBlock(30, "More work")}
+	// jev scores only the second block low
+	srv, _ := decisionsTestServer(200, fmt.Sprintf(`{"model":"m","answers":{
+		"worthy_%d":{"type":"noul","noul":0.9},
+		"worthy_%d":{"type":"noul","noul":0.1},
+		"worthy_%d":{"type":"noul","noul":0.8}
+	},"usage":{}}`, blocks[0].StartTs, blocks[1].StartTs, blocks[2].StartTs))
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+
+	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
+	if len(out) != 2 || out[0].Title != "Deep work" || out[1].Title != "More work" {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
+func TestWorthyBlocksAllDroppedFallback(t *testing.T) {
+	testEnv(t)
+	blocks := []Block{standupBlock(0, "a"), standupBlock(15, "b"), standupBlock(30, "c"), standupBlock(45, "d")}
+	srv, _ := decisionsTestServer(200, `{"model":"m","answers":{},"usage":{}}`)
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+	// empty answers → nothing scored <0.5 → all pass through (no-opinion rule)
+	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
+	if len(out) != 4 {
+		t.Fatalf("out = %d", len(out))
+	}
+}
+
+func TestWorthyBlocksJudgeDown(t *testing.T) {
+	testEnv(t)
+	srv, _ := decisionsTestServer(500, `{}`)
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+	blocks := []Block{standupBlock(0, "a"), standupBlock(15, "b")}
+	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
+	if len(out) != 2 {
+		t.Fatalf("out = %d", len(out))
+	}
+}
+
+func TestWorthyBlocksTop3Fallback(t *testing.T) {
+	testEnv(t)
+	blocks := []Block{standupBlock(0, "a"), standupBlock(15, "b"), standupBlock(30, "c"), standupBlock(45, "d"), standupBlock(60, "e")}
+	// every block judged unworthy → top-3 by minutes (all equal here → first 3 sorted)
+	ans := `{"model":"m","answers":{`
+	for i, b := range blocks {
+		if i > 0 {
+			ans += ","
+		}
+		ans += fmt.Sprintf(`"worthy_%d":{"type":"noul","noul":0.1}`, b.StartTs)
+	}
+	ans += `},"usage":{}}`
+	srv, _ := decisionsTestServer(200, ans)
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+	out := worthyBlocks(nil, Config{OpenRouterAPIKey: "k"}, blocks)
+	if len(out) != 3 {
+		t.Fatalf("out = %d", len(out))
+	}
+}

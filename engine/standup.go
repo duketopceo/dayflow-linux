@@ -35,8 +35,12 @@ func generateStandup(db *sql.DB, cfg Config, asJSON bool) (string, map[string]an
 		return "", nil, err
 	}
 
-	yEntries, yTotal := standupEntries(yBlocks)
-	tEntries, tTotal := standupEntries(tBlocks)
+	// Jev scores which blocks are standup-worthy; totals stay honest over the
+	// full set even when the entry list is filtered.
+	yEntries, _ := standupEntries(worthyBlocks(db, cfg, yBlocks))
+	_, yTotal := standupEntries(yBlocks)
+	tEntries, _ := standupEntries(worthyBlocks(db, cfg, tBlocks))
+	_, tTotal := standupEntries(tBlocks)
 
 	// Fold in the user's editable draft for today (blockers, priorities, etc.).
 	draft, err := loadStandupDraft(db, today.Format("2006-01-02"))
