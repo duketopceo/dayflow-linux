@@ -319,7 +319,8 @@ func fetchInsights(db *sql.DB, cfg Config, r string) (map[string]any, error) {
 
 func searchBlocks(db *sql.DB, query string) ([]Block, error) {
 	like := "%" + query + "%"
-	rows, err := db.Query(`SELECT start_ts, end_ts, title, summary, category, app, activities, productive FROM blocks
+	rows, err := db.Query(`SELECT start_ts, end_ts, title, summary, category, app, activities, productive,
+	  category_confidence, quality_confidence, same_as_prev FROM blocks
 	  WHERE status='done' AND (title LIKE ? OR summary LIKE ? OR app LIKE ?)
 	  ORDER BY start_ts DESC LIMIT 50`, like, like, like)
 	if err != nil {
@@ -332,15 +333,28 @@ func searchBlocks(db *sql.DB, query string) ([]Block, error) {
 		var s, e int64
 		var acts string
 		var prod sql.NullBool
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.App, &acts, &prod); err != nil {
+		var conf, qual sql.NullFloat64
+		var sap sql.NullBool
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.App, &acts, &prod,
+			&conf, &qual, &sap); err != nil {
 			return nil, err
 		}
 		if prod.Valid {
 			b.Productive = &prod.Bool
 		}
+		if conf.Valid {
+			b.CategoryConfidence = &conf.Float64
+		}
+		if qual.Valid {
+			b.QualityConfidence = &qual.Float64
+		}
+		if sap.Valid {
+			b.SameAsPrev = &sap.Bool
+		}
 		if acts != "" {
 			json.Unmarshal([]byte(acts), &b.Activities)
 		}
+		b.LowConfidence = blockLowConfidence(b)
 		b.Start = time.Unix(s, 0).Local()
 		b.End = time.Unix(e, 0).Local()
 		b.StartTs = s

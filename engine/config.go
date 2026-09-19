@@ -42,7 +42,9 @@ type Config struct {
 	ClassificationPrompt string     `json:"classification_prompt"` // extra instructions for the vision model
 	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
-	PanelExpanded        bool       `json:"panel_expanded"` // remember the panel Expand/Shrink toggle
+	PanelExpanded        bool       `json:"panel_expanded"`      // remember the panel Expand/Shrink toggle
+	JevModel             string     `json:"jev_model,omitempty"` // decisions model; default jev-latest, "off" disables
+	DisableJudges        bool       `json:"-"`                   // runtime-only: read-only MCP sessions must not egress
 }
 
 // normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1

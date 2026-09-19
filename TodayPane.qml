@@ -76,7 +76,7 @@ Flickable {
         Column {
           anchors.left: parent.left
           anchors.leftMargin: Style.space(150)
-          anchors.right: durText.left
+          anchors.right: lowConfMark.visible ? lowConfMark.left : durText.left
           anchors.rightMargin: Style.space(8)
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(1)
@@ -103,6 +103,22 @@ Flickable {
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
           }
+        }
+
+        Text {
+          // Jev scored a judgment on this card below the confidence
+          // threshold — treat the label/summary as suspect.
+          id: lowConfMark
+          visible: modelData.low_confidence === true
+          anchors.right: durText.left
+          anchors.rightMargin: Style.space(6)
+          anchors.verticalCenter: parent.verticalCenter
+          text: "?"
+          textFormat: Text.PlainText
+          color: Qt.rgba(0.95, 0.70, 0.15, 1.0)
+          font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+          font.pixelSize: Style.font.caption
+          font.bold: true
         }
 
         Text {

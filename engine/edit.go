@@ -135,10 +135,14 @@ func applyEdits(b Block, edits []BlockEdit) Block {
 		switch e.Field {
 		case "title":
 			b.Title = e.NewValue
+			b.QualityConfidence = nil // human correction supersedes the judge's quality score
 		case "summary":
 			b.Summary = e.NewValue
+			b.QualityConfidence = nil
 		case "category":
 			b.Category = e.NewValue
+			b.CategoryConfidence = nil // judge scored its own argmax, not the human's pick
+			b.SameAsPrev = nil         // merge judgment was anchored to the old category
 		case "productive":
 			if v, err := strconv.ParseBool(e.NewValue); err == nil {
 				b.Productive = &v

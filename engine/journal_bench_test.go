@@ -15,6 +15,10 @@ func benchEnv(b *testing.B) Config {
 	b.Setenv("DAYFLOW_CONFIG", dir+"/nonexistent.json")
 	cfg := defaultConfig()
 	cfg.OpenRouterAPIKey = "test-key"
+	// no judge egress from benchmarks (see testEnv)
+	old := decisionsURL
+	decisionsURL = "http://127.0.0.1:1/"
+	b.Cleanup(func() { decisionsURL = old })
 	return cfg
 }
 

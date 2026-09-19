@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // var so tests can point at a stub server.
@@ -160,10 +161,14 @@ func stripFences(s string) string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) > n {
-		return s[:n] + "..."
+	if len(s) <= n {
+		return s
 	}
-	return s
+	// back off to a rune boundary so we never split a multi-byte char
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "..."
 }
 
 var sensitiveTerms = []string{
@@ -321,6 +326,21 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		end := start.Add(time.Duration(cfg.BlockMinutes) * time.Minute)
 		attempts := blockAttempts(db, start)
 		if attempts >= maxAttempts {
+			// Jev triage grants exactly one extra attempt to failures it
+			// judges transient; the triaged flag makes it fire once only —
+			// attempts alone would cycle and re-ask Jev every sweep.
+			var triaged bool
+			db.QueryRow(`SELECT triaged FROM blocks WHERE start_ts=?`, start.Unix()).Scan(&triaged)
+			if !triaged {
+				var errText string
+				db.QueryRow(`SELECT error FROM blocks WHERE start_ts=?`, start.Unix()).Scan(&errText)
+				if judgeRetryable(db, cfg, start, errText) {
+					db.Exec(`UPDATE blocks SET attempts=?, triaged=1 WHERE start_ts=?`, maxAttempts-1, start.Unix())
+					logEvent(db, "judge_requeue", start.Format("15:04"))
+					continue
+				}
+				db.Exec(`UPDATE blocks SET triaged=1 WHERE start_ts=?`, start.Unix())
+			}
 			db.Exec(`UPDATE blocks SET status='dead' WHERE start_ts=?`, start.Unix())
 			logEvent(db, "block_dead", start.Format("15:04"))
 			continue
@@ -354,17 +374,56 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		logAPICall(db, start, cfg.Model, len(paths), pt, ct, latency, "ok", "")
 		logEvent(db, "summarized", start.Format("15:04")+" "+res.Title)
 		app := dominantApp(db, start, end)
+		if res.Title == "" && len(res.Activities) > 0 {
+			res.Title = res.Activities[0].Title
+		}
+
+		// Jev judgment batch — calibrated category/productivity/quality/merge.
+		// Any failure keeps the chat model's fields (degrade-safe).
+		var j *blockJudgment
+		if res.Category != "idle" {
+			prevTitle, prevApp, hasPrev := prevBlock(db, start)
+			jj, jerr := judgeBlock(db, cfg, res, app, prevTitle, prevApp, hasPrev)
+			if jerr != nil {
+				debugf(cfg, "summarize %s: judge failed: %v", start.Format("15:04"), jerr)
+			} else {
+				j = jj
+				applyJudgment(res, j)
+				// Quality gate: a low-confidence title/summary earns one
+				// regeneration; whichever result Jev scores higher wins.
+				if j.Quality != nil && *j.Quality < lowConfidenceThreshold {
+					t1 := time.Now()
+					res2, pt2, ct2, err2 := callOpenRouter(cfg, paths)
+					lat2 := int(time.Since(t1).Milliseconds())
+					if err2 == nil {
+						logAPICall(db, start, cfg.Model, len(paths), pt2, ct2, lat2, "ok", "")
+						logEvent(db, "judge_retry", start.Format("15:04"))
+						j2, jerr2 := judgeBlock(db, cfg, res2, app, prevTitle, prevApp, hasPrev)
+						if jerr2 == nil && j2.Quality != nil && *j2.Quality > *j.Quality {
+							res = res2
+							j = j2
+							applyJudgment(res, j)
+						}
+					} else {
+						logAPICall(db, start, cfg.Model, len(paths), 0, 0, lat2, "error", err2.Error())
+					}
+				}
+			}
+		}
+
 		actsJSON := ""
 		if len(res.Activities) > 0 {
 			if b, e := json.Marshal(res.Activities); e == nil {
 				actsJSON = string(b)
 			}
 		}
-		if res.Title == "" && len(res.Activities) > 0 {
-			res.Title = res.Activities[0].Title
-		}
 		if err := upsertBlockFull(db, start, end, res.Title, res.Summary, res.Category, app, actsJSON, len(frames), 0, "done", "", res.Productive); err != nil {
 			return done, err
+		}
+		if j != nil {
+			if jerr := setBlockJudgment(db, start, j.Confidence, j.Quality, j.SameAsPrev); jerr != nil {
+				debugf(cfg, "summarize %s: setBlockJudgment: %v", start.Format("15:04"), jerr)
+			}
 		}
 		done++
 		log.Printf("summarized %s-%s: %s", start.Format("15:04"), end.Format("15:04"), res.Title)
