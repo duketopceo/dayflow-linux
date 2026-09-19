@@ -321,6 +321,17 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		end := start.Add(time.Duration(cfg.BlockMinutes) * time.Minute)
 		attempts := blockAttempts(db, start)
 		if attempts >= maxAttempts {
+			// Jev triage grants exactly one extra attempt to failures it
+			// judges transient (attempts==maxAttempts fires once only).
+			if attempts == maxAttempts {
+				var errText string
+				db.QueryRow(`SELECT error FROM blocks WHERE start_ts=?`, start.Unix()).Scan(&errText)
+				if judgeRetryable(db, cfg, start, errText) {
+					db.Exec(`UPDATE blocks SET attempts=? WHERE start_ts=?`, maxAttempts-1, start.Unix())
+					logEvent(db, "judge_requeue", start.Format("15:04"))
+					continue
+				}
+			}
 			db.Exec(`UPDATE blocks SET status='dead' WHERE start_ts=?`, start.Unix())
 			logEvent(db, "block_dead", start.Format("15:04"))
 			continue

@@ -210,3 +210,19 @@ func applyJudgment(res *blockResult, j *blockJudgment) {
 		res.Productive = j.Productive
 	}
 }
+
+// judgeRetryable asks Jev whether a repeatedly-failed block's error is
+// plausibly transient. Judge failure returns false — the block goes dead,
+// which is the pre-Jev behavior.
+func judgeRetryable(db *sql.DB, cfg Config, start time.Time, errText string) bool {
+	state := boundState(fmt.Sprintf("A screen-activity summarization block failed repeatedly.\nTime: %s\nError:\n%s",
+		start.Format("2006-01-02 15:04"), errText), 2000)
+	ans, _, err := decide(db, cfg, "triage", state, map[string]string{
+		"retryable": "The failure is plausibly transient (rate limit, network, temporary provider error) and one more retry could succeed — not an auth, billing, or config error.",
+	})
+	if err != nil {
+		debugf(cfg, "triage %s: judge failed: %v", start.Format("15:04"), err)
+		return false
+	}
+	return ans["retryable"] >= 0.5
+}

@@ -288,3 +288,39 @@ func TestApplyJudgmentFallback(t *testing.T) {
 		t.Fatalf("res = %+v", res)
 	}
 }
+
+func TestJudgeRetryable(t *testing.T) {
+	testEnv(t)
+	start := time.Date(2026, 9, 18, 9, 0, 0, 0, time.Local)
+	cases := []struct {
+		name  string
+		score float64
+		want  bool
+	}{
+		{"transient 429", 0.8, true},
+		{"terminal 401", 0.1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := decisionsTestServer(200, fmt.Sprintf(
+				`{"model":"m","answers":{"retryable":{"type":"noul","noul":%v}},"usage":{}}`, tc.score))
+			defer srv.Close()
+			old := decisionsURL
+			decisionsURL = srv.URL
+			defer func() { decisionsURL = old }()
+			cfg := Config{OpenRouterAPIKey: "k"}
+			if got := judgeRetryable(nil, cfg, start, "api error"); got != tc.want {
+				t.Fatalf("judgeRetryable = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// judge unreachable → false (dead, the pre-Jev behavior)
+	srv, _ := decisionsTestServer(500, `{}`)
+	defer srv.Close()
+	old := decisionsURL
+	decisionsURL = srv.URL
+	defer func() { decisionsURL = old }()
+	if judgeRetryable(nil, Config{OpenRouterAPIKey: "k"}, start, "boom") {
+		t.Fatal("unreachable judge should return false")
+	}
+}
