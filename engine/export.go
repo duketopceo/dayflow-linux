@@ -89,19 +89,20 @@ func monthBounds(t time.Time) (time.Time, time.Time) {
 // Card is a merged activity card: consecutive blocks about the same thing
 // (same title, or same dominant app + category) folded into one span.
 type Card struct {
-	Start      time.Time `json:"-"`
-	End        time.Time `json:"-"`
-	StartStr   string    `json:"start"`
-	EndStr     string    `json:"end"`
-	App        string    `json:"app"`
-	AppName    string    `json:"app_name"`
-	Title      string    `json:"title"`
-	Summary    string    `json:"summary"`
-	Category   string    `json:"category"`
-	Productive bool      `json:"productive"`
-	Blocks     int       `json:"blocks"`
-	Minutes    int       `json:"minutes"`
-	Children   []Block   `json:"children"`
+	Start         time.Time `json:"-"`
+	End           time.Time `json:"-"`
+	StartStr      string    `json:"start"`
+	EndStr        string    `json:"end"`
+	App           string    `json:"app"`
+	AppName       string    `json:"app_name"`
+	Title         string    `json:"title"`
+	Summary       string    `json:"summary"`
+	Category      string    `json:"category"`
+	Productive    bool      `json:"productive"`
+	Blocks        int       `json:"blocks"`
+	Minutes       int       `json:"minutes"`
+	LowConfidence bool      `json:"low_confidence,omitempty"`
+	Children      []Block   `json:"children"`
 }
 
 // mergeCards folds adjacent blocks into one span when Jev judged continuity
@@ -128,15 +129,24 @@ func mergeCards(blocks []Block) []Card {
 			out[n-1].Title = b.Title
 			out[n-1].Summary = b.Summary
 			out[n-1].Children = append(out[n-1].Children, b)
+			out[n-1].LowConfidence = out[n-1].LowConfidence || blockLowConfidence(b)
 			continue
 		}
 		out = append(out, Card{
 			Start: b.Start, End: b.End, StartStr: b.StartStr, EndStr: b.EndStr,
 			App: b.App, AppName: b.AppName, Title: b.Title, Summary: b.Summary,
-			Category: b.Category, Productive: b.IsProductive(), Blocks: 1, Minutes: mins, Children: []Block{b},
+			Category: b.Category, Productive: b.IsProductive(), Blocks: 1, Minutes: mins,
+			LowConfidence: blockLowConfidence(b), Children: []Block{b},
 		})
 	}
 	return out
+}
+
+// blockLowConfidence reports whether Jev scored any of the block's judgments
+// below the low-confidence threshold — the UI's flag signal.
+func blockLowConfidence(b Block) bool {
+	return (b.CategoryConfidence != nil && *b.CategoryConfidence < lowConfidenceThreshold) ||
+		(b.QualityConfidence != nil && *b.QualityConfidence < lowConfidenceThreshold)
 }
 
 // writeExportFile writes markdown to path atomically (tmp + rename), creating

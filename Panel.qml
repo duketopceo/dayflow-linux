@@ -222,7 +222,9 @@ Panel {
     for (var i = 0; i < list.length; i++) {
       var b = list[i]
       var prev = spans.length ? spans[spans.length - 1] : null
-      var same = prev && (b.title === prev.title ||
+      var lowConf = (b.category_confidence !== undefined && b.category_confidence < 0.55) ||
+                    (b.quality_confidence !== undefined && b.quality_confidence < 0.55)
+      var same = prev && (b.same_as_prev === true || b.title === prev.title ||
         (b.app === prev.app && b.category === prev.category))
       if (same) {
         prev.children.push(b)
@@ -233,6 +235,7 @@ Panel {
         prev.title = b.title
         prev.summary = b.summary
         prev.productive = prev.productive || (b.productive === true)
+        prev.low_confidence = prev.low_confidence || lowConf
       } else {
         spans.push({
           start: b.start, end: b.end,
@@ -243,6 +246,7 @@ Panel {
           appName: b.app_name || dayflow.appDisplayName(b.app),
           minutes: Math.round((Number(b.end_ts) - Number(b.start_ts)) / 60),
           count: 1,
+          low_confidence: lowConf,
           children: [b]
         })
       }

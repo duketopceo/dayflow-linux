@@ -106,6 +106,22 @@ Flickable {
         }
 
         Text {
+          // Jev scored a judgment on this card below the confidence
+          // threshold — treat the label/summary as suspect.
+          id: lowConfMark
+          visible: modelData.low_confidence === true
+          anchors.right: durText.left
+          anchors.rightMargin: Style.space(6)
+          anchors.verticalCenter: parent.verticalCenter
+          text: "?"
+          textFormat: Text.PlainText
+          color: Qt.rgba(0.95, 0.70, 0.15, 1.0)
+          font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+
+        Text {
           id: durText
           anchors.right: parent.right
           anchors.rightMargin: Style.space(12)

@@ -40,7 +40,9 @@ Flickable {
 
         Text {
           text: "Tomorrow · " + (pane.forecast ? pane.forecast.weekday : "") +
-                " · " + (pane.forecast ? pane.forecast.confidence : "") + " conf"
+                " · " + (pane.forecast ? pane.forecast.confidence : "") + " conf" +
+                (pane.forecast && pane.forecast.confidence_score !== undefined
+                  ? " · jev " + Math.round(pane.forecast.confidence_score * 100) + "%" : "")
           textFormat: Text.PlainText
           color: pane.dayflow ? pane.dayflow.dim : "gray"
           font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
