@@ -12,7 +12,7 @@ import (
 )
 
 func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
-	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,status,COALESCE(error,'') FROM blocks
+	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,category_confidence,same_as_prev,status,COALESCE(error,'') FROM blocks
 	  WHERE start_ts >= ? AND start_ts < ? AND status IN ('done','dead','failed') ORDER BY start_ts`,
 		start.Unix(), end.Unix())
 	if err != nil {
@@ -25,11 +25,21 @@ func blocksBetween(db *sql.DB, start, end time.Time) ([]Block, error) {
 		var s, e int64
 		var acts string
 		var prod sql.NullBool
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &b.Status, &b.Error); err != nil {
+		var conf sql.NullFloat64
+		var same sql.NullInt64
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &conf, &same, &b.Status, &b.Error); err != nil {
 			return nil, err
 		}
 		if prod.Valid {
 			b.Productive = &prod.Bool
+		}
+		if conf.Valid {
+			v := conf.Float64
+			b.CategoryConfidence = &v
+		}
+		if same.Valid {
+			v := same.Int64 == 1
+			b.SameAsPrev = &v
 		}
 		if acts != "" {
 			json.Unmarshal([]byte(acts), &b.Activities)

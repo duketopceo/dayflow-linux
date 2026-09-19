@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS blocks (
   status      TEXT NOT NULL DEFAULT 'done',
   error       TEXT NOT NULL DEFAULT '',
   created_at  INTEGER NOT NULL,
-  productive  INTEGER DEFAULT NULL
+  productive  INTEGER DEFAULT NULL,
+  category_confidence REAL DEFAULT NULL,
+  same_as_prev INTEGER DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS blocks_status ON blocks(status);
 
@@ -174,6 +176,8 @@ var columnPatches = []struct {
 	{"blocks", "app", `ALTER TABLE blocks ADD COLUMN app TEXT NOT NULL DEFAULT ''`},
 	{"blocks", "activities", `ALTER TABLE blocks ADD COLUMN activities TEXT NOT NULL DEFAULT ''`},
 	{"blocks", "productive", `ALTER TABLE blocks ADD COLUMN productive INTEGER DEFAULT NULL`},
+	{"blocks", "category_confidence", `ALTER TABLE blocks ADD COLUMN category_confidence REAL DEFAULT NULL`},
+	{"blocks", "same_as_prev", `ALTER TABLE blocks ADD COLUMN same_as_prev INTEGER DEFAULT NULL`},
 }
 
 func hasColumn(db *sql.DB, table, column string) (bool, error) {
@@ -386,6 +390,32 @@ func upsertBlockFull(db *sql.DB, start, end time.Time, title, summary, category,
 	return err
 }
 
+// setBlockJudgment stores Jev's calibrated judgments on an existing block row.
+// Nil pointers leave the column NULL — "no opinion" stays distinguishable
+// from a confident zero.
+func setBlockJudgment(db *sql.DB, start time.Time, confidence *float64, sameAsPrev *bool) error {
+	sets := []string{}
+	args := []any{}
+	if confidence != nil {
+		sets = append(sets, "category_confidence = ?")
+		args = append(args, *confidence)
+	}
+	if sameAsPrev != nil {
+		v := int64(0)
+		if *sameAsPrev {
+			v = 1
+		}
+		sets = append(sets, "same_as_prev = ?")
+		args = append(args, v)
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	args = append(args, start.Unix())
+	_, err := db.Exec(`UPDATE blocks SET `+strings.Join(sets, ", ")+` WHERE start_ts = ?`, args...)
+	return err
+}
+
 // flagFailedBlock gives dead/failed blocks a visible identity at read time
 // (DB rows stay untouched): they render as "Recording failed" entries so
 // gaps in timelines and exports are explainable instead of invisible.
@@ -430,22 +460,24 @@ type Activity struct {
 }
 
 type Block struct {
-	Start      time.Time  `json:"-"`
-	End        time.Time  `json:"-"`
-	StartTs    int64      `json:"start_ts"`
-	EndTs      int64      `json:"end_ts"`
-	StartStr   string     `json:"start"`
-	EndStr     string     `json:"end"`
-	Title      string     `json:"title"`
-	Summary    string     `json:"summary"`
-	Category   string     `json:"category"`
-	App        string     `json:"app"`
-	AppName    string     `json:"app_name"`
-	Productive *bool      `json:"productive,omitempty"`
-	Activities []Activity `json:"activities,omitempty"`
-	FrameCount int        `json:"frame_count"`
-	Status     string     `json:"status"`
-	Error      string     `json:"error,omitempty"`
+	Start              time.Time  `json:"-"`
+	End                time.Time  `json:"-"`
+	StartTs            int64      `json:"start_ts"`
+	EndTs              int64      `json:"end_ts"`
+	StartStr           string     `json:"start"`
+	EndStr             string     `json:"end"`
+	Title              string     `json:"title"`
+	Summary            string     `json:"summary"`
+	Category           string     `json:"category"`
+	App                string     `json:"app"`
+	AppName            string     `json:"app_name"`
+	Productive         *bool      `json:"productive,omitempty"`
+	CategoryConfidence *float64   `json:"category_confidence,omitempty"`
+	SameAsPrev         *bool      `json:"same_as_prev,omitempty"`
+	Activities         []Activity `json:"activities,omitempty"`
+	FrameCount         int        `json:"frame_count"`
+	Status             string     `json:"status"`
+	Error              string     `json:"error,omitempty"`
 }
 
 // IsProductive returns true for blocks the LLM flagged as productive, or
@@ -464,7 +496,7 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 	if desc {
 		order = "DESC"
 	}
-	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,status,COALESCE(error,'') FROM blocks
+	q := `SELECT start_ts,end_ts,title,summary,category,frame_count,app,activities,productive,category_confidence,same_as_prev,status,COALESCE(error,'') FROM blocks
 	  WHERE start_ts >= ? AND start_ts < ? AND status IN ('done','dead','failed') ORDER BY start_ts ` + order
 	rows, err := db.Query(q, start.Unix(), end.Unix())
 	if err != nil {
@@ -477,11 +509,21 @@ func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 		var s, e int64
 		var acts string
 		var prod sql.NullBool
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &b.Status, &b.Error); err != nil {
+		var conf sql.NullFloat64
+		var same sql.NullInt64
+		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.FrameCount, &b.App, &acts, &prod, &conf, &same, &b.Status, &b.Error); err != nil {
 			return nil, err
 		}
 		if prod.Valid {
 			b.Productive = &prod.Bool
+		}
+		if conf.Valid {
+			v := conf.Float64
+			b.CategoryConfidence = &v
+		}
+		if same.Valid {
+			v := same.Int64 == 1
+			b.SameAsPrev = &v
 		}
 		if acts != "" {
 			json.Unmarshal([]byte(acts), &b.Activities)
@@ -539,11 +581,11 @@ func logAPICall(db *sql.DB, blockStart time.Time, model string, framesSent, prom
 }
 
 type usageRow struct {
-	Calls      int `json:"calls"`
-	OK         int `json:"ok"`
-	Failed     int `json:"failed"`
-	PromptTok  int `json:"prompt_tokens"`
-	ComplTok   int `json:"completion_tokens"`
+	Calls     int `json:"calls"`
+	OK        int `json:"ok"`
+	Failed    int `json:"failed"`
+	PromptTok int `json:"prompt_tokens"`
+	ComplTok  int `json:"completion_tokens"`
 }
 
 // usageGroup aggregates one ledger grouped by a column. The select must
