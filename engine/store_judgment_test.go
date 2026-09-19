@@ -70,3 +70,41 @@ func TestSetBlockJudgmentNilPreservesColumn(t *testing.T) {
 		t.Fatalf("same_as_prev overwritten: %d", same)
 	}
 }
+
+func TestMergeCardsSameAsPrev(t *testing.T) {
+	base := time.Date(2026, 9, 18, 9, 0, 0, 0, time.Local)
+	mk := func(i int, title, app, cat string, same *bool) Block {
+		s := base.Add(time.Duration(i*15) * time.Minute)
+		e := s.Add(15 * time.Minute)
+		return Block{Start: s, End: e, Title: title, App: app, Category: cat,
+			SameAsPrev: same, StartStr: s.Format("15:04"), EndStr: e.Format("15:04")}
+	}
+	tru, fal := true, false
+
+	// jev continuity merges despite differing titles/apps
+	cards := mergeCards([]Block{
+		mk(0, "Refactor engine", "neovim", "coding", nil),
+		mk(1, "Read engine docs", "firefox", "browsing", &tru),
+	})
+	if len(cards) != 1 || cards[0].Blocks != 2 {
+		t.Fatalf("cards = %+v", cards)
+	}
+
+	// nil judgment → heuristic unchanged: differing everything stays split
+	cards = mergeCards([]Block{
+		mk(0, "Refactor engine", "neovim", "coding", nil),
+		mk(1, "Read engine docs", "firefox", "browsing", nil),
+	})
+	if len(cards) != 2 {
+		t.Fatalf("cards = %d", len(cards))
+	}
+
+	// jev "no" does not veto the heuristic title match
+	cards = mergeCards([]Block{
+		mk(0, "Same title", "neovim", "coding", nil),
+		mk(1, "Same title", "neovim", "coding", &fal),
+	})
+	if len(cards) != 1 {
+		t.Fatalf("cards = %d", len(cards))
+	}
+}

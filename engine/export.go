@@ -104,9 +104,11 @@ type Card struct {
 	Children   []Block   `json:"children"`
 }
 
-// mergeCards folds adjacent blocks with the same title or the same dominant
-// app + category into one span. The latest block's title/summary win since
-// they describe where the span ended up; children keep the raw blocks.
+// mergeCards folds adjacent blocks into one span when Jev judged continuity
+// (same_as_prev) or the title/app+category heuristic matches. A Jev "no"
+// never vetoes the heuristic — the judgment informs, it doesn't hide data.
+// The latest block's title/summary win since they describe where the span
+// ended up; children keep the raw blocks.
 func mergeCards(blocks []Block) []Card {
 	sorted := make([]Block, len(blocks))
 	copy(sorted, blocks)
@@ -115,7 +117,8 @@ func mergeCards(blocks []Block) []Card {
 	for _, b := range sorted {
 		mins := int(b.End.Sub(b.Start).Minutes())
 		if n := len(out); n > 0 &&
-			(b.Title == out[n-1].Title ||
+			((b.SameAsPrev != nil && *b.SameAsPrev) ||
+				b.Title == out[n-1].Title ||
 				(b.App != "" && out[n-1].App == b.App && b.Category == out[n-1].Category)) {
 			out[n-1].End = b.End
 			out[n-1].EndStr = b.EndStr
