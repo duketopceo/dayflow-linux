@@ -144,6 +144,14 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 	if err := json.Unmarshal([]byte(text), &res); err != nil {
 		return nil, 0, 0, fmt.Errorf("bad model JSON: %w (raw: %s)", err, truncate(text, 200))
 	}
+	if cfg.JevClassification {
+		jpt, err := classifyWithJev(cfg, &res)
+		if err != nil {
+			debugf(cfg, "jev classification failed, keeping vision labels: %v", err)
+		} else {
+			pt += jpt
+		}
+	}
 	sanitizeResult(cfg, &res)
 	return &res, pt, ct, nil
 }

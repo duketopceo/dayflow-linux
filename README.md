@@ -13,7 +13,8 @@ It captures a lightweight screenshot every 10 seconds, deduplicates unchanged fr
 - **Light**: single static Go binary, ~25MB RAM, sub-1% CPU.
 - **Private controls**: pause toggle, per-app ignore list, automatic frame deletion, retention pruning.
 - **Activity chunking**: each block is split into per-app segments (`activities[]`) and consecutive same-app blocks merge into cards. Failed summaries retry automatically (max 3 attempts, then `dead`; `dayflow retry` resets).
-- **Multi-provider routing**: configure multiple OpenRouter / custom / local / MCP providers and route vision, summary, review, standup, and chat tasks to different endpoints.
+- **Multi-provider routing**: configure multiple OpenRouter / custom / local / MCP providers and route vision, summary, review, standup, chat, and classification tasks to different endpoints.
+- **Jev classification**: after the vision model writes title/summary, [TypeSafe Jev](https://openrouter.ai/typesafe/jev-1.13) (`typesafe/jev-1.13` via OpenRouter's decisions API) picks category and productive flag — fast, typed, and calibrated instead of asking the vision model to guess both.
 - **Chat with your journal**: ask natural-language questions about your timeline, standup, weekly analytics, or search your journal.
 - **Inline editing**: correct a block's title, category, summary, or productive flag; edits overlay the raw row and flow into analytics.
 - **Standup drafts**: save highlights, tasks, blockers, and priorities; they appear in generated standup updates.
@@ -181,6 +182,8 @@ All query commands accept `--json`.
 | `output` | `""` | restrict capture to one monitor (`grim -o`) |
 | `capture_command` | `""` | custom screenshot command (writes image to stdout) |
 | `openrouter_api_key` | `""` | API key |
+| `jev_classification` | `true` | use Jev for category + productive after vision summarization |
+| `classification_model` | `typesafe/jev-1.13` | Jev model slug (OpenRouter decisions API) |
 | `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
 
 ## Backups
