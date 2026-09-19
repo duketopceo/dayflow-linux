@@ -23,6 +23,11 @@ func testEnv(t *testing.T) Config {
 	t.Setenv("OPENROUTER_API_KEY", "")
 	cfg := defaultConfig()
 	cfg.OpenRouterAPIKey = "test-key"
+	// Jev calls must never egress from tests — point at a dead endpoint so
+	// classifyWithJev fails fast and degrades to vision labels.
+	old := decisionsURL
+	decisionsURL = "http://127.0.0.1:1/"
+	t.Cleanup(func() { decisionsURL = old })
 	return cfg
 }
 
