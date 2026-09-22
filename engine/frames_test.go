@@ -39,18 +39,18 @@ func TestFramesForDayBoundsAndExists(t *testing.T) {
 }
 
 func TestSetPlayback(t *testing.T) {
-	// enabling applies the standard cap only when storage is unlimited
-	cfg, changed := setPlayback(Config{MaxStorageMB: 0}, true)
-	if !changed || !cfg.KeepFrames || cfg.MaxStorageMB != playbackCapMB {
+	// enabling applies the standard cap only when frames are unlimited
+	cfg, changed := setPlayback(Config{MaxFramesMB: 0}, true)
+	if !changed || !cfg.KeepFrames || cfg.MaxFramesMB != playbackCapMB {
 		t.Fatalf("enable on unlimited cfg: %+v changed=%v", cfg, changed)
 	}
 	// an explicit cap survives
-	cfg, _ = setPlayback(Config{MaxStorageMB: 2048}, true)
-	if cfg.MaxStorageMB != 2048 {
-		t.Fatalf("explicit cap clobbered: %d", cfg.MaxStorageMB)
+	cfg, _ = setPlayback(Config{MaxFramesMB: 2048}, true)
+	if cfg.MaxFramesMB != 2048 {
+		t.Fatalf("explicit cap clobbered: %d", cfg.MaxFramesMB)
 	}
 	// idempotent
-	if _, changed := setPlayback(Config{KeepFrames: true, MaxStorageMB: 10240}, true); changed {
+	if _, changed := setPlayback(Config{KeepFrames: true, MaxFramesMB: 10240}, true); changed {
 		t.Fatal("re-enabling should be a no-op")
 	}
 	// disabling keeps the cap, drops retention

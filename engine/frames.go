@@ -93,8 +93,8 @@ func playbackOn(cfg Config) bool { return cfg.KeepFrames }
 func setPlayback(cfg Config, on bool) (Config, bool) {
 	changed := cfg.KeepFrames != on
 	cfg.KeepFrames = on
-	if on && cfg.MaxStorageMB == 0 {
-		cfg.MaxStorageMB = playbackCapMB
+	if on && cfg.MaxFramesMB == 0 {
+		cfg.MaxFramesMB = playbackCapMB
 		changed = true
 	}
 	return cfg, changed
@@ -102,9 +102,9 @@ func setPlayback(cfg Config, on bool) (Config, bool) {
 
 func printPlaybackStatus(cfg Config, jsonOut bool) {
 	st := map[string]any{
-		"enabled":        playbackOn(cfg),
-		"keep_frames":    cfg.KeepFrames,
-		"max_storage_mb": cfg.MaxStorageMB,
+		"enabled":       playbackOn(cfg),
+		"keep_frames":   cfg.KeepFrames,
+		"max_frames_mb": cfg.MaxFramesMB,
 	}
 	if jsonOut {
 		json.NewEncoder(os.Stdout).Encode(st)
@@ -115,8 +115,8 @@ func printPlaybackStatus(cfg Config, jsonOut bool) {
 		state = "on"
 	}
 	cap := "unlimited"
-	if cfg.MaxStorageMB > 0 {
-		cap = fmt.Sprintf("%d MB", cfg.MaxStorageMB)
+	if cfg.MaxFramesMB > 0 {
+		cap = fmt.Sprintf("%d MB", cfg.MaxFramesMB)
 	}
-	fmt.Printf("playback: %s (keep_frames=%v, storage cap=%s)\n", state, cfg.KeepFrames, cap)
+	fmt.Printf("playback: %s (keep_frames=%v, frames cap=%s)\n", state, cfg.KeepFrames, cap)
 }

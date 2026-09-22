@@ -125,6 +125,7 @@ func TestReconcileStaleRows(t *testing.T) {
 
 func TestReconcilePurgesExpiredQuarantine(t *testing.T) {
 	cfg := testEnv(t)
+	cfg.RetentionDays = 7 // quarantine expiry is off by default now
 	db, err := openDB()
 	if err != nil {
 		t.Fatal(err)

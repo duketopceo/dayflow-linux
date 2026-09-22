@@ -1416,9 +1416,10 @@ func printStats(cfg Config, asJSON bool) {
 				"db_bytes": dbBytes, "db": humanBytes(dbBytes),
 				"wal_bytes": walBytes, "wal": humanBytes(walBytes),
 				"frames_bytes": framesBytes, "frames": humanBytes(framesBytes),
-				"frame_files": frameFiles,
-				"data_dir":    dataDir(),
-				"cap_mb":      cfg.MaxStorageMB,
+				"frame_files":   frameFiles,
+				"data_dir":      dataDir(),
+				"cap_mb":        cfg.MaxStorageMB,
+				"frames_cap_mb": cfg.MaxFramesMB, "db_cap_mb": cfg.MaxDBMB,
 			},
 			"blocks": map[string]any{
 				"total": blocksTotal, "done": blocksDone,
@@ -1436,6 +1437,7 @@ func printStats(cfg Config, asJSON bool) {
 				"provider": cfg.Provider, "model": cfg.Model,
 				"retention_days": cfg.RetentionDays, "keep_frames": cfg.KeepFrames,
 				"max_storage_mb": cfg.MaxStorageMB, "debug": cfg.Debug,
+				"max_frames_mb": cfg.MaxFramesMB, "max_db_mb": cfg.MaxDBMB,
 			},
 		})
 		return
@@ -1445,7 +1447,12 @@ func printStats(cfg Config, asJSON bool) {
 	fmt.Printf("  data dir:   %s (%s)\n", humanBytes(totalBytes), dataDir())
 	fmt.Printf("  database:   %s + %s wal\n", humanBytes(dbBytes), humanBytes(walBytes))
 	fmt.Printf("  frames:     %s (%d files awaiting summary)\n", humanBytes(framesBytes), frameFiles)
-	fmt.Printf("  cap:        %s\n", map[bool]string{true: "unlimited", false: fmt.Sprintf("%d MB", cfg.MaxStorageMB)}[cfg.MaxStorageMB == 0])
+	fmt.Printf("  caps:       frames %s · db %s\n",
+		map[bool]string{true: "unlimited", false: fmt.Sprintf("%d MB", cfg.MaxFramesMB)}[cfg.MaxFramesMB == 0],
+		map[bool]string{true: "unlimited", false: fmt.Sprintf("%d MB", cfg.MaxDBMB)}[cfg.MaxDBMB == 0])
+	if cfg.MaxStorageMB > 0 {
+		fmt.Printf("  legacy cap: %d MB (whole dir)\n", cfg.MaxStorageMB)
+	}
 	fmt.Printf("Journal\n")
 	fmt.Printf("  blocks:     %d total (%d done, %d failed, %d dead)\n", blocksTotal, blocksDone, blocksFailed, blocksDead)
 	if firstDay != "" {

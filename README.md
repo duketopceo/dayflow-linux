@@ -180,8 +180,10 @@ All query commands accept `--json`.
 | `frames_per_block` | 30 | frames sampled per API call |
 | `jpeg_quality` | 55 | grim JPEG quality |
 | `keep_frames` | false | keep raw frames after summarizing |
-| `retention_days` | 7 | prunes frames, events, and api logs |
-| `max_storage_mb` | 10240 | cap on the whole data dir (frames + db + wal); 0 = unlimited |
+| `retention_days` | 0 | prunes frames, events, and api logs older than N days; 0 = keep until the storage caps below |
+| `max_frames_mb` | 20480 | cap on frames + quarantine dirs; 0 = unlimited |
+| `max_db_mb` | 10240 | cap on the journal database (blocks, events, calls); 0 = unlimited |
+| `max_storage_mb` | 0 | legacy combined cap on the whole data dir — honored when present and migrates to `max_frames_mb` on older configs; leave 0 with the split caps |
 | `auto_pause_locked` | true | pause capture while the session is locked (via loginctl) |
 | `ignore_apps` | `[]` | window classes never captured (Hyprland) |
 | `output` | `""` | restrict capture to one monitor (`grim -o`) |
@@ -224,8 +226,8 @@ API keys are redacted from backups on purpose, so re-set them with
 - `dayflow pause` (or right-click the bar widget) drops a flag file the daemon checks before every capture.
 - Capture automatically pauses while your session is locked when `auto_pause_locked` is true (via `loginctl`).
 - Ignored apps are skipped at capture time — their frames are never written to disk.
-- All frames are deleted after summarization unless `keep_frames` is on; retention pruning removes anything older than `retention_days`.
-- `max_storage_mb` caps the entire data directory; oldest summarized frames and then oldest journal rows are pruned and vacuumed.
+- All frames are deleted after summarization unless `keep_frames` is on; `max_frames_mb` and `max_db_mb` cap each pool independently (oldest data evicted first), and `retention_days` optionally prunes by age on top.
+- `max_frames_mb` caps frames + quarantine (oldest summarized frames evicted first); `max_db_mb` caps the journal database (log tables trimmed, then oldest blocks pruned and vacuumed). A legacy `max_storage_mb` still caps the whole directory when set.
 - Everything lives in `~/.local/share/dayflow/` — `rm -rf` it to wipe all data.
 
 For a plain-language summary, see [PRIVACY.md](PRIVACY.md).
