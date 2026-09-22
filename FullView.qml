@@ -95,6 +95,24 @@ FloatingWindow {
     }
   }
 
+  // Watchdog: the engine bounds recap generation internally (~45s), but a
+  // wedged provider or hung scan could still outlive it — kill the process
+  // and surface the metadata-only state rather than spinning forever.
+  Timer {
+    id: agentsWatchdog
+    interval: 75000
+    running: agentsProc.running
+    repeat: false
+    onTriggered: {
+      root.dayflow.uilog("agents watchdog: killing hung agentsProc")
+      agentsProc.running = false
+      root.agentsLoading = false
+      root.agentSessions = []
+      root.agentsError = "agent scan timed out — recaps skipped"
+      root.agentsPending = false
+    }
+  }
+
   // ---- context-shift graph ----
   // Bipartite flow: same categories on both columns, links sized by minutes.
   function ctxNodes() {

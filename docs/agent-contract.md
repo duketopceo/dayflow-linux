@@ -107,7 +107,26 @@ Notes:
   `confidence` remains the sample-count heuristic. Jev unreachable → field
   absent.
 - Judge calls are recorded in `llm_calls` with `task='judge:<kind>'`,
-  `provider='typesafe'` (kinds: block, triage, standup, forecast, shifts).
+  `provider='typesafe'` (kinds: block, triage, standup, forecast, shifts,
+  agent_recap).
+- `dayflow agents --json`: `recap` is a generated one-line summary cached in
+  `agent_recaps` per transcript path (invalidated on file mtime/size);
+  `recap_confidence` is Jev's quality score (null = no opinion). Sessions
+  judged unworthy keep `recap` empty permanently for that transcript
+  version. `--no-recaps` skips all model calls; `dayflow mcp` never
+  generates recaps (judges disabled) but would serve cached ones.
+  `agent_recaps: false` in config is the durable opt-out — cached rows are
+  still served, nothing new is generated. Generation egress is a bounded
+  excerpt (≤2 KB, first/last user message + last assistant reply) scrubbed
+  of home paths and common token shapes; generation calls log as
+  `task='agent_recap'` in `llm_calls`.
+- `dayflow goal --json`: `streak` = `{current, best, total}` consecutive-day
+  completion counts. Viewed day pending → `current` counts back from
+  yesterday; any past day without a completed goal breaks a run.
+- `dayflow weekly --json` `trends`: `has_prev` false means no prior-week
+  data — render nothing. `categories[]` covers the union of both weeks
+  (dropped categories have `curr_minutes: 0`), sorted by |Δ minutes|;
+  `delta_share` is share-of-week change in percentage points.
 - Frame files under `frames/` exist only until their block is summarized
   unless `keep_frames` is on; files under `quarantine/` are untracked
   orphans awaiting review, not live data.

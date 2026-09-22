@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,6 +23,11 @@ type AgentSession struct {
 	Messages int    `json:"messages"`
 	Title    string `json:"title"`
 	File     string `json:"file"`
+	// Recap is a generated summary of what the session accomplished; empty
+	// when ungenerated, unworthy, or unavailable. RecapConfidence is the Jev
+	// quality score — nil means "no opinion", never zero.
+	Recap           string   `json:"recap,omitempty"`
+	RecapConfidence *float64 `json:"recap_confidence,omitempty"`
 }
 
 func claudeDir() string {
@@ -144,7 +150,8 @@ func contentText(raw json.RawMessage) string {
 		return ""
 	}
 	for _, p := range parts {
-		if (p.Type == "text" || p.Type == "input_text") && strings.TrimSpace(p.Text) != "" {
+		if (p.Type == "text" || p.Type == "input_text" || p.Type == "output_text") &&
+			strings.TrimSpace(p.Text) != "" {
 			return p.Text
 		}
 	}
@@ -233,8 +240,11 @@ func projectName(cwd, file string) string {
 	return strings.TrimSuffix(filepath.Base(file), ".jsonl")
 }
 
-func printAgentSessions(d time.Time, jsonOut bool) {
+func printAgentSessions(db *sql.DB, cfg Config, d time.Time, jsonOut, recaps bool) {
 	sessions := agentSessionsForDay(d)
+	if recaps {
+		attachRecaps(db, cfg, sessions)
+	}
 	if jsonOut {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"date":     d.Local().Format("2006-01-02"),
@@ -252,5 +262,8 @@ func printAgentSessions(d time.Time, jsonOut bool) {
 		end := time.Unix(s.End, 0).Local().Format("15:04")
 		fmt.Printf("%s–%s  %-6s %-20s %d msgs  %s\n",
 			start, end, s.Source, s.Project, s.Messages, s.Title)
+		if s.Recap != "" {
+			fmt.Printf("         └─ %s\n", s.Recap)
+		}
 	}
 }

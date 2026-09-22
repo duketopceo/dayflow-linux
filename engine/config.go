@@ -41,6 +41,7 @@ type Config struct {
 	Categories           []Category `json:"categories"`
 	ClassificationPrompt string     `json:"classification_prompt"` // extra instructions for the vision model
 	JevClassification    bool       `json:"jev_classification"`    // use Jev for category/productive (default true)
+	AgentRecaps          bool       `json:"agent_recaps"`          // generate agent-session recaps (default true; false = durable no-egress opt-out)
 	ClassificationModel  string     `json:"classification_model"`  // Jev model slug; default typesafe/jev-1.13
 	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
@@ -115,6 +116,7 @@ func defaultConfig() Config {
 		ClassificationPrompt: defaultClassificationPrompt,
 		JevClassification:    true,
 		ClassificationModel:  defaultJevModel,
+		AgentRecaps:          true,
 	}
 }
 
@@ -189,6 +191,9 @@ func loadConfig() (Config, error) {
 	}
 	if !strings.Contains(string(b), "jev_classification") {
 		cfg.JevClassification = true
+	}
+	if !strings.Contains(string(b), "agent_recaps") {
+		cfg.AgentRecaps = true
 	}
 	if cfg.ClassificationModel == "" {
 		cfg.ClassificationModel = defaultJevModel
@@ -407,6 +412,12 @@ func setConfigValue(key, value string) error {
 			return fmt.Errorf("jev_classification must be true or false")
 		}
 		cfg.JevClassification = b
+	case "agent_recaps":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("agent_recaps must be true or false")
+		}
+		cfg.AgentRecaps = b
 	case "classification_model":
 		cfg.ClassificationModel = value
 	case "categories":

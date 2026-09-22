@@ -112,32 +112,57 @@ Flickable {
         }
       }
 
-      TextInput {
-        width: parent.width - Style.space(30)
-        text: dayflow.dayGoal.goal
-        color: dayflow.foreground
-        font.family: dayflow.fontFamily
-        font.pixelSize: Style.font.body
-        clip: true
-        selectByMouse: true
+      Item {
+        width: parent.width - Style.space(30) -
+          (streakChip.visible ? streakChip.implicitWidth + Style.space(8) : 0)
+        height: goalInput.implicitHeight
         anchors.verticalCenter: parent.verticalCenter
-        Keys.onReturnPressed: function(event) {
-          dayflow.procByName("goalSetProc").command = ["dayflow", "goal", "set", text, "--json"]
-          dayflow.procByName("goalSetProc").running = true
-          focus = false
+
+        TextInput {
+          id: goalInput
+          width: parent.width
+          text: dayflow.dayGoal.goal
+          color: dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.body
+          clip: true
+          selectByMouse: true
+          anchors.verticalCenter: parent.verticalCenter
+          Keys.onReturnPressed: function(event) {
+            dayflow.procByName("goalSetProc").command = ["dayflow", "goal", "set", text, "--json"]
+            dayflow.procByName("goalSetProc").running = true
+            focus = false
+          }
+        }
+
+        Text {
+          anchors.fill: parent
+          visible: dayflow.dayGoal.goal === ""
+          text: "Today's goal…"
+          textFormat: Text.PlainText
+          color: dayflow.dim
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+          verticalAlignment: Text.AlignVCenter
+          // overlays the empty input; clicks pass to the input under it
+          z: -1
         }
       }
 
       Text {
-        visible: dayflow.dayGoal.goal === ""
-        text: "Today's goal…"
+        id: streakChip
+        visible: !!dayflow.dayGoal.streak && dayflow.dayGoal.streak.current > 0
+        text: !!dayflow.dayGoal.streak
+          ? dayflow.dayGoal.streak.current + "d streak" +
+            (dayflow.dayGoal.streak.best > dayflow.dayGoal.streak.current
+              ? " · best " + dayflow.dayGoal.streak.best + "d" : "")
+          : ""
         textFormat: Text.PlainText
-        color: dayflow.dim
+        color: dayflow.accentFill(0.9)
         font.family: dayflow.fontFamily
         font.pixelSize: Style.font.caption
+        font.bold: true
         anchors.verticalCenter: parent.verticalCenter
-        // overlaps the empty TextInput — clicks pass to it via z-order
-        z: -1
       }
     }
   }

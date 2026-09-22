@@ -92,7 +92,10 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 	if err != nil {
 		return insights{}, err
 	}
+	return generateInsightsFromBlocks(blocks, cfg, start, end), nil
+}
 
+func generateInsightsFromBlocks(blocks []Block, cfg Config, start, end time.Time) insights {
 	in := insights{
 		Categories:      []insightDist{},
 		Apps:            []insightDist{},
@@ -163,7 +166,7 @@ func generateInsights(db *sql.DB, cfg Config, start, end time.Time) (insights, e
 		in.FocusBlocks = in.FocusBlocks[:5]
 	}
 
-	return in, nil
+	return in
 }
 
 func formatInsightsMarkdown(i insights, start, end time.Time, label string) string {

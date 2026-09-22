@@ -53,6 +53,7 @@ func TestSchemaHasNewTables(t *testing.T) {
 	tables := []string{
 		"chat_conversations", "chat_messages", "standup_drafts",
 		"journal_entries", "day_goals", "llm_calls", "block_edits",
+		"agent_recaps",
 	}
 	for _, name := range tables {
 		var n int
