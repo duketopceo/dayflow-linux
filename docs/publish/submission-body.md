@@ -21,8 +21,11 @@ every 10s, dedupes frames, and summarizes activity into a timeline via an
 OpenRouter vision model (any provider endpoint works — vision, summary, and
 classification tasks are independently routable). TypeSafe Jev (OpenRouter
 decisions API) provides calibrated category/judgment calls; all egress is
-config-gated and documented. Frames and the SQLite journal never leave the
-machine except sampled frames sent to the configured model. External
+config-gated and documented. Sampled frames go to the configured vision provider, TypeSafe Jev judge
+calls carry small block/session descriptors to the decisions endpoint,
+and agent-session recap generation sends a bounded, scrubbed transcript
+excerpt to the chat provider — all config-gated (`jev_classification`,
+`agent_recaps`). External
 dependency: an OpenRouter API key (or any compatible chat-completions
 endpoint, including local providers).
 

@@ -111,9 +111,10 @@ Notes:
   agent_recap).
 - `dayflow agents --json`: `recap` is a generated one-line summary cached in
   `agent_recaps` per transcript path (invalidated on file mtime/size);
-  `recap_confidence` is Jev's quality score (null = no opinion). Sessions
-  judged unworthy keep `recap` empty permanently for that transcript
-  version. `--no-recaps` skips all model calls; `dayflow mcp` never
+  `recap_confidence` is Jev's quality score. Both fields are `omitempty` —
+  they are *absent* (not `""`/`null`) when a session has no recap or no
+  quality score; consumers should treat a missing `recap` as "no recap",
+  which includes sessions judged unworthy for that transcript version. `--no-recaps` skips all model calls; `dayflow mcp` never
   generates recaps (judges disabled) but would serve cached ones.
   `agent_recaps: false` in config is the durable opt-out — cached rows are
   still served, nothing new is generated. Generation egress is a bounded

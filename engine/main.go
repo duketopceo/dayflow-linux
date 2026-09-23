@@ -275,9 +275,14 @@ func main() {
 		fatal(err)
 		var db *sql.DB
 		if !hasFlag(args, "--no-recaps") {
-			db, err = openDB()
-			fatal(err)
-			defer db.Close()
+			// The listing itself doesn't need the db — degrade to
+			// metadata-only rather than failing the command.
+			if db, err = openDB(); err != nil {
+				fmt.Fprintf(os.Stderr, "agents: recaps unavailable: %v\n", err)
+				db = nil
+			} else {
+				defer db.Close()
+			}
 		}
 		printAgentSessions(db, cfg, d, jsonOut, !hasFlag(args, "--no-recaps"))
 

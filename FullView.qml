@@ -73,10 +73,11 @@ FloatingWindow {
     }
     onExited: function(exitCode) {
       root.agentsLoading = false
-      if (exitCode !== 0) {
+      if (exitCode !== 0 && !root.agentsTimedOut) {
         root.agentSessions = []
         root.agentsError = "agent scan failed"
       }
+      root.agentsTimedOut = false
       if (root.agentsPending) {
         root.agentsPending = false
         root.agentsLoad()
@@ -98,6 +99,9 @@ FloatingWindow {
   // Watchdog: the engine bounds recap generation internally (~45s), but a
   // wedged provider or hung scan could still outlive it — kill the process
   // and surface the metadata-only state rather than spinning forever.
+  // agentsPending is cleared BEFORE stopping so onRunningChanged doesn't
+  // see a queued reload and restart the proc it just killed; agentsTimedOut
+  // makes onExited keep the timeout message instead of overwriting it.
   Timer {
     id: agentsWatchdog
     interval: 75000
@@ -105,11 +109,12 @@ FloatingWindow {
     repeat: false
     onTriggered: {
       root.dayflow.uilog("agents watchdog: killing hung agentsProc")
+      root.agentsPending = false
+      root.agentsTimedOut = true
       agentsProc.running = false
       root.agentsLoading = false
       root.agentSessions = []
       root.agentsError = "agent scan timed out — recaps skipped"
-      root.agentsPending = false
     }
   }
 
@@ -144,6 +149,7 @@ FloatingWindow {
 
   property bool tlPending: false
   property bool agentsPending: false
+  property bool agentsTimedOut: false
 
   function tlLoad() {
     if (!root.dayflow) return

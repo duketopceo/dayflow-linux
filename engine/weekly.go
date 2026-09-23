@@ -130,16 +130,21 @@ func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPa
 	highlights := buildHighlights(in)
 	prevStart, prevEnd := weekBounds(start.Add(-24 * time.Hour))
 	// One query serves both the category comparison and the shift delta.
-	prev := insights{}
-	if prevBlocks, err := blocksBetween(db, prevStart, prevEnd); err == nil {
-		prev = generateInsightsFromBlocks(prevBlocks, cfg, prevStart, prevEnd)
-		_, prevShifts := buildContextShifts(nonExcludedBlocks(prevBlocks))
-		p.Trends.ShiftDelta = p.ContextShiftCount - prevShifts
+	prevBlocks, err := blocksBetween(db, prevStart, prevEnd)
+	if err != nil {
+		return WeekPayload{}, err
 	}
+	prev := generateInsightsFromBlocks(prevBlocks, cfg, prevStart, prevEnd)
 	if len(prev.Categories) > 0 {
 		highlights = append(highlights, biggestImprovement(in.Categories, prev.Categories)...)
 	}
 	p.Trends = buildWeekTrends(in, prev)
+	// buildWeekTrends owns Trends — set ShiftDelta after it, and only when a
+	// previous week actually exists (a delta against nothing is misleading).
+	if len(prevBlocks) > 0 {
+		_, prevShifts := buildContextShifts(nonExcludedBlocks(prevBlocks))
+		p.Trends.ShiftDelta = p.ContextShiftCount - prevShifts
+	}
 	p.Highlights = highlights
 	p.Suggestions = buildSuggestions(in)
 

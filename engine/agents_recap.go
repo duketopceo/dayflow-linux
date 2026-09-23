@@ -127,10 +127,16 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 }
 
+// urlUserinfo redacts credentials embedded in URLs. Greedy [^\s]* consumes
+// through the last @, so passwords containing @ or : cannot leak; the host
+// after the @ survives for context.
+var urlUserinfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*)://[^\s]*@`)
+
 func scrubText(s string) string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		s = strings.ReplaceAll(s, home, "~")
 	}
+	s = urlUserinfo.ReplaceAllString(s, `$1://[redacted]@`)
 	for _, re := range secretPatterns {
 		s = re.ReplaceAllString(s, "[redacted]")
 	}
@@ -320,22 +326,27 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 		if generated >= maxNewRecaps || time.Now().After(deadline) {
 			break
 		}
+		// Fingerprint before extraction AND after generation — an active
+		// transcript can grow mid-pass, and a cached row must describe the
+		// excerpt it was generated from.
+		beforeFP, beforeOK := fingerprint(sessions[i].File)
 		excerpt := sessionExcerpt(sessions[i].File, sessions[i].Source)
 		if excerpt == "" {
 			// Settle it: nothing to summarize now. Fingerprint still
 			// invalidates the row if the transcript grows.
-			if fp, ok := fingerprint(sessions[i].File); ok {
-				if err := putRecap(db, sessions[i], fp, "", "", nil, nil); err != nil {
+			afterFP, afterOK := fingerprint(sessions[i].File)
+			if beforeOK && afterOK && beforeFP == afterFP {
+				if err := putRecap(db, sessions[i], afterFP, "", "", nil, nil); err != nil {
 					debugf(cfg, "recap cache write %s: %v", sessions[i].File, err)
 				}
 			}
 			continue
 		}
 		generated++
-		fp, ok := fingerprint(sessions[i].File)
 		res := generateRecap(db, cfg, sessions[i], excerpt)
-		if res.Cacheable && ok {
-			if err := putRecap(db, sessions[i], fp, res.Text, res.Model, res.Worthy, res.Quality); err != nil {
+		afterFP, afterOK := fingerprint(sessions[i].File)
+		if res.Cacheable && beforeOK && afterOK && beforeFP == afterFP {
+			if err := putRecap(db, sessions[i], afterFP, res.Text, res.Model, res.Worthy, res.Quality); err != nil {
 				debugf(cfg, "recap cache write %s: %v", sessions[i].File, err)
 			}
 		}

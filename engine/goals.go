@@ -14,11 +14,12 @@ type DayGoal struct {
 	Streak    GoalStreak `json:"streak"`
 }
 
-// GoalStreak summarizes completion runs across goal history. Current counts
-// consecutive completed days ending at the viewed date — a pending (set but
-// not done) goal today doesn't break it, the run just counts through
-// yesterday. A missing goal or an explicitly-cleared day breaks the run.
-// Best is the longest run ever recorded.
+// GoalStreak summarizes completion runs across goal history, computed as of
+// the viewed date (not necessarily today — `goal --date` changes the anchor).
+// Current counts consecutive completed days ending at that anchor: a pending
+// or absent goal on the anchor day doesn't break it, the run just counts
+// through the day before. Any earlier missing or incomplete day ends the run.
+// Best is the longest run ever recorded; Total is all-time completed goals.
 type GoalStreak struct {
 	Current int `json:"current"`
 	Best    int `json:"best"`

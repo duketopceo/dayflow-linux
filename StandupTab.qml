@@ -137,7 +137,7 @@ Flickable {
 
         Text {
           anchors.fill: parent
-          visible: dayflow.dayGoal.goal === ""
+          visible: goalInput.text.length === 0
           text: "Today's goal…"
           textFormat: Text.PlainText
           color: dayflow.dim

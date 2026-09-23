@@ -11,7 +11,7 @@ Dayflow is a **local-first** automatic work journal. This notice describes what 
 
 ## What leaves your machine
 
-Only the **sampled frames** sent to your chosen AI provider for summarization leave your machine. By default this is OpenRouter; you may also configure a local endpoint such as Ollama or LM Studio. Dayflow does not send screenshots or journal data anywhere else.
+Only the **sampled frames** sent to your chosen AI provider for summarization leave your machine — plus two config-gated additions: TypeSafe Jev judge calls send small block/session descriptors (titles, apps, durations) to the decisions endpoint (`jev_classification: false` disables), and agent-session recap generation sends a bounded, scrubbed transcript excerpt to the chat provider (`agent_recaps: false` disables; scrubbing removes home paths, tokens, and URL credentials). By default the provider is OpenRouter; you may also configure a local endpoint such as Ollama or LM Studio. Dayflow does not send screenshots or journal data anywhere else.
 
 Dayflow does **not** include telemetry, analytics, crash reporting, or cloud synchronization.
 
