@@ -141,7 +141,7 @@ func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPa
 	p.Trends = buildWeekTrends(in, prev)
 	// buildWeekTrends owns Trends — set ShiftDelta after it, and only when a
 	// previous week actually exists (a delta against nothing is misleading).
-	if len(prevBlocks) > 0 {
+	if p.Trends.HasPrev {
 		_, prevShifts := buildContextShifts(nonExcludedBlocks(prevBlocks))
 		p.Trends.ShiftDelta = p.ContextShiftCount - prevShifts
 	}

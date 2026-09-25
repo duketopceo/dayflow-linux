@@ -390,14 +390,22 @@ func trimLogTables(db *sql.DB) bool {
 		SELECT rowid FROM events ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
 	db.Exec(`DELETE FROM api_calls WHERE rowid <= (
 		SELECT rowid FROM api_calls ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
-	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		logEvent(db, "storage_cap_error", "checkpoint: "+err.Error())
-	}
+	checkpointWAL(db)
 	if _, err := db.Exec(`VACUUM`); err != nil {
 		logEvent(db, "storage_cap_error", "vacuum: "+err.Error())
 		return false
 	}
+	// VACUUM itself can leave rebuilt pages in the WAL — checkpoint again so
+	// callers measuring dbBytes() see the settled size, not a transient one.
+	checkpointWAL(db)
 	return true
+}
+
+// checkpointWAL runs a TRUNCATE checkpoint and logs failures.
+func checkpointWAL(db *sql.DB) {
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		logEvent(db, "storage_cap_error", "checkpoint: "+err.Error())
+	}
 }
 
 // pruneOldestBlocks drops the oldest journal blocks — the last resort of
@@ -411,12 +419,11 @@ func pruneOldestBlocks(db *sql.DB) {
 		return
 	}
 	pb, _ := pruned.RowsAffected()
-	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		logEvent(db, "storage_cap_error", "checkpoint: "+err.Error())
-	}
+	checkpointWAL(db)
 	if _, err := db.Exec(`VACUUM`); err != nil {
 		logEvent(db, "storage_cap_error", "vacuum: "+err.Error())
 	}
+	checkpointWAL(db)
 	logEvent(db, "storage_cap_db", fmt.Sprintf("%d oldest blocks pruned, vacuumed", pb))
 }
 

@@ -399,6 +399,14 @@ Flickable {
           numeric: true
           onEdited: dayflow.configDraft.max_db_mb = parseInt(text, 10) || 0
         }
+        SettingsField { dayflow: root.dayflow;
+          width: (parent.width - 2 * parent.spacing) / 3
+          label: "Total cap, legacy (MB)"
+          value: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 0)
+          hint: "0 = off"
+          numeric: true
+          onEdited: dayflow.configDraft.max_storage_mb = parseInt(text, 10) || 0
+        }
       }
 
       Text {

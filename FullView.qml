@@ -45,6 +45,7 @@ FloatingWindow {
   function agentsLoad() {
     if (!root.dayflow) return
     root.dayflow.uilog("agents load " + root.dayflow.viewDateStr())
+    root.agentsTimedOut = false
     agentsProc.command = ["dayflow", "agents", root.dayflow.viewDateStr(), "--json"]
     root.agentsLoading = true
     if (agentsProc.running) {
@@ -60,6 +61,9 @@ FloatingWindow {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        // stdout from a watchdog-killed run is stale — ignore it so the
+        // timeout message survives. (streamFinished can fire on exit.)
+        if (root.agentsTimedOut) return
         root.agentsLoading = false
         try {
           var d = JSON.parse(text)
@@ -77,7 +81,6 @@ FloatingWindow {
         root.agentSessions = []
         root.agentsError = "agent scan failed"
       }
-      root.agentsTimedOut = false
       if (root.agentsPending) {
         root.agentsPending = false
         root.agentsLoad()
