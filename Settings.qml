@@ -363,7 +363,7 @@ Flickable {
         }
       }
 
-      Row {
+      Flow {
         width: parent.width
         spacing: Style.space(6)
 

@@ -45,25 +45,31 @@ FloatingWindow {
   function agentsLoad() {
     if (!root.dayflow) return
     root.dayflow.uilog("agents load " + root.dayflow.viewDateStr())
+    root.agentsRun = root.agentsRun + 1
     root.agentsTimedOut = false
     agentsProc.command = ["dayflow", "agents", root.dayflow.viewDateStr(), "--json"]
     root.agentsLoading = true
     if (agentsProc.running) {
       root.agentsPending = true
     } else {
+      // Stamp the run on the process only at actual start — callbacks from a
+      // still-terminating previous run then fail the runId check.
+      agentsProc.runId = root.agentsRun
       agentsProc.running = true
     }
   }
 
   Process {
     id: agentsProc
+    property int runId: 0
     command: ["dayflow", "agents", "--json"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        // stdout from a watchdog-killed run is stale — ignore it so the
-        // timeout message survives. (streamFinished can fire on exit.)
-        if (root.agentsTimedOut) return
+        // Stale callbacks from a previous process (or a watchdog-killed run)
+        // carry old results — ignore them so a fresh run's state and the
+        // timeout message survive. (streamFinished can fire on exit.)
+        if (agentsProc.runId !== root.agentsRun || root.agentsTimedOut) return
         root.agentsLoading = false
         try {
           var d = JSON.parse(text)
@@ -76,6 +82,15 @@ FloatingWindow {
       }
     }
     onExited: function(exitCode) {
+      if (agentsProc.runId !== root.agentsRun) {
+        // A previous process's exit — never touch the new run's state, but
+        // still service the queued reload it was waiting on.
+        if (root.agentsPending) {
+          root.agentsPending = false
+          root.agentsLoad()
+        }
+        return
+      }
       root.agentsLoading = false
       if (exitCode !== 0 && !root.agentsTimedOut) {
         root.agentSessions = []
@@ -90,6 +105,13 @@ FloatingWindow {
     // flag and drain the queue so the bar never sticks.
     onRunningChanged: {
       if (!agentsProc.running) {
+        if (agentsProc.runId !== root.agentsRun) {
+          if (root.agentsPending) {
+            root.agentsPending = false
+            root.agentsLoad()
+          }
+          return
+        }
         root.agentsLoading = false
         if (root.agentsPending) {
           root.agentsPending = false
@@ -153,6 +175,7 @@ FloatingWindow {
   property bool tlPending: false
   property bool agentsPending: false
   property bool agentsTimedOut: false
+  property int agentsRun: 0
 
   function tlLoad() {
     if (!root.dayflow) return

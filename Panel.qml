@@ -53,7 +53,7 @@ Panel {
   property bool fullViewOpen: false
   // Bump with manifest.json version — compared against the engine's
   // reported version to warn when the plugin and binary drift apart.
-  readonly property string pluginVersion: "1.1.0"
+  readonly property string pluginVersion: "1.2.0"
   property string engineVersion: ""
 
   readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
