@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -139,10 +140,77 @@ func providerUsesOpenRouterHeaders(p Provider) bool {
 	return p.APIBaseURL == "" || strings.Contains(p.APIBaseURL, "openrouter.ai")
 }
 
-// callProviderChat posts an OpenAI-compatible chat request to provider p.
+// defaultRequestTimeout bounds a single provider attempt. The old hard 120s
+// ceiling was hit 58 times in 11 days while successful calls averaged 40s.
+const defaultRequestTimeout = 180 * time.Second
+
+const (
+	// providerMaxAttempts is one try plus retries for transient faults.
+	providerMaxAttempts = 3
+	// providerMaxBodyBytes caps a single response body. The old 1 MiB cap
+	// truncated long completions mid-JSON, which surfaced as a parse error.
+	providerMaxBodyBytes = int64(16 << 20)
+)
+
+// providerError records whether a failure is worth retrying. The message is
+// byte-identical to what the DB and logs already store.
+type providerError struct {
+	transient bool
+	msg       string
+}
+
+func (e *providerError) Error() string { return e.msg }
+
+// transientf builds a retryable provider failure.
+func transientf(format string, args ...any) error {
+	return &providerError{transient: true, msg: fmt.Sprintf(format, args...)}
+}
+
+func isTransientProviderErr(err error) bool {
+	var pe *providerError
+	return errors.As(err, &pe) && pe.transient
+}
+
+// providerBackoff returns the wait before the next attempt. It is a variable so
+// tests can stub the wait out.
+var providerBackoff = func(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 2 * time.Second
+	}
+	return 8 * time.Second
+}
+
+// callProviderChat posts an OpenAI-compatible chat request to provider p,
+// retrying transient failures. A single attempt used to be the whole story:
+// on 2026-09-22 that turned 45% of the day's calls into dead blocks, and a
+// DNS blip cost a 15-minute capture window permanently.
 func callProviderChat(cfg Config, p Provider, messages []orMessage) (string, int, int, error) {
+	var lastErr error
+	for attempt := 1; attempt <= providerMaxAttempts; attempt++ {
+		content, pt, ct, err := providerChatOnce(cfg, p, messages)
+		if err == nil {
+			return content, pt, ct, nil
+		}
+		lastErr = err
+		if !isTransientProviderErr(err) || attempt == providerMaxAttempts {
+			break
+		}
+		delay := providerBackoff(attempt)
+		debugf(cfg, "provider %s attempt %d/%d failed (%v) — retrying in %s",
+			p.ID, attempt, providerMaxAttempts, err, delay)
+		time.Sleep(delay)
+	}
+	return "", 0, 0, lastErr
+}
+
+// providerChatOnce performs a single request/response exchange.
+func providerChatOnce(cfg Config, p Provider, messages []orMessage) (string, int, int, error) {
 	apiKey := resolveProviderKey(p)
-	if providerNeedsAuth(p) && apiKey == "" && p.APIBaseURL == "" {
+	if providerNeedsAuth(p) && apiKey == "" {
+		// Auth is required for every non-local/MCP provider. The old check also
+		// required an empty APIBaseURL, so a custom base URL with no key sent
+		// the request without an Authorization header and surfaced as
+		// "api 401: Missing Authentication header" instead of a config error.
 		return "", 0, 0, fmt.Errorf("no API key for provider %q: set its api_key in %s, OPENROUTER_API_KEY, or `dayflow key set %s`", p.ID, configPath(), p.ID)
 	}
 	reqBody, _ := json.Marshal(orRequest{Model: p.Model, Messages: messages})
@@ -159,19 +227,36 @@ func callProviderChat(cfg Config, p Provider, messages []orMessage) (string, int
 		req.Header.Set("X-Title", cfg.SiteName)
 	}
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	timeout := time.Duration(cfg.RequestTimeoutSec) * time.Second
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", 0, 0, fmt.Errorf("api request failed: %w", err)
+		return "", 0, 0, transientf("api request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, providerMaxBodyBytes+1))
+	if readErr != nil {
+		return "", 0, 0, transientf("api response read failed: %v", readErr)
+	}
+	if int64(len(body)) > providerMaxBodyBytes {
+		return "", 0, 0, transientf("api response exceeded %d bytes", providerMaxBodyBytes)
+	}
 	if resp.StatusCode != 200 {
-		return "", 0, 0, fmt.Errorf("api %d: %s", resp.StatusCode, truncate(string(body), 300))
+		msg := fmt.Sprintf("api %d: %s", resp.StatusCode, truncate(string(body), 300))
+		if resp.StatusCode == 408 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
+			return "", 0, 0, transientf("%s", msg)
+		}
+		return "", 0, 0, errors.New(msg)
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return "", 0, 0, transientf("api returned an empty response body")
 	}
 	var or orResponse
 	if err := json.Unmarshal(body, &or); err != nil {
-		return "", 0, 0, fmt.Errorf("api response was not valid JSON: %w", err)
+		return "", 0, 0, transientf("api response was not valid JSON: %v", err)
 	}
 	if or.Error != nil {
 		return "", 0, 0, fmt.Errorf("api error: %s", or.Error.Message)

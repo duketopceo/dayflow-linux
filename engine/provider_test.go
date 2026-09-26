@@ -2,11 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestProviderForTaskFallback(t *testing.T) {
@@ -153,5 +158,187 @@ func TestPromptOverrideUsed(t *testing.T) {
 	}
 	if p2 := (Provider{}); buildPromptForProvider(p2, cfg) != buildSummarizePrompt(cfg) {
 		t.Fatal("default template not used without override")
+	}
+}
+
+// stubBackoff removes the real waits so retry tests stay fast.
+func stubBackoff(t *testing.T) {
+	t.Helper()
+	orig := providerBackoff
+	providerBackoff = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { providerBackoff = orig })
+}
+
+// testProvider builds a provider whose chat endpoint is the given test server.
+// Kind "custom" requires auth, and the key is set inline so no keyring is used.
+func testProvider(baseURL string) Provider {
+	return Provider{
+		ID:         "default",
+		Kind:       "custom",
+		APIBaseURL: baseURL,
+		Model:      "test/model",
+		APIKey:     "test-key",
+		Enabled:    true,
+	}
+}
+
+func okBody(content string) string {
+	return fmt.Sprintf(`{"choices":[{"message":{"content":%q}}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`, content)
+}
+
+func TestIsTransientProviderErr(t *testing.T) {
+	if !isTransientProviderErr(transientf("boom %d", 1)) {
+		t.Error("transientf error must be transient")
+	}
+	if isTransientProviderErr(errors.New("boom")) {
+		t.Error("plain error must not be transient")
+	}
+	if !isTransientProviderErr(fmt.Errorf("wrapped: %w", transientf("boom"))) {
+		t.Error("wrapped transient error must stay transient")
+	}
+	if isTransientProviderErr(nil) {
+		t.Error("nil must not be transient")
+	}
+}
+
+func TestCallProviderChatRetriesTransientThenSucceeds(t *testing.T) {
+	stubBackoff(t)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":{"message":"502"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(okBody("done")))
+	}))
+	defer srv.Close()
+
+	got, pt, ct, err := callProviderChat(Config{SiteName: "t"}, testProvider(srv.URL), []orMessage{{Role: "user"}})
+	if err != nil {
+		t.Fatalf("expected success after retries, got %v", err)
+	}
+	if got != "done" {
+		t.Fatalf("content = %q, want %q", got, "done")
+	}
+	if pt != 1 || ct != 2 {
+		t.Fatalf("usage = %d/%d, want 1/2", pt, ct)
+	}
+	if n := atomic.LoadInt32(&calls); n != 3 {
+		t.Fatalf("server calls = %d, want 3", n)
+	}
+}
+
+func TestCallProviderChatFailsFastOnAuthError(t *testing.T) {
+	stubBackoff(t)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Missing Authentication header"}}`))
+	}))
+	defer srv.Close()
+
+	_, _, _, err := callProviderChat(Config{SiteName: "t"}, testProvider(srv.URL), []orMessage{{Role: "user"}})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "api 401") {
+		t.Fatalf("error = %q, want it to mention api 401", err)
+	}
+	if isTransientProviderErr(err) {
+		t.Error("401 must not be retried")
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Fatalf("server calls = %d, want 1 (no retry on 401)", n)
+	}
+}
+
+func TestCallProviderChatRetriesEmptyBody(t *testing.T) {
+	stubBackoff(t)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusOK) // 200 with nothing in it
+	}))
+	defer srv.Close()
+
+	_, _, _, err := callProviderChat(Config{SiteName: "t"}, testProvider(srv.URL), []orMessage{{Role: "user"}})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "empty response body") {
+		t.Fatalf("error = %q, want the empty-body message", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != providerMaxAttempts {
+		t.Fatalf("server calls = %d, want %d", n, providerMaxAttempts)
+	}
+}
+
+func TestCallProviderChatRetriesTruncatedJSON(t *testing.T) {
+	stubBackoff(t)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"half`)) // cut mid-stream
+			return
+		}
+		_, _ = w.Write([]byte(okBody("recovered")))
+	}))
+	defer srv.Close()
+
+	got, _, _, err := callProviderChat(Config{SiteName: "t"}, testProvider(srv.URL), []orMessage{{Role: "user"}})
+	if err != nil {
+		t.Fatalf("expected recovery after a truncated body, got %v", err)
+	}
+	if got != "recovered" {
+		t.Fatalf("content = %q", got)
+	}
+}
+
+// A provider with a custom base URL and no key used to send the request with no
+// Authorization header, which OpenRouter answered with a bare 401.
+func TestProviderChatRequiresKeyEvenWithCustomBaseURL(t *testing.T) {
+	stubBackoff(t)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		_, _ = w.Write([]byte(okBody("should not happen")))
+	}))
+	defer srv.Close()
+
+	p := testProvider(srv.URL)
+	p.APIKey = ""
+	_, _, _, err := callProviderChat(Config{SiteName: "t"}, p, []orMessage{{Role: "user"}})
+	if err == nil || !strings.Contains(err.Error(), "no API key for provider") {
+		t.Fatalf("error = %v, want the missing-key config error", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 0 {
+		t.Fatalf("server calls = %d, want 0 (must not egress without a key)", n)
+	}
+}
+
+// RequestTimeoutSec replaces the old hard-coded 120s ceiling.
+func TestCallProviderChatHonoursConfiguredTimeout(t *testing.T) {
+	stubBackoff(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1200 * time.Millisecond)
+		_, _ = w.Write([]byte(okBody("late")))
+	}))
+	defer srv.Close()
+
+	start := time.Now()
+	_, _, _, err := callProviderChat(Config{SiteName: "t", RequestTimeoutSec: 1}, testProvider(srv.URL), []orMessage{{Role: "user"}})
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if !strings.Contains(err.Error(), "api request failed") {
+		t.Fatalf("error = %q, want a request failure", err)
+	}
+	if !isTransientProviderErr(err) {
+		t.Error("a timeout must be retryable")
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("took %s — timeout not applied", elapsed)
 	}
 }

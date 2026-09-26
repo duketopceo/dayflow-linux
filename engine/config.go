@@ -23,7 +23,8 @@ type Config struct {
 	Provider             string     `json:"provider"` // openrouter, local, custom, mcp
 	OpenRouterAPIKey     string     `json:"openrouter_api_key"`
 	Model                string     `json:"model"`
-	APIBaseURL           string     `json:"api_base_url"` // OpenAI-compatible endpoint; empty = OpenRouter
+	APIBaseURL           string     `json:"api_base_url"`        // OpenAI-compatible endpoint; empty = OpenRouter
+	RequestTimeoutSec    int        `json:"request_timeout_sec"` // per-attempt provider timeout; 0 = 180s default
 	CaptureIntervalSec   int        `json:"capture_interval_sec"`
 	BlockMinutes         int        `json:"block_minutes"`
 	FramesPerBlock       int        `json:"frames_per_block"`
@@ -171,6 +172,11 @@ func loadConfig() (Config, error) {
 	}
 	if cfg.BlockMinutes <= 0 {
 		cfg.BlockMinutes = 15
+	}
+	if cfg.RequestTimeoutSec <= 0 {
+		// One provider attempt. The old hard-coded 120s ceiling was exceeded by
+		// the gemma-4-31b tail 58 times in 11 days.
+		cfg.RequestTimeoutSec = 180
 	}
 	if cfg.FramesPerBlock <= 0 {
 		cfg.FramesPerBlock = 30
