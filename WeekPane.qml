@@ -127,6 +127,119 @@ Flickable {
       }
     }
 
+    // week-over-week trends
+    Rectangle {
+      id: trendCard
+      visible: pane.dayflow !== null && pane.dayflow.weeklyPayload.trends !== undefined &&
+        pane.dayflow.weeklyPayload.trends !== null && pane.dayflow.weeklyPayload.trends.has_prev
+      width: parent.width
+      height: trendCol.implicitHeight + Style.space(16)
+      radius: Style.cornerRadius
+      color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
+      border.color: pane.dayflow ? pane.dayflow.fgFill(0.08) : "transparent"
+
+      property var trends: pane.dayflow && pane.dayflow.weeklyPayload.trends
+        ? pane.dayflow.weeklyPayload.trends : null
+
+      function deltaText(mins) {
+        var sign = mins > 0 ? "+" : mins < 0 ? "-" : "±"
+        return sign + (pane.dayflow ? pane.dayflow.fmtDur(Math.abs(mins)) : String(Math.abs(mins)))
+      }
+
+      Column {
+        id: trendCol
+        width: parent.width - Style.space(16)
+        anchors.centerIn: parent
+        spacing: Style.space(4)
+
+        Text {
+          text: "vs last week" +
+            (trendCard.trends ? "  ·  prev " +
+              (pane.dayflow ? pane.dayflow.fmtDur(trendCard.trends.prev_total_minutes) : "") : "")
+          color: pane.dayflow ? pane.dayflow.foreground : "white"
+          font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+          font.pixelSize: Style.font.body
+          font.bold: true
+          bottomPadding: Style.space(4)
+        }
+
+        // headline metric deltas
+        Flow {
+          width: parent.width
+          spacing: Style.space(6)
+
+          Repeater {
+            model: trendCard.trends ? [
+              { label: "Tracked",     delta: trendCard.trends.total_delta_minutes },
+              { label: "Focus",       delta: trendCard.trends.focus_delta_minutes },
+              { label: "Distraction", delta: trendCard.trends.distraction_delta_minutes },
+              { label: "Shifts",      delta: trendCard.trends.shift_delta_count }
+            ] : []
+
+            delegate: Rectangle {
+              required property var modelData
+              height: Style.space(22)
+              width: deltaChip.implicitWidth + Style.space(16)
+              radius: Style.cornerRadius
+              color: pane.dayflow ? pane.dayflow.fgFill(0.05) : "transparent"
+              border.color: pane.dayflow ? pane.dayflow.fgFill(0.10) : "transparent"
+
+              Text {
+                id: deltaChip
+                anchors.centerIn: parent
+                text: modelData.label + " " +
+                  (modelData.label === "Shifts"
+                    ? (modelData.delta > 0 ? "+" : "") + modelData.delta
+                    : trendCard.deltaText(modelData.delta))
+                textFormat: Text.PlainText
+                color: modelData.delta > 0
+                  ? (pane.dayflow ? pane.dayflow.foreground : "white")
+                  : (pane.dayflow ? pane.dayflow.dim : "gray")
+                font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+        }
+
+        // per-category deltas
+        Repeater {
+          model: trendCard.trends ? trendCard.trends.categories.slice(0, 6) : []
+
+          delegate: Row {
+            required property var modelData
+            width: trendCol.width
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width - Style.space(140)
+              text: modelData.display || modelData.name
+              textFormat: Text.PlainText
+              color: pane.dayflow ? pane.dayflow.foreground : "white"
+              font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: trendCard.deltaText(modelData.delta_minutes) +
+                "  (" + (modelData.delta_share > 0 ? "+" : "") +
+                Math.round(modelData.delta_share) + "pt)"
+              textFormat: Text.PlainText
+              color: modelData.delta_minutes > 0
+                ? (pane.dayflow ? pane.dayflow.foreground : "white")
+                : (pane.dayflow ? pane.dayflow.dim : "gray")
+              font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+      }
+    }
+
     // heatmap — 7 days x 24 hours
     Rectangle {
       width: parent.width

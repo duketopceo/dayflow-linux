@@ -274,7 +274,8 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 				"wal_bytes": walBytes, "wal": humanBytes(walBytes),
 				"frames_bytes": framesBytes, "frames": humanBytes(framesBytes),
 				"frame_files": frameFiles, "data_dir": dataDir(),
-				"cap_mb": cfg.MaxStorageMB,
+				"cap_mb":        cfg.MaxStorageMB,
+				"frames_cap_mb": cfg.MaxFramesMB, "db_cap_mb": cfg.MaxDBMB,
 			},
 			"blocks": map[string]any{
 				"total": blocksTotal, "done": blocksDone,
@@ -292,6 +293,7 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 				"provider": cfg.Provider, "model": cfg.Model,
 				"retention_days": cfg.RetentionDays, "keep_frames": cfg.KeepFrames,
 				"max_storage_mb": cfg.MaxStorageMB, "debug": cfg.Debug,
+				"max_frames_mb": cfg.MaxFramesMB, "max_db_mb": cfg.MaxDBMB,
 			},
 		}, nil
 
@@ -334,9 +336,15 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 			}
 			t = parsed
 		}
+		sessions := agentSessionsForDay(t)
+		// MCP reads never trigger generation (transcript egress) — serve
+		// cached recaps only by forcing the judges-disabled path.
+		recapCfg := cfg
+		recapCfg.DisableJudges = true
+		attachRecaps(db, recapCfg, sessions)
 		return map[string]any{
 			"date":     t.Local().Format("2006-01-02"),
-			"sessions": agentSessionsForDay(t),
+			"sessions": sessions,
 		}, nil
 
 	case "get_forecast":

@@ -72,6 +72,23 @@ CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL DEFAULT ''
 );
+
+-- Cached AI recaps of coding-agent sessions, keyed by transcript path and
+-- invalidated by file mtime+size (transcripts are append-mostly).
+-- worthy_confidence records the Jev worthiness score; a judged-unworthy
+-- session persists with recap='' so it is never re-judged.
+CREATE TABLE IF NOT EXISTS agent_recaps (
+  path               TEXT PRIMARY KEY,
+  source             TEXT NOT NULL DEFAULT '',
+  session_start      INTEGER NOT NULL DEFAULT 0,
+  recap              TEXT NOT NULL DEFAULT '',
+  worthy_confidence  REAL DEFAULT NULL,
+  quality_confidence REAL DEFAULT NULL,
+  file_mtime         INTEGER NOT NULL DEFAULT 0,
+  file_size          INTEGER NOT NULL DEFAULT 0,
+  model              TEXT NOT NULL DEFAULT '',
+  created_at         INTEGER NOT NULL
+);
 `
 
 // schemaV2 is migration version 2: chat, standup, journal, goals, LLM-call

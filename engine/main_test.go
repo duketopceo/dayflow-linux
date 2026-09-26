@@ -53,6 +53,7 @@ func TestSchemaHasNewTables(t *testing.T) {
 	tables := []string{
 		"chat_conversations", "chat_messages", "standup_drafts",
 		"journal_entries", "day_goals", "llm_calls", "block_edits",
+		"agent_recaps",
 	}
 	for _, name := range tables {
 		var n int
@@ -361,6 +362,7 @@ func TestConfigPatchPreservesMaskedProviderKeys(t *testing.T) {
 
 func TestRetention(t *testing.T) {
 	cfg := testEnv(t)
+	cfg.RetentionDays = 7 // day-based pruning is off by default now
 	db, _ := openDB()
 	defer db.Close()
 	old := time.Now().Add(-10 * 24 * time.Hour)
@@ -478,5 +480,46 @@ func TestBlocksForDayFlagsDeadBlocks(t *testing.T) {
 	}
 	if b.Summary != "api 500: boom" {
 		t.Fatalf("summary should be error first line, got %q", b.Summary)
+	}
+}
+
+func TestStorageCapMigration(t *testing.T) {
+	write := func(dir, body string) {
+		cp := filepath.Join(dir, "config.json")
+		t.Setenv("DAYFLOW_CONFIG", cp)
+		os.WriteFile(cp, []byte(body), 0o600)
+	}
+
+	// Legacy: only max_storage_mb → still bounds the whole dir AND becomes
+	// the frame cap; db cap gets its own default.
+	dir := t.TempDir()
+	t.Setenv("DAYFLOW_DATA_DIR", dir)
+	write(dir, `{"max_storage_mb": 4096}`)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxStorageMB != 4096 || cfg.MaxFramesMB != 4096 || cfg.MaxDBMB != 10240 {
+		t.Fatalf("legacy migration: %+v", cfg)
+	}
+
+	// New-style: split keys honored, no legacy cap, retention off.
+	write(dir, `{"max_frames_mb": 20480, "max_db_mb": 10240, "retention_days": 0}`)
+	cfg, err = loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxStorageMB != 0 || cfg.MaxFramesMB != 20480 || cfg.MaxDBMB != 10240 || cfg.RetentionDays != 0 {
+		t.Fatalf("split caps: %+v", cfg)
+	}
+
+	// Bare config: split defaults, no caps-as-days.
+	write(dir, `{"model": "m"}`)
+	cfg, err = loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxStorageMB != 0 || cfg.MaxFramesMB != 20480 || cfg.MaxDBMB != 10240 || cfg.RetentionDays != 0 {
+		t.Fatalf("defaults: %+v", cfg)
 	}
 }

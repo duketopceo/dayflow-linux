@@ -139,6 +139,22 @@ Column {
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
             }
+
+            Text {
+              width: parent.width
+              visible: !!modelData.recap
+              text: (modelData.recap || "") +
+                (modelData.recap_confidence != null
+                  ? "  ·  " + Math.round(modelData.recap_confidence * 100) + "%"
+                  : "")
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              color: pane.dayflow ? pane.dayflow.foreground : "white"
+              font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+              font.pixelSize: Style.font.caption
+              font.italic: true
+              opacity: 0.85
+            }
           }
         }
       }

@@ -15,6 +15,9 @@ It captures a lightweight screenshot every 10 seconds, deduplicates unchanged fr
 - **Activity chunking**: each block is split into per-app segments (`activities[]`) and consecutive same-app blocks merge into cards. Failed summaries retry automatically (max 3 attempts, then `dead`; `dayflow retry` resets).
 - **Multi-provider routing**: configure multiple OpenRouter / custom / local / MCP providers and route vision, summary, review, standup, chat, and classification tasks to different endpoints.
 - **Jev classification**: after the vision model writes title/summary, [TypeSafe Jev](https://openrouter.ai/typesafe/jev-1.13) (`typesafe/jev-1.13` via OpenRouter's decisions API) picks category and productive flag — fast, typed, and calibrated instead of asking the vision model to guess both.
+- **Agent-session recaps**: Claude Code and Codex sessions get a generated one-line recap of what was accomplished — Jev judges which sessions are worth summarizing and scores the result. Cached per transcript; `dayflow agents --no-recaps` for the raw list.
+- **Daily goals + streaks**: set a goal for the day, check it off, and track your consecutive-day completion streak (current, best, and all-time totals).
+- **Week-over-week trends**: the weekly view diffs this week against last — tracked/focus/distraction/shift deltas plus per-category movement in minutes and share points.
 - **Chat with your journal**: ask natural-language questions about your timeline, standup, weekly analytics, or search your journal.
 - **Inline editing**: correct a block's title, category, summary, or productive flag; edits overlay the raw row and flow into analytics.
 - **Standup drafts**: save highlights, tasks, blockers, and priorities; they appear in generated standup updates.
@@ -140,8 +143,10 @@ dayflow usage                  # token totals across all API calls
 dayflow blocks                 # failed summaries (auto-retried)
 dayflow frames [YYYY-MM-DD]    # list captured frames for a day
 dayflow playback on|off|status # opt-in frame retention for timelapse (10GB cap)
-dayflow agents [YYYY-MM-DD]    # Claude Code / Codex session recaps
+dayflow agents [YYYY-MM-DD]    # Claude Code / Codex sessions + generated recaps
+dayflow agents --no-recaps     # fast session list, no model calls
 dayflow forecast [YYYY-MM-DD]  # predict a day's category mix from history (default: tomorrow)
+dayflow goal [set <text>|done|clear] [--date D]  # daily goal + completion streak
 dayflow key set|status|del     # store API keys in OmaSeal instead of config.json
 dayflow log <msg>              # append a UI action line to debug.log
 dayflow week | month           # multi-day rollups
@@ -175,14 +180,17 @@ All query commands accept `--json`.
 | `frames_per_block` | 30 | frames sampled per API call |
 | `jpeg_quality` | 55 | grim JPEG quality |
 | `keep_frames` | false | keep raw frames after summarizing |
-| `retention_days` | 7 | prunes frames, events, and api logs |
-| `max_storage_mb` | 10240 | cap on the whole data dir (frames + db + wal); 0 = unlimited |
+| `retention_days` | 0 | prunes frames, events, and api logs older than N days; 0 = keep until the storage caps below |
+| `max_frames_mb` | 20480 | cap on frames + quarantine dirs; 0 = unlimited |
+| `max_db_mb` | 10240 | cap on the journal database (blocks, events, calls); 0 = unlimited |
+| `max_storage_mb` | 0 | legacy combined cap on the whole data dir — honored when present and migrates to `max_frames_mb` on older configs; leave 0 with the split caps |
 | `auto_pause_locked` | true | pause capture while the session is locked (via loginctl) |
 | `ignore_apps` | `[]` | window classes never captured (Hyprland) |
 | `output` | `""` | restrict capture to one monitor (`grim -o`) |
 | `capture_command` | `""` | custom screenshot command (writes image to stdout) |
 | `openrouter_api_key` | `""` | API key |
 | `jev_classification` | `true` | TypeSafe Jev calibrated judgments — category, merge, quality, triage, forecast. Judge calls egress to OpenRouter's decisions endpoint; set `false` to keep every block local. |
+| `agent_recaps` | `true` | Generate agent-session recaps. Generation sends a bounded, scrubbed transcript excerpt (paths → `~`, common token shapes → `[redacted]`) to the chat provider; `false` serves cached recaps only — a durable no-egress opt-out. |
 | `classification_model` | `typesafe/jev-1.13` | Jev model slug (OpenRouter decisions API) |
 | `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
 
@@ -218,8 +226,8 @@ API keys are redacted from backups on purpose, so re-set them with
 - `dayflow pause` (or right-click the bar widget) drops a flag file the daemon checks before every capture.
 - Capture automatically pauses while your session is locked when `auto_pause_locked` is true (via `loginctl`).
 - Ignored apps are skipped at capture time — their frames are never written to disk.
-- All frames are deleted after summarization unless `keep_frames` is on; retention pruning removes anything older than `retention_days`.
-- `max_storage_mb` caps the entire data directory; oldest summarized frames and then oldest journal rows are pruned and vacuumed.
+- All frames are deleted after summarization unless `keep_frames` is on; `max_frames_mb` and `max_db_mb` cap each pool independently (oldest data evicted first), and `retention_days` optionally prunes by age on top.
+- `max_frames_mb` caps frames + quarantine (oldest summarized frames evicted first); `max_db_mb` caps the journal database (log tables trimmed, then oldest blocks pruned and vacuumed). A legacy `max_storage_mb` still caps the whole directory when set.
 - Everything lives in `~/.local/share/dayflow/` — `rm -rf` it to wipe all data.
 
 For a plain-language summary, see [PRIVACY.md](PRIVACY.md).

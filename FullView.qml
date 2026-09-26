@@ -45,21 +45,31 @@ FloatingWindow {
   function agentsLoad() {
     if (!root.dayflow) return
     root.dayflow.uilog("agents load " + root.dayflow.viewDateStr())
+    root.agentsRun = root.agentsRun + 1
+    root.agentsTimedOut = false
     agentsProc.command = ["dayflow", "agents", root.dayflow.viewDateStr(), "--json"]
     root.agentsLoading = true
     if (agentsProc.running) {
       root.agentsPending = true
     } else {
+      // Stamp the run on the process only at actual start — callbacks from a
+      // still-terminating previous run then fail the runId check.
+      agentsProc.runId = root.agentsRun
       agentsProc.running = true
     }
   }
 
   Process {
     id: agentsProc
+    property int runId: 0
     command: ["dayflow", "agents", "--json"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        // Stale callbacks from a previous process (or a watchdog-killed run)
+        // carry old results — ignore them so a fresh run's state and the
+        // timeout message survive. (streamFinished can fire on exit.)
+        if (agentsProc.runId !== root.agentsRun || root.agentsTimedOut) return
         root.agentsLoading = false
         try {
           var d = JSON.parse(text)
@@ -72,8 +82,17 @@ FloatingWindow {
       }
     }
     onExited: function(exitCode) {
+      if (agentsProc.runId !== root.agentsRun) {
+        // A previous process's exit — never touch the new run's state, but
+        // still service the queued reload it was waiting on.
+        if (root.agentsPending) {
+          root.agentsPending = false
+          root.agentsLoad()
+        }
+        return
+      }
       root.agentsLoading = false
-      if (exitCode !== 0) {
+      if (exitCode !== 0 && !root.agentsTimedOut) {
         root.agentSessions = []
         root.agentsError = "agent scan failed"
       }
@@ -86,12 +105,41 @@ FloatingWindow {
     // flag and drain the queue so the bar never sticks.
     onRunningChanged: {
       if (!agentsProc.running) {
+        if (agentsProc.runId !== root.agentsRun) {
+          if (root.agentsPending) {
+            root.agentsPending = false
+            root.agentsLoad()
+          }
+          return
+        }
         root.agentsLoading = false
         if (root.agentsPending) {
           root.agentsPending = false
           root.agentsLoad()
         }
       }
+    }
+  }
+
+  // Watchdog: the engine bounds recap generation internally (~45s), but a
+  // wedged provider or hung scan could still outlive it — kill the process
+  // and surface the metadata-only state rather than spinning forever.
+  // agentsPending is cleared BEFORE stopping so onRunningChanged doesn't
+  // see a queued reload and restart the proc it just killed; agentsTimedOut
+  // makes onExited keep the timeout message instead of overwriting it.
+  Timer {
+    id: agentsWatchdog
+    interval: 75000
+    running: agentsProc.running
+    repeat: false
+    onTriggered: {
+      root.dayflow.uilog("agents watchdog: killing hung agentsProc")
+      root.agentsPending = false
+      root.agentsTimedOut = true
+      agentsProc.running = false
+      root.agentsLoading = false
+      root.agentSessions = []
+      root.agentsError = "agent scan timed out — recaps skipped"
     }
   }
 
@@ -126,6 +174,8 @@ FloatingWindow {
 
   property bool tlPending: false
   property bool agentsPending: false
+  property bool agentsTimedOut: false
+  property int agentsRun: 0
 
   function tlLoad() {
     if (!root.dayflow) return

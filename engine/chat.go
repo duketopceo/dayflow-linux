@@ -130,7 +130,7 @@ func logLLMCall(db *sql.DB, task, provider, model string, promptTok, completionT
 }
 
 // callChatModel sends the message list to the routed "chat" provider and logs the call.
-func callChatModel(db *sql.DB, cfg Config, messages []orMessage) (string, int, int, error) {
+func callChatModel(db *sql.DB, cfg Config, task string, messages []orMessage) (string, int, int, error) {
 	p, err := providerForTask(cfg, "chat")
 	if err != nil {
 		return "", 0, 0, err
@@ -144,7 +144,7 @@ func callChatModel(db *sql.DB, cfg Config, messages []orMessage) (string, int, i
 		status = "failed"
 		errStr = err.Error()
 	}
-	logLLMCall(db, "chat", p.ID, p.Model, pt, ct, latency, status, errStr)
+	logLLMCall(db, task, p.ID, p.Model, pt, ct, latency, status, errStr)
 	if err != nil {
 		return "", 0, 0, err
 	}
@@ -398,7 +398,7 @@ func chatWithJournal(db *sql.DB, cfg Config, conversationID int64, userMessage s
 	var totalPT, totalCT int
 	const maxToolTurns = 3
 	for turn := 0; turn < maxToolTurns; turn++ {
-		text, pt, ct, err := callChatModel(db, cfg, messages)
+		text, pt, ct, err := callChatModel(db, cfg, "chat", messages)
 		totalPT += pt
 		totalCT += ct
 		if err != nil {
@@ -436,7 +436,7 @@ func chatWithJournal(db *sql.DB, cfg Config, conversationID int64, userMessage s
 				Role:    "user",
 				Content: []orContent{{Type: "text", Text: finalAnswerPrompt}},
 			})
-			text, pt, ct, err = callChatModel(db, cfg, messages)
+			text, pt, ct, err = callChatModel(db, cfg, "chat", messages)
 			totalPT += pt
 			totalCT += ct
 			if err != nil {

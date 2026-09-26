@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const version = "1.1.0"
+const version = "1.2.0"
 
 // positionalArgs returns non-flag argv entries; an empty arg is not a flag
 // and is skipped (a[0] on "" panics).
@@ -68,7 +68,7 @@ Query:
   day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
   frames [YYYY-MM-DD] [--json]   List captured frames for a day
-  agents [YYYY-MM-DD] [--json]   Coding-agent session recaps (Claude Code, Codex)
+  agents [YYYY-MM-DD] [--json] [--no-recaps]   Coding-agent sessions + recaps (Claude Code, Codex)
   forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
                           (default: tomorrow)
   playback [on|off|status] [--json]   Opt-in frame retention for timelapse
@@ -78,7 +78,7 @@ Query:
   standup draft [--date YYYY-MM-DD]   Print the saved standup draft as JSON
   standup save [--date D] [--highlights S] [--tasks S] [--blockers S]
                [--priorities S]       Save the editable standup draft
-  goal [set <text>|done|clear] [--date D] [--json]   Today's day goal
+  goal [set <text>|done|clear] [--date D] [--json]   Today's day goal + streak
   insights [day|week|month] [--json]  Focus, category, app, and distraction analytics
   review [day|week|month] [--json]  AI-generated weekly review with corrections and advice
 
@@ -269,10 +269,22 @@ func main() {
 		}
 
 	case "agents":
-		// agents [YYYY-MM-DD] [--json] — coding-agent session recaps
+		// agents [YYYY-MM-DD] [--json] [--no-recaps] — coding-agent sessions
+		// with generated recaps (cached; --no-recaps for a fast local list)
 		d, err := dateArg(args, time.Now())
 		fatal(err)
-		printAgentSessions(d, jsonOut)
+		var db *sql.DB
+		if !hasFlag(args, "--no-recaps") {
+			// The listing itself doesn't need the db — degrade to
+			// metadata-only rather than failing the command.
+			if db, err = openDB(); err != nil {
+				fmt.Fprintf(os.Stderr, "agents: recaps unavailable: %v\n", err)
+				db = nil
+			} else {
+				defer db.Close()
+			}
+		}
+		printAgentSessions(db, cfg, d, jsonOut, !hasFlag(args, "--no-recaps"))
 
 	case "forecast":
 		// forecast [YYYY-MM-DD] [--json] — predict a day's category mix from
@@ -528,6 +540,8 @@ func main() {
 		date := flagValue(rest, "--date")
 		if date == "" {
 			date = time.Now().Format("2006-01-02")
+		} else if _, err := time.ParseInLocation("2006-01-02", date, time.Local); err != nil {
+			fatal(fmt.Errorf("bad --date %q — expected YYYY-MM-DD", date))
 		}
 		switch sub {
 		case "set":
@@ -560,14 +574,20 @@ func main() {
 		fatal(err)
 		if jsonOut {
 			json.NewEncoder(os.Stdout).Encode(g)
-		} else if g.Goal == "" {
-			fmt.Println("no goal set for", date)
 		} else {
-			mark := " "
-			if g.Completed {
-				mark = "✓"
+			if g.Goal == "" {
+				fmt.Println("no goal set for", date)
+			} else {
+				mark := " "
+				if g.Completed {
+					mark = "✓"
+				}
+				fmt.Printf("[%s] %s — %s\n", mark, date, g.Goal)
 			}
-			fmt.Printf("[%s] %s — %s\n", mark, date, g.Goal)
+			if g.Streak.Current > 0 || g.Streak.Total > 0 {
+				fmt.Printf("    streak %dd · best %dd · %d total\n",
+					g.Streak.Current, g.Streak.Best, g.Streak.Total)
+			}
 		}
 
 	case "insights":
@@ -1401,9 +1421,10 @@ func printStats(cfg Config, asJSON bool) {
 				"db_bytes": dbBytes, "db": humanBytes(dbBytes),
 				"wal_bytes": walBytes, "wal": humanBytes(walBytes),
 				"frames_bytes": framesBytes, "frames": humanBytes(framesBytes),
-				"frame_files": frameFiles,
-				"data_dir":    dataDir(),
-				"cap_mb":      cfg.MaxStorageMB,
+				"frame_files":   frameFiles,
+				"data_dir":      dataDir(),
+				"cap_mb":        cfg.MaxStorageMB,
+				"frames_cap_mb": cfg.MaxFramesMB, "db_cap_mb": cfg.MaxDBMB,
 			},
 			"blocks": map[string]any{
 				"total": blocksTotal, "done": blocksDone,
@@ -1421,6 +1442,7 @@ func printStats(cfg Config, asJSON bool) {
 				"provider": cfg.Provider, "model": cfg.Model,
 				"retention_days": cfg.RetentionDays, "keep_frames": cfg.KeepFrames,
 				"max_storage_mb": cfg.MaxStorageMB, "debug": cfg.Debug,
+				"max_frames_mb": cfg.MaxFramesMB, "max_db_mb": cfg.MaxDBMB,
 			},
 		})
 		return
@@ -1430,7 +1452,12 @@ func printStats(cfg Config, asJSON bool) {
 	fmt.Printf("  data dir:   %s (%s)\n", humanBytes(totalBytes), dataDir())
 	fmt.Printf("  database:   %s + %s wal\n", humanBytes(dbBytes), humanBytes(walBytes))
 	fmt.Printf("  frames:     %s (%d files awaiting summary)\n", humanBytes(framesBytes), frameFiles)
-	fmt.Printf("  cap:        %s\n", map[bool]string{true: "unlimited", false: fmt.Sprintf("%d MB", cfg.MaxStorageMB)}[cfg.MaxStorageMB == 0])
+	fmt.Printf("  caps:       frames %s · db %s\n",
+		map[bool]string{true: "unlimited", false: fmt.Sprintf("%d MB", cfg.MaxFramesMB)}[cfg.MaxFramesMB == 0],
+		map[bool]string{true: "unlimited", false: fmt.Sprintf("%d MB", cfg.MaxDBMB)}[cfg.MaxDBMB == 0])
+	if cfg.MaxStorageMB > 0 {
+		fmt.Printf("  legacy cap: %d MB (whole dir)\n", cfg.MaxStorageMB)
+	}
 	fmt.Printf("Journal\n")
 	fmt.Printf("  blocks:     %d total (%d done, %d failed, %d dead)\n", blocksTotal, blocksDone, blocksFailed, blocksDead)
 	if firstDay != "" {

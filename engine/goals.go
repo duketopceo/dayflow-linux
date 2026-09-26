@@ -8,9 +8,22 @@ import (
 
 // DayGoal is a user-set goal for a calendar day (schema: day_goals).
 type DayGoal struct {
-	Date      string `json:"date"`
-	Goal      string `json:"goal"`
-	Completed bool   `json:"completed"`
+	Date      string     `json:"date"`
+	Goal      string     `json:"goal"`
+	Completed bool       `json:"completed"`
+	Streak    GoalStreak `json:"streak"`
+}
+
+// GoalStreak summarizes completion runs across goal history, computed as of
+// the viewed date (not necessarily today — `goal --date` changes the anchor).
+// Current counts consecutive completed days ending at that anchor: a pending
+// or absent goal on the anchor day doesn't break it, the run just counts
+// through the day before. Any earlier missing or incomplete day ends the run.
+// Best is the longest run ever recorded; Total is all-time completed goals.
+type GoalStreak struct {
+	Current int `json:"current"`
+	Best    int `json:"best"`
+	Total   int `json:"total"` // all-time completed goals
 }
 
 func getGoal(db *sql.DB, date string) (DayGoal, error) {
@@ -19,13 +32,81 @@ func getGoal(db *sql.DB, date string) (DayGoal, error) {
 	err := db.QueryRow(`SELECT date, goal, completed FROM day_goals WHERE date = ?`, date).
 		Scan(&g.Date, &g.Goal, &done)
 	if errors.Is(err, sql.ErrNoRows) {
-		return DayGoal{Date: date}, nil
-	}
-	if err != nil {
+		g = DayGoal{Date: date}
+	} else if err != nil {
 		return g, err
+	} else {
+		g.Completed = done != 0
 	}
-	g.Completed = done != 0
+	g.Streak = goalStreak(db, date)
 	return g, nil
+}
+
+// goalStreak counts consecutive-day completion runs over day_goals history.
+// The viewed date is treated as pending when it has no completed goal — the
+// current run then counts back from yesterday. Any past day without a
+// completed goal (missing row or cleared) breaks a run.
+func goalStreak(db *sql.DB, date string) GoalStreak {
+	rows, err := db.Query(`SELECT date, completed FROM day_goals
+	  WHERE date <= ? ORDER BY date`, date)
+	if err != nil {
+		return GoalStreak{}
+	}
+	defer rows.Close()
+
+	done := map[string]bool{}
+	var dates []string
+	for rows.Next() {
+		var d string
+		var c int
+		if rows.Scan(&d, &c) != nil {
+			continue
+		}
+		dates = append(dates, d)
+		done[d] = c != 0
+	}
+	if err := rows.Err(); err != nil {
+		return GoalStreak{}
+	}
+
+	prevDay := func(d string) string {
+		t, err := time.Parse("2006-01-02", d)
+		if err != nil {
+			return ""
+		}
+		return t.AddDate(0, 0, -1).Format("2006-01-02")
+	}
+
+	var s GoalStreak
+	// Current: from the viewed day if done, else from yesterday (pending).
+	d := date
+	if !done[d] {
+		d = prevDay(d)
+	}
+	for done[d] {
+		s.Current++
+		d = prevDay(d)
+	}
+
+	// Best + total over all history.
+	run := 0
+	prev := ""
+	for _, d := range dates {
+		if !done[d] {
+			run, prev = 0, ""
+			continue
+		}
+		s.Total++
+		if prev == "" || prevDay(d) != prev {
+			run = 0
+		}
+		run++
+		prev = d
+		if run > s.Best {
+			s.Best = run
+		}
+	}
+	return s
 }
 
 // setGoal upserts the goal text for a date. The unique day_goals_date index

@@ -34,13 +34,16 @@ type Config struct {
 	CaptureCommand       string     `json:"capture_command"` // override; default auto-detect grim
 	Output               string     `json:"output"`          // grim -o <output>; empty = all outputs
 	SiteName             string     `json:"site_name"`       // OpenRouter X-Title
-	MaxStorageMB         int        `json:"max_storage_mb"`  // 0 = unlimited frame storage
+	MaxStorageMB         int        `json:"max_storage_mb"`  // legacy: cap on the whole data dir; 0 = off (new installs use the split caps below)
+	MaxFramesMB          int        `json:"max_frames_mb"`   // cap on frames + quarantine dirs; 0 = unlimited
+	MaxDBMB              int        `json:"max_db_mb"`       // cap on the journal database (blocks, events, calls); 0 = unlimited
 	AutoPauseLocked      bool       `json:"auto_pause_locked"`
 	FilterInappropriate  bool       `json:"filter_inappropriate"` // redact adult/explicit content
 	Debug                bool       `json:"debug"`                // verbose engine log to debug.log
 	Categories           []Category `json:"categories"`
 	ClassificationPrompt string     `json:"classification_prompt"` // extra instructions for the vision model
 	JevClassification    bool       `json:"jev_classification"`    // use Jev for category/productive (default true)
+	AgentRecaps          bool       `json:"agent_recaps"`          // generate agent-session recaps (default true; false = durable no-egress opt-out)
 	ClassificationModel  string     `json:"classification_model"`  // Jev model slug; default typesafe/jev-1.13
 	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
@@ -105,16 +108,18 @@ func defaultConfig() Config {
 		FramesPerBlock:       30,
 		JPEGQuality:          55,
 		KeepFrames:           false,
-		RetentionDays:        7,
+		RetentionDays:        0, // storage caps own eviction; days only prune when set explicitly
 		IgnoreApps:           []string{"swaylock", "hyprlock", "waylock", "gtklock", "i3lock", "xscreensaver", "screensaver"},
 		SiteName:             "dayflow-linux",
-		MaxStorageMB:         10240,
+		MaxFramesMB:          20480,
+		MaxDBMB:              10240,
 		AutoPauseLocked:      true,
 		FilterInappropriate:  true,
 		Categories:           defaultCategories(),
 		ClassificationPrompt: defaultClassificationPrompt,
 		JevClassification:    true,
 		ClassificationModel:  defaultJevModel,
+		AgentRecaps:          true,
 	}
 }
 
@@ -183,12 +188,25 @@ func loadConfig() (Config, error) {
 	if cfg.SiteName == "" {
 		cfg.SiteName = "dayflow-linux"
 	}
-	// max_storage_mb: absent config gets the 10GB default; explicit 0 means unlimited.
-	if cfg.MaxStorageMB == 0 && !strings.Contains(string(b), "max_storage_mb") {
-		cfg.MaxStorageMB = 10240
+	// Storage caps: a legacy max_storage_mb still bounds the whole data dir,
+	// and migrates to the frame cap when no split keys are present. Absent
+	// split keys get their own defaults; explicit 0 means unlimited.
+	raw := string(b)
+	if !strings.Contains(raw, "max_frames_mb") {
+		if strings.Contains(raw, "max_storage_mb") {
+			cfg.MaxFramesMB = cfg.MaxStorageMB
+		} else {
+			cfg.MaxFramesMB = 20480
+		}
+	}
+	if !strings.Contains(raw, "max_db_mb") {
+		cfg.MaxDBMB = 10240
 	}
 	if !strings.Contains(string(b), "jev_classification") {
 		cfg.JevClassification = true
+	}
+	if !strings.Contains(string(b), "agent_recaps") {
+		cfg.AgentRecaps = true
 	}
 	if cfg.ClassificationModel == "" {
 		cfg.ClassificationModel = defaultJevModel
@@ -325,8 +343,8 @@ func writeDefaultConfig() error {
 // setConfigValue updates one key in config.json. Supported keys:
 // provider, model, api_base_url, capture_interval_sec, block_minutes, frames_per_block,
 // jpeg_quality, keep_frames, retention_days, ignore_apps (comma list),
-// openrouter_api_key, output, capture_command, max_storage_mb, auto_pause_locked,
-// filter_inappropriate, debug.
+// openrouter_api_key, output, capture_command, max_storage_mb, max_frames_mb,
+// max_db_mb, auto_pause_locked, filter_inappropriate, debug.
 func setConfigValue(key, value string) error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -407,6 +425,12 @@ func setConfigValue(key, value string) error {
 			return fmt.Errorf("jev_classification must be true or false")
 		}
 		cfg.JevClassification = b
+	case "agent_recaps":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("agent_recaps must be true or false")
+		}
+		cfg.AgentRecaps = b
 	case "classification_model":
 		cfg.ClassificationModel = value
 	case "categories":
@@ -422,12 +446,19 @@ func setConfigValue(key, value string) error {
 				cfg.IgnoreApps[i] = strings.TrimSpace(cfg.IgnoreApps[i])
 			}
 		}
-	case "max_storage_mb":
+	case "max_storage_mb", "max_frames_mb", "max_db_mb":
 		n, err := strconv.Atoi(value)
 		if err != nil {
-			return fmt.Errorf("max_storage_mb must be an integer")
+			return fmt.Errorf("%s must be an integer", key)
 		}
-		cfg.MaxStorageMB = n
+		switch key {
+		case "max_storage_mb":
+			cfg.MaxStorageMB = n
+		case "max_frames_mb":
+			cfg.MaxFramesMB = n
+		case "max_db_mb":
+			cfg.MaxDBMB = n
+		}
 	case "output":
 		cfg.Output = value
 	case "capture_command":

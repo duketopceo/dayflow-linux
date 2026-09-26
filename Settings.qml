@@ -363,7 +363,7 @@ Flickable {
         }
       }
 
-      Row {
+      Flow {
         width: parent.width
         spacing: Style.space(6)
 
@@ -378,16 +378,32 @@ Flickable {
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
           label: "Retention (days)"
-          value: String(dayflow.configDraft.retention_days !== undefined ? dayflow.configDraft.retention_days : 7)
-          hint: "7"
+          value: String(dayflow.configDraft.retention_days !== undefined ? dayflow.configDraft.retention_days : 0)
+          hint: "0 = until caps"
           numeric: true
           onEdited: dayflow.configDraft.retention_days = parseInt(text, 10) || 0
         }
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
-          label: "Max storage (MB)"
-          value: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 10240)
+          label: "Frames cap (MB)"
+          value: String(dayflow.configDraft.max_frames_mb !== undefined ? dayflow.configDraft.max_frames_mb : 20480)
+          hint: "20480"
+          numeric: true
+          onEdited: dayflow.configDraft.max_frames_mb = parseInt(text, 10) || 0
+        }
+        SettingsField { dayflow: root.dayflow;
+          width: (parent.width - 2 * parent.spacing) / 3
+          label: "Text data cap (MB)"
+          value: String(dayflow.configDraft.max_db_mb !== undefined ? dayflow.configDraft.max_db_mb : 10240)
           hint: "10240"
+          numeric: true
+          onEdited: dayflow.configDraft.max_db_mb = parseInt(text, 10) || 0
+        }
+        SettingsField { dayflow: root.dayflow;
+          width: (parent.width - 2 * parent.spacing) / 3
+          label: "Total cap, legacy (MB)"
+          value: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 0)
+          hint: "0 = off"
           numeric: true
           onEdited: dayflow.configDraft.max_storage_mb = parseInt(text, 10) || 0
         }

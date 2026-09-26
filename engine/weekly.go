@@ -55,6 +55,30 @@ type DayHeatmap struct {
 	Hours []HourHeatmap `json:"hours"`
 }
 
+// TrendDelta is one category's week-over-week movement.
+type TrendDelta struct {
+	Name         string  `json:"name"`
+	Display      string  `json:"display"`
+	CurrMinutes  float64 `json:"curr_minutes"`
+	PrevMinutes  float64 `json:"prev_minutes"`
+	DeltaMinutes float64 `json:"delta_minutes"`
+	// DeltaShare is the change in share-of-week (percentage points) — the
+	// honest signal when total tracked time differs between weeks.
+	DeltaShare float64 `json:"delta_share"`
+}
+
+// WeekTrends is the explicit current-vs-previous-week comparison. HasPrev is
+// false when the prior week has no data — consumers render nothing then.
+type WeekTrends struct {
+	HasPrev       bool         `json:"has_prev"`
+	PrevTotal     float64      `json:"prev_total_minutes"`
+	TotalDelta    float64      `json:"total_delta_minutes"`
+	FocusDelta    float64      `json:"focus_delta_minutes"`
+	DistractDelta float64      `json:"distraction_delta_minutes"`
+	ShiftDelta    int          `json:"shift_delta_count"`
+	Categories    []TrendDelta `json:"categories"`
+}
+
 // WeekPayload is the full JSON payload consumed by the Quickshell Week tab.
 type WeekPayload struct {
 	Start              string           `json:"start"`
@@ -72,6 +96,7 @@ type WeekPayload struct {
 	Highlights         []string         `json:"highlights"`
 	Suggestions        []string         `json:"suggestions"`
 	Heatmap            []DayHeatmap     `json:"heatmap"`
+	Trends             WeekTrends       `json:"trends"`
 }
 
 func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPayload, error) {
@@ -97,20 +122,28 @@ func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPa
 	if err != nil {
 		return WeekPayload{}, err
 	}
-	var filtered []Block
-	for _, b := range blocks {
-		if !isExcludedBlock(b) {
-			filtered = append(filtered, b)
-		}
-	}
+	filtered := nonExcludedBlocks(blocks)
 	p.ContextShifts, p.ContextShiftCount = buildContextShifts(filtered)
 	p.ContextShifts = salientShifts(db, cfg, p.ContextShifts)
 	p.Heatmap = buildHeatmap(filtered, start, cfg)
 
 	highlights := buildHighlights(in)
-	prev, _ := previousWeekInsights(db, cfg, start)
+	prevStart, prevEnd := weekBounds(start.Add(-24 * time.Hour))
+	// One query serves both the category comparison and the shift delta.
+	prevBlocks, err := blocksBetween(db, prevStart, prevEnd)
+	if err != nil {
+		return WeekPayload{}, err
+	}
+	prev := generateInsightsFromBlocks(prevBlocks, cfg, prevStart, prevEnd)
 	if len(prev.Categories) > 0 {
 		highlights = append(highlights, biggestImprovement(in.Categories, prev.Categories)...)
+	}
+	p.Trends = buildWeekTrends(in, prev)
+	// buildWeekTrends owns Trends — set ShiftDelta after it, and only when a
+	// previous week actually exists (a delta against nothing is misleading).
+	if p.Trends.HasPrev {
+		_, prevShifts := buildContextShifts(nonExcludedBlocks(prevBlocks))
+		p.Trends.ShiftDelta = p.ContextShiftCount - prevShifts
 	}
 	p.Highlights = highlights
 	p.Suggestions = buildSuggestions(in)
@@ -141,6 +174,9 @@ func generateWeeklyPayload(db *sql.DB, cfg Config, start, end time.Time) (WeekPa
 	if p.Heatmap == nil {
 		p.Heatmap = []DayHeatmap{}
 	}
+	if p.Trends.Categories == nil {
+		p.Trends.Categories = []TrendDelta{}
+	}
 
 	return p, nil
 }
@@ -153,7 +189,7 @@ func buildCategoryDonut(cats []insightDist, total float64, cfg Config) []DonutIt
 	sum := 0.0
 	for i, c := range cats {
 		if i < 6 {
-			pct := round1(100.0 * c.Mins / total)
+			pct := round1(sharePct(c.Mins, total))
 			out = append(out, DonutItem{
 				Name:       c.Name,
 				Display:    catDisplay(c.Name),
@@ -170,7 +206,7 @@ func buildCategoryDonut(cats []insightDist, total float64, cfg Config) []DonutIt
 			other += cats[i].Mins
 		}
 		if other > 0 {
-			pct := round1(100.0 * other / total)
+			pct := round1(sharePct(other, total))
 			if sum+pct > 100.0 {
 				pct = round1(100.0 - sum)
 			}
@@ -200,8 +236,19 @@ func buildAppTreemap(apps []insightDist, total float64) []TreemapItem {
 			Display:    appDisplayName(a.Name),
 			Minutes:    round1(a.Mins),
 			Count:      a.Count,
-			Percentage: round1(100.0 * a.Mins / total),
+			Percentage: round1(sharePct(a.Mins, total)),
 		})
+	}
+	return out
+}
+
+// nonExcludedBlocks drops blocks the user excluded from analytics.
+func nonExcludedBlocks(blocks []Block) []Block {
+	var out []Block
+	for _, b := range blocks {
+		if !isExcludedBlock(b) {
+			out = append(out, b)
+		}
 	}
 	return out
 }
@@ -325,9 +372,62 @@ func biggestImprovement(curr, prev []insightDist) []string {
 	return []string{fmt.Sprintf("Biggest improvement vs last week: %s (+%.0f min)", catDisplay(best), bestDelta)}
 }
 
-func previousWeekInsights(db *sql.DB, cfg Config, start time.Time) (insights, error) {
-	prevStart, prevEnd := weekBounds(start.Add(-24 * time.Hour))
-	return generateInsights(db, cfg, prevStart, prevEnd)
+// buildWeekTrends diffs this week's insights against the previous week's.
+// Category deltas cover the union of both weeks (new categories have
+// prev=0, dropped categories curr=0), sorted by absolute minute delta.
+func buildWeekTrends(in, prev insights) WeekTrends {
+	t := WeekTrends{
+		PrevTotal:     round1(prev.TotalMins),
+		TotalDelta:    round1(in.TotalMins - prev.TotalMins),
+		FocusDelta:    round1(in.FocusMins - prev.FocusMins),
+		DistractDelta: round1(in.DistractionMins - prev.DistractionMins),
+	}
+	if prev.TotalMins <= 0 && len(prev.Categories) == 0 {
+		return t // no prior week — HasPrev stays false
+	}
+	t.HasPrev = true
+
+	prevBy := map[string]float64{}
+	for _, c := range prev.Categories {
+		prevBy[c.Name] += c.Mins
+	}
+	seen := map[string]bool{}
+	for _, c := range in.Categories {
+		seen[c.Name] = true
+		pm := prevBy[c.Name]
+		t.Categories = append(t.Categories, TrendDelta{
+			Name:         c.Name,
+			Display:      catDisplay(c.Name),
+			CurrMinutes:  round1(c.Mins),
+			PrevMinutes:  round1(pm),
+			DeltaMinutes: round1(c.Mins - pm),
+			DeltaShare:   round1(sharePct(c.Mins, in.TotalMins) - sharePct(pm, prev.TotalMins)),
+		})
+	}
+	for _, c := range prev.Categories {
+		if seen[c.Name] {
+			continue
+		}
+		seen[c.Name] = true
+		t.Categories = append(t.Categories, TrendDelta{
+			Name:         c.Name,
+			Display:      catDisplay(c.Name),
+			PrevMinutes:  round1(c.Mins),
+			DeltaMinutes: round1(-c.Mins),
+			DeltaShare:   round1(-sharePct(c.Mins, prev.TotalMins)),
+		})
+	}
+	sort.Slice(t.Categories, func(i, j int) bool {
+		return math.Abs(t.Categories[i].DeltaMinutes) > math.Abs(t.Categories[j].DeltaMinutes)
+	})
+	return t
+}
+
+func sharePct(mins, total float64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return 100 * mins / total
 }
 
 func buildSuggestions(in insights) []string {
