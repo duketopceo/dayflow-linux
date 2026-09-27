@@ -121,6 +121,20 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	if p.Kind == "cli" {
+		// Intercept while frame paths are still paths: the subprocess gets
+		// staged file references, not base64 payloads. Only reachable when the
+		// provider opted in via allow_hot_path (see providerForTask).
+		text, pt, ct, err := callProviderCLIVision(cfg, p, buildPromptForProvider(p, cfg), frames)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		res, err := blockResultFromText(cfg, text)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		return res, pt, ct, nil
+	}
 	content := []orContent{{Type: "text", Text: buildPromptForProvider(p, cfg)}}
 	for _, f := range frames {
 		raw, err := os.ReadFile(f)
@@ -141,12 +155,22 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	res, err := blockResultFromText(cfg, text)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return res, pt, ct, nil
+}
+
+// blockResultFromText parses a provider's text response into a blockResult
+// and applies the standard sanitization — shared by the HTTP and cli paths.
+func blockResultFromText(cfg Config, text string) (*blockResult, error) {
 	var res blockResult
 	if err := json.Unmarshal([]byte(text), &res); err != nil {
-		return nil, 0, 0, fmt.Errorf("bad model JSON: %w (raw: %s)", err, truncate(text, 200))
+		return nil, fmt.Errorf("bad model JSON: %w (raw: %s)", err, truncate(text, 200))
 	}
 	sanitizeResult(cfg, &res)
-	return &res, pt, ct, nil
+	return &res, nil
 }
 
 func stripFences(s string) string {
