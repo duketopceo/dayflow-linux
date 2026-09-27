@@ -231,9 +231,21 @@ merge SHA, and the `needs-fixes`/`security-review-required` labels resolve.
 ## Scope Boundaries
 
 **Deferred to follow-up work:** the intermittent `grab failed` capture bug
-(Sep 16–17 frame loss); re-running the three failed summarize windows
-(09-21 01:00, 09-22 02:30/02:45); slimming internal docs out of the deployed
-plugin directory; a QML test harness.
+(resolved separately in PR #27); re-running failed summarize windows (done —
+`dayflow retry` + `summarize` recovered the one dead block); slimming
+internal docs out of the deployed plugin directory; a QML test harness.
+
+**Deferred backlog (post-baseline candidates, deferred 2026-09-26 to protect
+the marketplace freeze):**
+- **Config autodetect** — e.g. re-resolving the Wayland socket at runtime or
+  trying `wayland-0`/`wayland-1` fallbacks. Low value while env is fixed at
+  service start and missing-socket handling is graceful (PR #27).
+- **Output/resolution auto-scaling** — dock/undock frame-size handling.
+  Unproven need: grim captures whatever output exists, `ahash` is
+  size-agnostic, the 20GB frame cap absorbs variance. Revisit only if a real
+  docked/undocked capture failure is observed.
+- **Generic error-handling sweep** — deferred as boondoggle-prone; specific
+  misbehaving error paths should become targeted debug work instead.
 
 **Non-goals:** packaging beyond tag + release (no AUR, no binary artifacts —
 repo convention is "tag + verified install"), any new feature work, changes to
