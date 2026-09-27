@@ -213,6 +213,27 @@ func grabFrame(cmdArgs []string) ([]byte, error) {
 
 const dedupThreshold = 5 // hamming distance out of 256 bits
 
+// waylandReachable reports whether the configured Wayland socket exists.
+// grim exits 1 instantly when it doesn't ("failed to create display") —
+// no session means nothing to capture, so the daemon pauses quietly instead
+// of error-storming every interval. Returns true when it can't check (unset
+// env or non-socket layout) so the capture command remains the arbiter.
+func waylandReachable() bool {
+	disp, rt := os.Getenv("WAYLAND_DISPLAY"), os.Getenv("XDG_RUNTIME_DIR")
+	if disp == "" || rt == "" {
+		return true
+	}
+	st, err := os.Stat(filepath.Join(rt, disp))
+	return err == nil && st.Mode()&os.ModeSocket != 0
+}
+
+// captureFailVisible throttles repeated capture errors: the first failure
+// and every ~5-minute mark thereafter are logged; the rest are silent so a
+// dead-session window can't flood the debug log, events table, and journald.
+func captureFailVisible(streak int) bool {
+	return streak == 1 || streak%30 == 0
+}
+
 // captureOnce samples the screen and stores a frame when it has changed.
 // lastHash is the previous frame's hash, or nil when no frame has been
 // sampled yet (e.g. after unlock or pause). The returned hash is the latest
@@ -229,14 +250,12 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) 
 	}
 	raw, err := grabFrame(cmdArgs)
 	if err != nil {
-		logEvent(db, "capture_error", err.Error())
-		debugf(cfg, "capture: grab failed: %v", err)
+		// Logging is the caller's job — it streak-throttles so a dead-session
+		// window doesn't flood every sink each interval.
 		return lastHash, fmt.Errorf("capture: %w", err)
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
-		logEvent(db, "capture_error", "decode: "+err.Error())
-		debugf(cfg, "capture: decode failed: %v", err)
 		return lastHash, fmt.Errorf("decode: %w", err)
 	}
 	h := ahash(img)
@@ -668,6 +687,8 @@ func runDaemon(cfg Config) error {
 
 	var lastHash *frameHash // nil = no prior sample; force first capture
 	locked := false
+	noSession := false // wayland socket absent — capture skipped, logged once
+	grabFails := 0     // consecutive capture errors with a session present
 	tick := time.NewTicker(time.Duration(cfg.CaptureIntervalSec) * time.Second)
 	defer tick.Stop()
 	retentionTick := time.NewTicker(time.Hour)
@@ -681,10 +702,38 @@ func runDaemon(cfg Config) error {
 
 	capture := func() {
 		reloadIfChanged()
+		// Built-in grim exits 1 instantly when no wayland session exists
+		// (greeter, compositor down/restarting) — pause quietly and log the
+		// transition, not an error per tick. Custom capture_command stays
+		// ungated: its failure modes are its own.
+		if cfg.CaptureCommand == "" && !waylandReachable() {
+			if !noSession {
+				noSession = true
+				lastHash = nil
+				logEvent(db, "capture_paused", "no wayland session")
+				debugf(cfg, "capture: paused — wayland socket absent")
+			}
+			return
+		}
+		if noSession {
+			noSession = false
+			logEvent(db, "capture_resumed", "wayland session")
+			debugf(cfg, "capture: resumed — wayland session present")
+		}
 		h, err := captureOnce(db, cfg, cmdArgs, lastHash)
 		if err != nil {
-			log.Printf("capture: %v", err)
+			grabFails++
+			if captureFailVisible(grabFails) {
+				logEvent(db, "capture_error", err.Error())
+				debugf(cfg, "capture: %v (streak %d)", err, grabFails)
+				log.Printf("capture: %v (streak %d)", err, grabFails)
+			}
 			return
+		}
+		if grabFails > 0 {
+			logEvent(db, "capture_recovered", fmt.Sprintf("after %d failures", grabFails))
+			debugf(cfg, "capture: recovered after %d failures", grabFails)
+			grabFails = 0
 		}
 		lastHash = h
 	}
