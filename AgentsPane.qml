@@ -2,9 +2,9 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// FullView "Agents" pane — Claude Code / Codex session recaps for the
-// viewed day. `host` is the FullView window, which owns the session list
-// and the loader process.
+// FullView "Agents" pane — coding-agent session recaps (Claude Code,
+// Codex, OpenCode, Devin, Cursor) for the viewed day. `host` is the
+// FullView window, which owns the session list and the loader process.
 Column {
   id: pane
 
@@ -41,7 +41,7 @@ Column {
   Text {
     visible: host !== null && !host.agentsLoading &&
       host.agentSessions.length === 0 && host.agentsError === ""
-    text: "No Claude Code or Codex sessions on this day."
+    text: "No Claude Code, Codex, OpenCode, Devin, or Cursor sessions on this day."
     textFormat: Text.PlainText
     color: pane.dayflow ? pane.dayflow.dim : "gray"
     font.family: pane.dayflow ? pane.dayflow.fontFamily : ""

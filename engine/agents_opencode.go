@@ -17,9 +17,10 @@ import (
 // `session_message`. Both share the `session` table with epoch-ms
 // timestamps. The stores are undocumented and version-fragile — every
 // failure degrades to "no sessions", never a hard error (R3).
-type opencodeSource struct{}
+// storeCache shares one read handle per store across a pass.
+type opencodeSource struct{ storeCache }
 
-func (o opencodeSource) Name() string { return "opencode" }
+func (o *opencodeSource) Name() string { return "opencode" }
 
 // opencodeDBPath is the primary store; DAYFLOW_OPENCODE_DB overrides it for
 // tests.
@@ -45,7 +46,7 @@ func opencodeDBPaths() []string {
 	return paths
 }
 
-func (o opencodeSource) Scan(s, e time.Time) ([]AgentSession, string) {
+func (o *opencodeSource) Scan(s, e time.Time) ([]AgentSession, string) {
 	var out []AgentSession
 	var notes []string
 	for _, path := range opencodeDBPaths() {
@@ -54,74 +55,14 @@ func (o opencodeSource) Scan(s, e time.Time) ([]AgentSession, string) {
 		if note != "" {
 			// Identifiers and sizes only — never message content (R3b).
 			notes = append(notes, filepath.Base(path)+": "+note)
-			appendLog("opencode scan " + filepath.Base(path) + ": " + note)
+			// An absent store is the idle case (like a missing JSONL
+			// root) — status carries it; the debug log doesn't need it.
+			if note != "store not found" {
+				appendLog("opencode scan " + filepath.Base(path) + ": " + note)
+			}
 		}
 	}
 	return out, strings.Join(notes, "; ")
-}
-
-// opencodeStore wraps a read connection plus the temp dir to remove when the
-// live DB couldn't be opened in place and a copy was made.
-type opencodeStore struct {
-	db     *sql.DB
-	tmpDir string
-}
-
-func (s *opencodeStore) close() {
-	s.db.Close()
-	if s.tmpDir != "" {
-		os.RemoveAll(s.tmpDir)
-	}
-}
-
-// openOpencodeStore opens path read-only. A live WAL-mode store can refuse a
-// plain ro open (shm recovery needs write access), so on failure retry once
-// against a temp-dir copy of db+wal+shm before degrading.
-func openOpencodeStore(path string) (*opencodeStore, error) {
-	const ro = "?mode=ro&_pragma=busy_timeout(3000)&_pragma=query_only(1)"
-	if db, err := sql.Open("sqlite", "file:"+path+ro); err == nil {
-		if err := db.Ping(); err == nil {
-			return &opencodeStore{db: db}, nil
-		}
-		db.Close()
-	}
-	// Retry on a temp copy — opened read-write, which is safe because the
-	// copy is disposable and WAL recovery may need to write shm.
-	dir, err := os.MkdirTemp("", "dayflow-opencode-*")
-	if err != nil {
-		return nil, err
-	}
-	tmp := filepath.Join(dir, "opencode.db")
-	ok := false
-	defer func() {
-		if !ok {
-			os.RemoveAll(dir)
-		}
-	}()
-	for i, suffix := range []string{"", "-wal", "-shm"} {
-		if err := copyFile(path+suffix, tmp+suffix); err != nil && i == 0 {
-			return nil, err
-		}
-	}
-	db, err := sql.Open("sqlite", "file:"+tmp+"?_pragma=busy_timeout(3000)")
-	if err != nil {
-		return nil, err
-	}
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	ok = true
-	return &opencodeStore{db: db, tmpDir: dir}, nil
-}
-
-func sqliteTableExists(db *sql.DB, name string) bool {
-	var n int
-	if err := db.QueryRow(
-		`SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n); err != nil {
-		return false
-	}
-	return n > 0
 }
 
 // opencodeLayout picks the message-table generation actually carrying data:
@@ -131,12 +72,12 @@ func opencodeLayout(db *sql.DB) string {
 	hasSM := sqliteTableExists(db, "session_message")
 	hasMsg := sqliteTableExists(db, "message")
 	if hasSM {
-		var n, nm int
-		db.QueryRow(`SELECT COUNT(1) FROM session_message`).Scan(&n)
+		var smHas, msgHas bool
+		db.QueryRow(`SELECT EXISTS(SELECT 1 FROM session_message)`).Scan(&smHas)
 		if hasMsg {
-			db.QueryRow(`SELECT COUNT(1) FROM message`).Scan(&nm)
+			db.QueryRow(`SELECT EXISTS(SELECT 1 FROM message)`).Scan(&msgHas)
 		}
-		if n > 0 || nm == 0 {
+		if smHas || !msgHas {
 			return "next"
 		}
 	}
@@ -152,7 +93,7 @@ func scanOpencodeDB(path string, s, e time.Time) ([]AgentSession, string) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, "store not found"
 	}
-	st, err := openOpencodeStore(path)
+	st, err := openROStore(path)
 	if err != nil {
 		return nil, "store unreadable: " + err.Error()
 	}
@@ -174,29 +115,25 @@ func scanOpencodeDB(path string, s, e time.Time) ([]AgentSession, string) {
 	return out, ""
 }
 
-type ocCandidate struct {
-	id, title, dir string
-}
-
 // opencodeCandidates returns sessions having at least one message inside
 // [sMs,eMs) — the same overlap rule the JSONL scanners apply to message
 // timestamps, so a session spanning midnight appears on both days.
-func opencodeCandidates(db *sql.DB, layout string, sMs, eMs int64) ([]ocCandidate, error) {
+func opencodeCandidates(db *sql.DB, layout string, sMs, eMs int64) ([]sessionCandidate, error) {
 	msgTable := "session_message"
 	if layout == "old" {
 		msgTable = "message"
 	}
 	rows, err := db.Query(`SELECT s.id, s.title, s.directory FROM session s
-	  WHERE EXISTS (SELECT 1 FROM `+msgTable+` m
-	    WHERE m.session_id = s.id AND m.time_created >= ? AND m.time_created < ?)
+	  WHERE s.id IN (SELECT session_id FROM `+msgTable+`
+	    WHERE time_created >= ? AND time_created < ?)
 	  ORDER BY s.time_created`, sMs, eMs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []ocCandidate
+	var out []sessionCandidate
 	for rows.Next() {
-		var c ocCandidate
+		var c sessionCandidate
 		if err := rows.Scan(&c.id, &c.title, &c.dir); err != nil {
 			return nil, err
 		}
@@ -331,10 +268,27 @@ func ocMessagesOld(db *sql.DB, sessionID string, withText bool) ([]ocMessage, er
 	return out, parts.Err()
 }
 
+// ocTurns normalizes message rows to the shared turn shape. Any user
+// message is usable — OpenCode doesn't mark injected prompts.
+func ocTurns(msgs []ocMessage) []sessionTurn {
+	out := make([]sessionTurn, 0, len(msgs))
+	for _, m := range msgs {
+		var ts int64
+		if m.created > 0 {
+			ts = m.created / 1000
+		}
+		out = append(out, sessionTurn{
+			role: m.role, text: m.text, unixTs: ts,
+			usableUser: m.role == "user",
+		})
+	}
+	return out
+}
+
 // opencodeSession folds one session's message rows into an AgentSession.
 // Sessions with no user messages are skipped — there is nothing to title or
 // excerpt — and Start/End span the whole session, not just the window.
-func opencodeSession(db *sql.DB, path, layout string, c ocCandidate) (AgentSession, bool) {
+func opencodeSession(db *sql.DB, path, layout string, c sessionCandidate) (AgentSession, bool) {
 	msgs, err := ocMessages(db, layout, c.id, true)
 	if err != nil || len(msgs) == 0 {
 		return AgentSession{}, false
@@ -349,28 +303,7 @@ func opencodeSession(db *sql.DB, path, layout string, c ocCandidate) (AgentSessi
 		store:     path,
 		sessionID: c.id,
 	}
-	userMsgs := 0
-	var firstUser string
-	for _, m := range msgs {
-		if m.created > 0 {
-			u := m.created / 1000
-			if sess.Start == 0 || u < sess.Start {
-				sess.Start = u
-			}
-			if u > sess.End {
-				sess.End = u
-			}
-		}
-		if m.role == "user" || m.role == "assistant" {
-			sess.Messages++
-		}
-		if m.role == "user" {
-			userMsgs++
-			if firstUser == "" {
-				firstUser = strings.TrimSpace(m.text)
-			}
-		}
-	}
+	firstUser, userMsgs := foldSession(&sess, ocTurns(msgs))
 	if userMsgs == 0 || sess.Start == 0 {
 		return AgentSession{}, false
 	}
@@ -385,8 +318,9 @@ func opencodeSession(db *sql.DB, path, layout string, c ocCandidate) (AgentSessi
 
 // messages re-queries a session's rows at recap time: withText=false is the
 // cheap fingerprint path (ids + update times only), withText=true adds the
-// text payload for the excerpt.
-func (o opencodeSource) messages(sess AgentSession, withText bool) ([]ocMessage, bool) {
+// text payload for the excerpt. The store handle comes from the per-pass
+// cache — one open per store, not per call.
+func (o *opencodeSource) messages(sess AgentSession, withText bool) ([]ocMessage, bool) {
 	path, id := sess.store, sess.sessionID
 	if path == "" || id == "" {
 		// Reconstruct the location from the File key when the session was
@@ -402,11 +336,10 @@ func (o opencodeSource) messages(sess AgentSession, withText bool) ([]ocMessage,
 		path = filepath.Join(filepath.Dir(opencodeDBPath()), base)
 		id = sid
 	}
-	st, err := openOpencodeStore(path)
-	if err != nil {
+	st, ok := o.open(path)
+	if !ok {
 		return nil, false
 	}
-	defer st.close()
 	layout := opencodeLayout(st.db)
 	if layout == "" {
 		return nil, false
@@ -421,7 +354,7 @@ func (o opencodeSource) messages(sess AgentSession, withText bool) ([]ocMessage,
 // Fingerprint content-hashes the session's message ids + update times. A
 // shared DB file's mtime would thrash the recap cache on every session's
 // writes, so DB sources key invalidation on their own message set (KTD2).
-func (o opencodeSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
+func (o *opencodeSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 	msgs, ok := o.messages(sess, false)
 	if !ok {
 		return recapFingerprint{}, false
@@ -434,38 +367,16 @@ func (o opencodeSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) 
 		binary.BigEndian.PutUint64(b[:], uint64(m.updated))
 		h.Write(b[:])
 	}
-	sum := h.Sum(nil)
-	return recapFingerprint{
-		Mtime: int64(binary.BigEndian.Uint64(sum[:8])),
-		Size:  int64(binary.BigEndian.Uint64(sum[8:16])),
-	}, true
+	return hashFingerprint(h.Sum(nil)), true
 }
 
 // Excerpt re-queries first/last user text and last assistant text, rendered
 // through the shared excerpt builder so the egress shape is identical to the
 // JSONL sources.
-func (o opencodeSource) Excerpt(sess AgentSession) string {
+func (o *opencodeSource) Excerpt(sess AgentSession) string {
 	msgs, ok := o.messages(sess, true)
 	if !ok {
 		return ""
 	}
-	var firstUser, lastUser, lastAssistant string
-	for _, m := range msgs {
-		text := strings.TrimSpace(m.text)
-		switch m.role {
-		case "user":
-			if text == "" || isEnvelopeText(text) {
-				continue
-			}
-			if firstUser == "" {
-				firstUser = text
-			}
-			lastUser = text
-		case "assistant":
-			if text != "" {
-				lastAssistant = text
-			}
-		}
-	}
-	return buildExcerpt(firstUser, lastUser, lastAssistant)
+	return excerptFromTurns(ocTurns(msgs))
 }

@@ -19,10 +19,10 @@ import (
 // node in message_nodes; transcripts/<session_id>.json holds the same
 // conversation in ATIF-v1.x form for sessions the DB lacks. Both stores are
 // undocumented — every failure degrades to "no sessions", never a hard
-// error (R3).
-type devinSource struct{}
+// error (R3). storeCache shares one read handle per store across a pass.
+type devinSource struct{ storeCache }
 
-func (d devinSource) Name() string { return "devin" }
+func (d *devinSource) Name() string { return "devin" }
 
 // devinDir is the Devin CLI store root; DAYFLOW_DEVIN_DIR overrides it for
 // tests.
@@ -32,13 +32,6 @@ func devinDir() string {
 	}
 	h, _ := os.UserHomeDir()
 	return filepath.Join(h, ".local", "share", "devin", "cli")
-}
-
-// openDevinStore opens sessions.db read-only, reusing the OpenCode
-// adapter's temp-copy fallback for live WAL stores (a ro open can fail when
-// shm recovery needs write access).
-func openDevinStore(path string) (*opencodeStore, error) {
-	return openOpencodeStore(path)
 }
 
 // devinMessage is one message's recap-relevant fields, from either a
@@ -51,7 +44,7 @@ type devinMessage struct {
 	userInput bool // real typed input, not an injected continuation/context
 }
 
-func (d devinSource) Scan(s, e time.Time) ([]AgentSession, string) {
+func (d *devinSource) Scan(s, e time.Time) ([]AgentSession, string) {
 	dir := devinDir()
 	if _, err := os.Stat(dir); err != nil {
 		return nil, "store dir not found"
@@ -61,9 +54,12 @@ func (d devinSource) Scan(s, e time.Time) ([]AgentSession, string) {
 	sessions, known, note := scanDevinDB(filepath.Join(dir, "sessions.db"), s, e)
 	out = append(out, sessions...)
 	if note != "" {
-		// Identifiers and sizes only — never message content (R3b).
+		// Identifiers and sizes only — never message content (R3b). An
+		// absent store is the idle case — status carries it, no log.
 		notes = append(notes, "sessions.db: "+note)
-		appendLog("devin scan sessions.db: " + note)
+		if note != "store not found" {
+			appendLog("devin scan sessions.db: " + note)
+		}
 	}
 	ts, tnote := scanDevinTranscripts(filepath.Join(dir, "transcripts"), known, s, e)
 	out = append(out, ts...)
@@ -82,7 +78,7 @@ func scanDevinDB(path string, s, e time.Time) (sessions []AgentSession, known ma
 	if _, err := os.Stat(path); err != nil {
 		return nil, nil, "store not found"
 	}
-	st, err := openDevinStore(path)
+	st, err := openROStore(path)
 	if err != nil {
 		return nil, nil, "store unreadable: " + err.Error()
 	}
@@ -128,22 +124,18 @@ func devinKnownIDs(db *sql.DB) (map[string]bool, error) {
 	return known, rows.Err()
 }
 
-type dvCandidate struct {
-	id, title, dir string
-}
-
-func devinCandidates(db *sql.DB, sSec, eSec int64) ([]dvCandidate, error) {
+func devinCandidates(db *sql.DB, sSec, eSec int64) ([]sessionCandidate, error) {
 	rows, err := db.Query(`SELECT s.id, s.title, s.working_directory FROM sessions s
-	  WHERE EXISTS (SELECT 1 FROM message_nodes m
-	    WHERE m.session_id = s.id AND m.created_at >= ? AND m.created_at < ?)
+	  WHERE s.id IN (SELECT session_id FROM message_nodes
+	    WHERE created_at >= ? AND created_at < ?)
 	  ORDER BY s.created_at`, sSec, eSec)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []dvCandidate
+	var out []sessionCandidate
 	for rows.Next() {
-		var c dvCandidate
+		var c sessionCandidate
 		var title, dir sql.NullString
 		if err := rows.Scan(&c.id, &title, &dir); err != nil {
 			return nil, err
@@ -292,6 +284,20 @@ func parseDevinTranscript(path string) ([]devinMessage, string, bool) {
 	return msgs, sid, true
 }
 
+// devinTurns normalizes messages to the shared turn shape. Only real typed
+// input (is_user_input / ATIF user steps) is usable — injected continuation
+// prompts carry nothing to title or excerpt.
+func devinTurns(msgs []devinMessage) []sessionTurn {
+	out := make([]sessionTurn, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, sessionTurn{
+			role: m.role, text: m.text, unixTs: m.created,
+			usableUser: m.role == "user" && m.userInput,
+		})
+	}
+	return out
+}
+
 // devinSession folds one session's messages into an AgentSession. Sessions
 // with no real user input are skipped — injected continuation prompts carry
 // nothing to title or excerpt. Project comes only from the DB's
@@ -306,27 +312,7 @@ func devinSession(cwd, title, fileKey, store, id string, msgs []devinMessage) (A
 		store:     store,
 		sessionID: id,
 	}
-	userMsgs := 0
-	var firstUser string
-	for _, m := range msgs {
-		if m.created > 0 {
-			if sess.Start == 0 || m.created < sess.Start {
-				sess.Start = m.created
-			}
-			if m.created > sess.End {
-				sess.End = m.created
-			}
-		}
-		if m.role == "user" || m.role == "assistant" {
-			sess.Messages++
-		}
-		if m.role == "user" && m.userInput {
-			userMsgs++
-			if firstUser == "" {
-				firstUser = strings.TrimSpace(m.text)
-			}
-		}
-	}
+	firstUser, userMsgs := foldSession(&sess, devinTurns(msgs))
 	if userMsgs == 0 || sess.Start == 0 {
 		return AgentSession{}, false
 	}
@@ -360,9 +346,25 @@ func devinLocate(sess AgentSession) (path, sessionID string, transcript bool) {
 	return "", "", false
 }
 
+// dbMessages re-queries a DB-backed session's rows at recap time:
+// withText=false is the cheap fingerprint path, withText=true adds
+// role/text for the excerpt. The store handle comes from the per-pass
+// cache — one open per store, not per call.
+func (d *devinSource) dbMessages(path, sessionID string, withText bool) ([]devinMessage, bool) {
+	st, ok := d.open(path)
+	if !ok {
+		return nil, false
+	}
+	msgs, err := devinDBMessages(st.db, sessionID, withText)
+	if err != nil || len(msgs) == 0 {
+		return nil, false
+	}
+	return msgs, true
+}
+
 // messages re-queries a session's messages at recap time: withText=false is
 // the cheap fingerprint path, withText=true adds role/text for the excerpt.
-func (d devinSource) messages(sess AgentSession, withText bool) ([]devinMessage, bool) {
+func (d *devinSource) messages(sess AgentSession, withText bool) ([]devinMessage, bool) {
 	path, id, transcript := devinLocate(sess)
 	if path == "" {
 		return nil, false
@@ -371,24 +373,25 @@ func (d devinSource) messages(sess AgentSession, withText bool) ([]devinMessage,
 		msgs, _, ok := parseDevinTranscript(path)
 		return msgs, ok
 	}
-	st, err := openDevinStore(path)
-	if err != nil {
-		return nil, false
-	}
-	defer st.close()
-	msgs, err := devinDBMessages(st.db, id, withText)
-	if err != nil || len(msgs) == 0 {
-		return nil, false
-	}
-	return msgs, true
+	return d.dbMessages(path, id, withText)
 }
 
-// Fingerprint content-hashes the session's message ids + timestamps. A
-// shared DB file's mtime would thrash the recap cache on every session's
-// writes, so DB sources key invalidation on their own message set (KTD2).
-func (d devinSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
-	msgs, ok := d.messages(sess, false)
-	if !ok || len(msgs) == 0 {
+// Fingerprint invalidates the cached recap when the underlying conversation
+// changes. Transcript-backed sessions are file-per-session — stat
+// mtime+size like the JSONL sources instead of re-parsing the JSON body.
+// A shared DB file's mtime would thrash the recap cache on every session's
+// writes, so DB-backed sessions content-hash their own message ids +
+// timestamps (KTD2).
+func (d *devinSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
+	path, id, transcript := devinLocate(sess)
+	if path == "" {
+		return recapFingerprint{}, false
+	}
+	if transcript {
+		return fingerprint(path)
+	}
+	msgs, ok := d.dbMessages(path, id, false)
+	if !ok {
 		return recapFingerprint{}, false
 	}
 	h := sha256.New()
@@ -399,38 +402,16 @@ func (d devinSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 		binary.BigEndian.PutUint64(b[:], uint64(m.created))
 		h.Write(b[:])
 	}
-	sum := h.Sum(nil)
-	return recapFingerprint{
-		Mtime: int64(binary.BigEndian.Uint64(sum[:8])),
-		Size:  int64(binary.BigEndian.Uint64(sum[8:16])),
-	}, true
+	return hashFingerprint(h.Sum(nil)), true
 }
 
 // Excerpt re-queries first/last real user input and last assistant text,
 // rendered through the shared excerpt builder so the egress shape is
 // identical to the other sources.
-func (d devinSource) Excerpt(sess AgentSession) string {
+func (d *devinSource) Excerpt(sess AgentSession) string {
 	msgs, ok := d.messages(sess, true)
 	if !ok {
 		return ""
 	}
-	var firstUser, lastUser, lastAssistant string
-	for _, m := range msgs {
-		text := strings.TrimSpace(m.text)
-		switch m.role {
-		case "user":
-			if !m.userInput || text == "" || isEnvelopeText(text) {
-				continue
-			}
-			if firstUser == "" {
-				firstUser = text
-			}
-			lastUser = text
-		case "assistant":
-			if text != "" {
-				lastAssistant = text
-			}
-		}
-	}
-	return buildExcerpt(firstUser, lastUser, lastAssistant)
+	return excerptFromTurns(devinTurns(msgs))
 }

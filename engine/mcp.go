@@ -339,7 +339,10 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 			}
 			t = parsed
 		}
-		sessions := agentSessionsForDay(t)
+		sessions, statuses := scanAgentSources(t)
+		// Drift bookkeeping matches the CLI path — writes degrade silently
+		// on a read-only db.
+		recordAgentSourceScans(db, statuses)
 		// MCP reads never trigger generation (transcript egress) — serve
 		// cached recaps only by forcing the judges-disabled path.
 		recapCfg := cfg
@@ -348,6 +351,7 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		return map[string]any{
 			"date":     t.Local().Format("2006-01-02"),
 			"sessions": sessions,
+			"sources":  statuses,
 		}, nil
 
 	case "get_forecast":

@@ -440,7 +440,7 @@ func TestOpencodeFingerprintInvalidation(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	src := opencodeSource{}
+	src := &opencodeSource{}
 	fp1, ok := src.Fingerprint(sessions[0])
 	if !ok {
 		t.Fatal("fingerprint failed on scanned session")
@@ -486,15 +486,15 @@ func TestOpencodeSessionKeyRebuild(t *testing.T) {
 	// A session rebuilt from JSON (store/sessionID stripped) must still
 	// resolve its store through the File key.
 	rebuilt := AgentSession{Source: "opencode", File: sessions[0].File}
-	fp, ok := opencodeSource{}.Fingerprint(rebuilt)
+	fp, ok := (&opencodeSource{}).Fingerprint(rebuilt)
 	if !ok {
 		t.Fatal("fingerprint failed for rebuilt session key")
 	}
-	ex := opencodeSource{}.Excerpt(rebuilt)
+	ex := (&opencodeSource{}).Excerpt(rebuilt)
 	if ex == "" {
 		t.Fatal("excerpt empty for rebuilt session key")
 	}
-	want, _ := opencodeSource{}.Fingerprint(sessions[0])
+	want, _ := (&opencodeSource{}).Fingerprint(sessions[0])
 	if fp != want {
 		t.Fatal("rebuilt key fingerprint differs from scanned")
 	}
@@ -507,27 +507,59 @@ func TestAgentSourceDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	driftEvents := func() int {
+		var n int
+		db.QueryRow(`SELECT COUNT(1) FROM events WHERE type='agent_source_drift'`).Scan(&n)
+		return n
+	}
 
-	// Productive scan marks the source; a later zero-session scan is drift.
+	// Productive scans mark the sources; a healthy-but-idle scan is just
+	// "empty", and a never-productive unavailable store isn't drift.
 	recordAgentSourceScans(db, []sourceScanStatus{
 		{Source: "opencode", Sessions: 3, Status: "ok"},
+		{Source: "claude", Sessions: 2, Status: "ok"},
 		{Source: "codex", Sessions: 0, Status: "unavailable"},
 	})
 	statuses := []sourceScanStatus{
-		{Source: "opencode", Sessions: 0, Status: "empty"},
+		{Source: "opencode", Sessions: 0, Status: "unavailable"},
+		{Source: "claude", Sessions: 0, Status: "empty"},
 		{Source: "codex", Sessions: 0, Status: "unavailable"},
 	}
 	recordAgentSourceScans(db, statuses)
 	if !statuses[0].Drift {
-		t.Fatal("previously-productive source gone silent not flagged")
+		t.Fatal("previously-productive source gone unavailable not flagged")
 	}
 	if statuses[1].Drift {
+		t.Fatal("healthy-but-idle source must not be flagged as drift")
+	}
+	if statuses[2].Drift {
 		t.Fatal("never-productive source must not be flagged as drift")
 	}
-	var n int
-	db.QueryRow(`SELECT COUNT(1) FROM events WHERE type='agent_source_drift'`).Scan(&n)
-	if n != 1 {
+	if n := driftEvents(); n != 1 {
 		t.Fatalf("expected 1 drift event, got %d", n)
+	}
+
+	// A repeat unavailable scan keeps the flag but doesn't spam events.
+	statuses[0].Drift = false
+	recordAgentSourceScans(db, statuses)
+	if !statuses[0].Drift {
+		t.Fatal("ongoing unavailability should stay flagged")
+	}
+	if n := driftEvents(); n != 1 {
+		t.Fatalf("drift event spammed on repeat scan: got %d", n)
+	}
+
+	// Recovery clears the marker; a later outage logs a fresh event.
+	recordAgentSourceScans(db, []sourceScanStatus{
+		{Source: "opencode", Sessions: 1, Status: "ok"},
+	})
+	again := []sourceScanStatus{{Source: "opencode", Sessions: 0, Status: "unavailable"}}
+	recordAgentSourceScans(db, again)
+	if !again[0].Drift {
+		t.Fatal("second outage not flagged")
+	}
+	if n := driftEvents(); n != 2 {
+		t.Fatalf("expected a fresh drift event after recovery, got %d", n)
 	}
 }
 
@@ -907,7 +939,7 @@ func TestDevinFingerprintInvalidation(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	src := devinSource{}
+	src := &devinSource{}
 	fp1, ok := src.Fingerprint(sessions[0])
 	if !ok {
 		t.Fatal("fingerprint failed on scanned session")
@@ -964,7 +996,7 @@ func TestDevinSessionKeyRebuild(t *testing.T) {
 	if len(sessions) != 2 {
 		t.Fatalf("expected 2 sessions, got %d", len(sessions))
 	}
-	src := devinSource{}
+	src := &devinSource{}
 	for _, s := range sessions {
 		rebuilt := AgentSession{Source: "devin", File: s.File}
 		fp, ok := src.Fingerprint(rebuilt)
@@ -1006,7 +1038,7 @@ func TestDevinExcerpt(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	ex := devinSource{}.Excerpt(sessions[0])
+	ex := (&devinSource{}).Excerpt(sessions[0])
 	if !strings.Contains(ex, "first user message: first real prompt") ||
 		!strings.Contains(ex, "last user message: last real prompt") ||
 		!strings.Contains(ex, "last assistant reply: answer") {
@@ -1307,7 +1339,7 @@ func TestCursorFingerprintInvalidation(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	src := cursorSource{}
+	src := &cursorSource{}
 	fp1, ok := src.Fingerprint(sessions[0])
 	if !ok {
 		t.Fatal("fingerprint failed on scanned session")
@@ -1372,7 +1404,7 @@ func TestCursorSessionKeyRebuild(t *testing.T) {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
 	rebuilt := AgentSession{Source: "cursor", File: sessions[0].File}
-	src := cursorSource{}
+	src := &cursorSource{}
 	fp, ok := src.Fingerprint(rebuilt)
 	if !ok {
 		t.Fatal("fingerprint failed for rebuilt session key")
@@ -1410,7 +1442,7 @@ func TestCursorExcerpt(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	ex := cursorSource{}.Excerpt(sessions[0])
+	ex := (&cursorSource{}).Excerpt(sessions[0])
 	if !strings.Contains(ex, "first user message: first real prompt") ||
 		!strings.Contains(ex, "last user message: last real prompt") ||
 		!strings.Contains(ex, "last assistant reply: answer") {

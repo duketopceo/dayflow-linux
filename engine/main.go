@@ -68,7 +68,8 @@ Query:
   day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
   frames [YYYY-MM-DD] [--json]   List captured frames for a day
-  agents [YYYY-MM-DD] [--json] [--no-recaps]   Coding-agent sessions + recaps (Claude Code, Codex)
+  agents [YYYY-MM-DD] [--json] [--no-recaps]   Coding-agent sessions + recaps
+                          (Claude Code, Codex, OpenCode, Devin, Cursor)
   forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
                           (default: tomorrow)
   playback [on|off|status] [--json]   Opt-in frame retention for timelapse
@@ -276,16 +277,15 @@ func main() {
 		// with generated recaps (cached; --no-recaps for a fast local list)
 		d, err := dateArg(args, time.Now())
 		fatal(err)
+		// Drift bookkeeping reads/writes meta+events even under --no-recaps
+		// — open the db whenever we can; degrade to metadata-only rather
+		// than failing the command.
 		var db *sql.DB
-		if !hasFlag(args, "--no-recaps") {
-			// The listing itself doesn't need the db — degrade to
-			// metadata-only rather than failing the command.
-			if db, err = openDB(); err != nil {
-				fmt.Fprintf(os.Stderr, "agents: recaps unavailable: %v\n", err)
-				db = nil
-			} else {
-				defer db.Close()
-			}
+		if db, err = openDB(); err != nil {
+			fmt.Fprintf(os.Stderr, "agents: database unavailable: %v\n", err)
+			db = nil
+		} else {
+			defer db.Close()
 		}
 		printAgentSessions(db, cfg, d, jsonOut, !hasFlag(args, "--no-recaps"))
 

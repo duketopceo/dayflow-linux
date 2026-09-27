@@ -56,6 +56,10 @@ type agentSource interface {
 	Fingerprint(sess AgentSession) (recapFingerprint, bool)
 	// Excerpt is the bounded transcript sample for recap generation.
 	Excerpt(sess AgentSession) string
+	// Close releases lazily-opened store handles held by the adapter
+	// (DB-backed sources share one handle per store per pass). No-op for
+	// file-backed sources.
+	Close()
 }
 
 // sourceScanStatus records one adapter's outcome for drift surfacing (R3b):
@@ -73,9 +77,9 @@ func agentSources() []agentSource {
 	return []agentSource{
 		jsonlSource{name: "claude", root: claudeDir(), parse: parseClaudeLine},
 		jsonlSource{name: "codex", root: codexDir(), parse: parseCodexLine},
-		opencodeSource{},
-		devinSource{},
-		cursorSource{},
+		&opencodeSource{},
+		&devinSource{},
+		&cursorSource{},
 	}
 }
 
@@ -114,6 +118,154 @@ func (j jsonlSource) Excerpt(sess AgentSession) string {
 	return sessionExcerpt(sess.File, j.name)
 }
 
+// Close is a no-op — file-backed sources hold no store handles.
+func (j jsonlSource) Close() {}
+
+// roStore wraps a read connection plus the temp dir to remove when the
+// live DB couldn't be opened in place and a copy was made.
+type roStore struct {
+	db     *sql.DB
+	tmpDir string
+}
+
+func (s *roStore) close() {
+	s.db.Close()
+	if s.tmpDir != "" {
+		os.RemoveAll(s.tmpDir)
+	}
+}
+
+// openROStore opens a sqlite store read-only. A live WAL-mode store can
+// refuse a plain ro open (shm recovery needs write access), so on failure
+// retry once against a temp-dir copy of db+wal+shm before degrading.
+func openROStore(path string) (*roStore, error) {
+	const ro = "?mode=ro&_pragma=busy_timeout(3000)&_pragma=query_only(1)"
+	if db, err := sql.Open("sqlite", "file:"+path+ro); err == nil {
+		if err := db.Ping(); err == nil {
+			return &roStore{db: db}, nil
+		}
+		db.Close()
+	}
+	// Retry on a temp copy — opened read-write, which is safe because the
+	// copy is disposable and WAL recovery may need to write shm.
+	dir, err := os.MkdirTemp("", "dayflow-store-*")
+	if err != nil {
+		return nil, err
+	}
+	tmp := filepath.Join(dir, filepath.Base(path))
+	ok := false
+	defer func() {
+		if !ok {
+			os.RemoveAll(dir)
+		}
+	}()
+	for i, suffix := range []string{"", "-wal", "-shm"} {
+		if err := copyFile(path+suffix, tmp+suffix); err != nil && i == 0 {
+			return nil, err
+		}
+	}
+	db, err := sql.Open("sqlite", "file:"+tmp+"?_pragma=busy_timeout(3000)")
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	ok = true
+	return &roStore{db: db, tmpDir: dir}, nil
+}
+
+func sqliteTableExists(db *sql.DB, name string) bool {
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
+// storeCache lazily opens one read-only handle per store path for an
+// adapter pass — Fingerprint/Excerpt calls share it instead of re-opening
+// (and possibly temp-copying a live WAL store) per session. Failed opens
+// are cached too so a dead store doesn't retry the copy each call.
+type storeCache struct {
+	stores map[string]*roStore
+}
+
+func (c *storeCache) open(path string) (*roStore, bool) {
+	if c.stores == nil {
+		c.stores = map[string]*roStore{}
+	}
+	if st, ok := c.stores[path]; ok {
+		return st, st != nil
+	}
+	st, err := openROStore(path)
+	if err != nil {
+		c.stores[path] = nil
+		return nil, false
+	}
+	c.stores[path] = st
+	return st, true
+}
+
+// Close releases every lazily-opened store; safe on an unused cache.
+func (c *storeCache) Close() {
+	for _, st := range c.stores {
+		if st != nil {
+			st.close()
+		}
+	}
+	c.stores = nil
+}
+
+// sessionCandidate is a store row that may hold an in-window session —
+// every DB adapter keys candidates on id/title/dir.
+type sessionCandidate struct {
+	id, title, dir string
+}
+
+// sessionTurn is the normalized turn shape the DB-backed adapters feed the
+// shared session fold and excerpt: role, text, and a unix-second timestamp
+// (0 when the row carries none). usableUser marks user turns that can
+// anchor or excerpt a session — each source folds its own predicate in
+// (Devin requires real typed input, Cursor requires non-empty text,
+// OpenCode counts any user message).
+type sessionTurn struct {
+	role       string // "user" | "assistant" | other
+	text       string
+	unixTs     int64 // epoch seconds; 0 = absent
+	usableUser bool
+}
+
+// foldSession accumulates the shared scan-time fields (Start/End range,
+// message count, usable-user count, first usable user text) into sess.
+// Returns the first usable user text and the usable-user count — both
+// callers need them for the "no user turns, no session" gate and title
+// fallback.
+func foldSession(sess *AgentSession, turns []sessionTurn) (firstUser string, userTurns int) {
+	for _, t := range turns {
+		if t.unixTs > 0 {
+			if sess.Start == 0 || t.unixTs < sess.Start {
+				sess.Start = t.unixTs
+			}
+			if t.unixTs > sess.End {
+				sess.End = t.unixTs
+			}
+		}
+		if t.role == "user" || t.role == "assistant" {
+			sess.Messages++
+		}
+		if t.usableUser {
+			userTurns++
+			if firstUser == "" {
+				firstUser = strings.TrimSpace(t.text)
+			}
+		}
+	}
+	return firstUser, userTurns
+}
+
 func claudeDir() string {
 	if d := os.Getenv("DAYFLOW_CLAUDE_DIR"); d != "" {
 		return d
@@ -139,6 +291,7 @@ func scanAgentSources(d time.Time) ([]AgentSession, []sourceScanStatus) {
 	statuses := make([]sourceScanStatus, 0, len(agentSources()))
 	for _, src := range agentSources() {
 		sessions, note := src.Scan(s, e)
+		src.Close() // adapters may hold lazily-opened store handles
 		st := sourceScanStatus{Source: src.Name(), Sessions: len(sessions), Note: note}
 		switch {
 		case note != "" && len(sessions) == 0:
@@ -294,10 +447,6 @@ func parseClaudeLine(raw []byte, sess *AgentSession) {
 	}
 }
 
-func scanClaude(root string, s, e time.Time) []AgentSession {
-	return scanJSONL(root, "claude", s, e, parseClaudeLine)
-}
-
 type codexLine struct {
 	Timestamp string          `json:"timestamp"`
 	Type      string          `json:"type"`
@@ -338,10 +487,6 @@ func parseCodexLine(raw []byte, sess *AgentSession) {
 	}
 }
 
-func scanCodex(root string, s, e time.Time) []AgentSession {
-	return scanJSONL(root, "codex", s, e, parseCodexLine)
-}
-
 func projectName(cwd, file string) string {
 	if cwd != "" {
 		return filepath.Base(cwd)
@@ -350,27 +495,41 @@ func projectName(cwd, file string) string {
 }
 
 // recordAgentSourceScans persists each source's productivity in meta so a
-// source that was productive and now scans empty surfaces as drift (R3b) —
-// an events row plus the Drift flag in agents output. Source names and
-// counts only; session content never touches this path.
+// source that was productive and whose store is now unavailable surfaces as
+// drift (R3b) — one events row per outage plus the Drift flag in agents
+// output. An "empty" scan (store healthy, tool just unused today) is not
+// drift. Source names and counts only; session content never touches this
+// path.
 func recordAgentSourceScans(db *sql.DB, statuses []sourceScanStatus) {
 	if db == nil {
 		return
 	}
 	for i := range statuses {
 		st := &statuses[i]
-		key := "agent_source_seen:" + st.Source
-		if st.Sessions > 0 {
-			db.Exec(`INSERT INTO meta(k, v) VALUES(?, '1')
-			  ON CONFLICT(k) DO UPDATE SET v='1'`, key)
+		seenKey := "agent_source_seen:" + st.Source
+		driftKey := "agent_source_drifted:" + st.Source
+		if st.Sessions > 0 || st.Status != "unavailable" {
+			// Productive or healthy-but-idle — not drifted. Clear any
+			// outstanding drift marker so a later outage logs fresh.
+			if st.Sessions > 0 {
+				db.Exec(`INSERT INTO meta(k, v) VALUES(?, '1')
+				  ON CONFLICT(k) DO NOTHING`, seenKey)
+			}
+			db.Exec(`DELETE FROM meta WHERE k=?`, driftKey)
 			continue
 		}
 		var v string
-		if err := db.QueryRow(`SELECT v FROM meta WHERE k=?`, key).Scan(&v); err == nil && v == "1" {
-			st.Drift = true
-			logEvent(db, "agent_source_drift",
-				fmt.Sprintf("source=%s sessions=0 status=%s", st.Source, st.Status))
+		if err := db.QueryRow(`SELECT v FROM meta WHERE k=?`, seenKey).Scan(&v); err != nil || v != "1" {
+			continue // never productive — a broken store isn't drift
 		}
+		st.Drift = true
+		if err := db.QueryRow(`SELECT v FROM meta WHERE k=?`, driftKey).Scan(&v); err == nil && v == "1" {
+			continue // outage already reported — don't spam events per scan
+		}
+		db.Exec(`INSERT INTO meta(k, v) VALUES(?, '1')
+		  ON CONFLICT(k) DO NOTHING`, driftKey)
+		logEvent(db, "agent_source_drift",
+			fmt.Sprintf("source=%s sessions=0 status=%s", st.Source, st.Status))
 	}
 }
 

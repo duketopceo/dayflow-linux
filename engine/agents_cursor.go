@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,10 +35,11 @@ import (
 //	  composer.composerData instead of the composerHeaders table.
 //
 // Every failure degrades to "no sessions", never a hard error (R3); logs and
-// notes carry identifiers and sizes only, never content (R3b).
-type cursorSource struct{}
+// notes carry identifiers and sizes only, never content (R3b). storeCache
+// shares one read handle per store across a pass.
+type cursorSource struct{ storeCache }
 
-func (c cursorSource) Name() string { return "cursor" }
+func (c *cursorSource) Name() string { return "cursor" }
 
 // cursorDBPath is the globalStorage store; DAYFLOW_CURSOR_DB overrides it for
 // tests.
@@ -60,13 +62,6 @@ func cursorWorkspacesRoot() string {
 	return filepath.Join(h, ".config", "Cursor", "User", "workspaceStorage")
 }
 
-// openCursorStore opens state.vscdb read-only, reusing the shared temp-copy
-// fallback for live WAL stores (a ro open can fail when shm recovery needs
-// write access).
-func openCursorStore(path string) (*opencodeStore, error) {
-	return openOpencodeStore(path)
-}
-
 // cursorHeader is one composerHeaders row's recap-relevant fields. Timestamps
 // are epoch ms; 0 means absent.
 type cursorHeader struct {
@@ -82,12 +77,12 @@ func cursorNote(msg string) string {
 	return msg
 }
 
-func (c cursorSource) Scan(s, e time.Time) ([]AgentSession, string) {
+func (c *cursorSource) Scan(s, e time.Time) ([]AgentSession, string) {
 	path := cursorDBPath()
 	if _, err := os.Stat(path); err != nil {
 		return nil, "store not found"
 	}
-	st, err := openCursorStore(path)
+	st, err := openROStore(path)
 	if err != nil {
 		return nil, cursorNote("store unreadable: " + err.Error())
 	}
@@ -164,10 +159,12 @@ func cursorHeaderRows(db *sql.DB, sMs, eMs int64) ([]cursorHeader, error) {
 		if h.updated == 0 {
 			h.updated = h.created
 		}
-		cursorHeaderMeta(cursorBytes(value), &h)
 		if h.created == 0 || h.created >= eMs || h.updated < sMs {
 			continue
 		}
+		// Parse the value blob only for in-range rows — out-of-window
+		// composers skip the JSON decode entirely.
+		cursorHeaderMeta(cursorBytes(value), &h)
 		out = append(out, h)
 	}
 	return out, rows.Err()
@@ -289,10 +286,8 @@ func cursorMs(v any) int64 {
 		if n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil {
 			return n
 		}
+		// RFC3339Nano already covers the no-fraction RFC3339 shape.
 		if ts, err := time.Parse(time.RFC3339Nano, t); err == nil {
-			return ts.UnixMilli()
-		}
-		if ts, err := time.Parse(time.RFC3339, t); err == nil {
 			return ts.UnixMilli()
 		}
 	}
@@ -344,14 +339,24 @@ func cursorMessages(db *sql.DB, composerID string, withText bool) ([]cursorTurn,
 		if json.Unmarshal(raw, &d) == nil {
 			updated = cursorMs(d.Updated)
 			seen := map[string]bool{}
+			// One batched load of every bubbleId:<id>:* row instead of a
+			// query per header (the N+1 path).
+			var bodies map[string][]byte
+			if withText {
+				bodies = cursorBubbleBodies(db, composerID)
+			}
 			for _, hd := range d.Headers {
 				if hd.BubbleID == "" {
 					continue
 				}
 				seen[hd.BubbleID] = true
 				t := cursorTurn{id: hd.BubbleID, role: cursorRole(hd.Type, nil)}
-				if withText {
-					cursorBubbleBody(db, composerID, &t)
+				if bt, ok := cursorTurnFromBubble(bodies[hd.BubbleID]); ok {
+					if bt.role != "" {
+						t.role = bt.role
+					}
+					t.text = bt.text
+					t.ms = bt.ms
 				}
 				turns = append(turns, t)
 			}
@@ -393,43 +398,44 @@ func cursorMessages(db *sql.DB, composerID string, withText bool) ([]cursorTurn,
 	return turns, updated
 }
 
-// cursorBubbleBody fills text/timestamps on a turn from its
-// bubbleId:<composerId>:<bid> row.
-func cursorBubbleBody(db *sql.DB, composerID string, t *cursorTurn) {
-	raw, ok := cursorKV(db, "bubbleId:"+composerID+":"+t.id)
-	if !ok {
-		return
-	}
-	if bt, ok := cursorTurnFromBubble(raw); ok {
-		if bt.role != "" {
-			t.role = bt.role
-		}
-		t.text = bt.text
-		t.ms = bt.ms
-	}
-}
-
-// cursorBubbleRows enumerates bubbleId:<composerId>:* rows directly.
-func cursorBubbleRows(db *sql.DB, composerID string, withText bool) []cursorTurn {
+// cursorBubbleBodies loads every bubbleId:<composerId>:* row in one query —
+// the alternative is one cursorDiskKV lookup per turn.
+func cursorBubbleBodies(db *sql.DB, composerID string) map[string][]byte {
 	rows, err := db.Query(`SELECT key, value FROM cursorDiskKV
 	  WHERE key LIKE ? ORDER BY key`, "bubbleId:"+composerID+":%")
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
-	var out []cursorTurn
+	out := map[string][]byte{}
 	for rows.Next() {
 		var key string
 		var value any
 		if err := rows.Scan(&key, &value); err != nil {
 			return nil
 		}
-		t, ok := cursorTurnFromBubble(cursorBytes(value))
+		out[strings.TrimPrefix(key, "bubbleId:"+composerID+":")] = cursorBytes(value)
+	}
+	return out
+}
+
+// cursorBubbleRows enumerates bubbleId:<composerId>:* rows directly,
+// ordered by key (ordering is approximate; excerpt-worthy either way).
+func cursorBubbleRows(db *sql.DB, composerID string, withText bool) []cursorTurn {
+	bodies := cursorBubbleBodies(db, composerID)
+	bids := make([]string, 0, len(bodies))
+	for bid := range bodies {
+		bids = append(bids, bid)
+	}
+	sort.Strings(bids) // same order as ORDER BY key — the prefix is constant
+	var out []cursorTurn
+	for _, bid := range bids {
+		t, ok := cursorTurnFromBubble(bodies[bid])
 		if !ok {
 			continue
 		}
 		if t.id == "" {
-			t.id = strings.TrimPrefix(key, "bubbleId:"+composerID+":")
+			t.id = bid
 		}
 		if !withText {
 			t.text = ""
@@ -709,6 +715,25 @@ func cursorTurnFromObject(kvs []orderedKV) (cursorTurn, bool) {
 	return cursorTurn{id: id, role: r, text: text, ms: ms}, true
 }
 
+// cursorSessionTurns normalizes bubble turns to the shared shape. A user
+// turn without text is unusable — nothing to title or excerpt — so
+// header-listed bubbles whose bodies are missing count as messages but
+// can't anchor a session.
+func cursorSessionTurns(turns []cursorTurn) []sessionTurn {
+	out := make([]sessionTurn, 0, len(turns))
+	for _, t := range turns {
+		var ts int64
+		if t.ms > 0 {
+			ts = t.ms / 1000
+		}
+		out = append(out, sessionTurn{
+			role: t.role, text: t.text, unixTs: ts,
+			usableUser: t.role == "user" && strings.TrimSpace(t.text) != "",
+		})
+	}
+	return out
+}
+
 // cursorSession folds one composer's turns into an AgentSession. Composers
 // with no usable user turns are skipped — drafts, archived shells, and
 // content blobs that don't carry text all land here.
@@ -727,31 +752,7 @@ func cursorSession(db *sql.DB, path string, h cursorHeader) (AgentSession, bool)
 	if u := h.updated; u > 0 && u/1000 > sess.End {
 		sess.End = u / 1000
 	}
-	userTurns := 0
-	var firstUser string
-	for _, t := range turns {
-		if t.ms > 0 {
-			u := t.ms / 1000
-			if sess.Start == 0 || u < sess.Start {
-				sess.Start = u
-			}
-			if u > sess.End {
-				sess.End = u
-			}
-		}
-		if t.role == "user" || t.role == "assistant" {
-			sess.Messages++
-		}
-		// A user turn without text is unusable — nothing to title or
-		// excerpt. Header-listed bubbles whose bodies are missing count as
-		// messages but can't anchor a session.
-		if t.role == "user" && strings.TrimSpace(t.text) != "" {
-			userTurns++
-			if firstUser == "" {
-				firstUser = strings.TrimSpace(t.text)
-			}
-		}
-	}
+	firstUser, userTurns := foldSession(&sess, cursorSessionTurns(turns))
 	if userTurns == 0 || sess.Start == 0 {
 		return AgentSession{}, false
 	}
@@ -817,19 +818,17 @@ func cursorLocate(sess AgentSession) (path, composerID string) {
 
 // turns re-queries a composer's turns at recap time: withText=false is the
 // cheap fingerprint path, withText=true adds bubble text for the excerpt.
-func (c cursorSource) turns(sess AgentSession, withText bool) ([]cursorTurn, int64, bool) {
+// The store handle comes from the per-pass cache — one open per store, not
+// per call (openROStore fails on a missing path, so no pre-stat needed).
+func (c *cursorSource) turns(sess AgentSession, withText bool) ([]cursorTurn, int64, bool) {
 	path, id := cursorLocate(sess)
 	if path == "" {
 		return nil, 0, false
 	}
-	if _, err := os.Stat(path); err != nil {
+	st, ok := c.open(path)
+	if !ok {
 		return nil, 0, false
 	}
-	st, err := openCursorStore(path)
-	if err != nil {
-		return nil, 0, false
-	}
-	defer st.close()
 	if !sqliteTableExists(st.db, "cursorDiskKV") {
 		return nil, 0, false
 	}
@@ -840,7 +839,7 @@ func (c cursorSource) turns(sess AgentSession, withText bool) ([]cursorTurn, int
 // Fingerprint content-hashes the composer's turn ids + update timestamps —
 // a shared DB file's mtime would thrash the recap cache on every keystroke
 // (KTD2).
-func (c cursorSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
+func (c *cursorSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 	turns, updated, ok := c.turns(sess, false)
 	if !ok {
 		return recapFingerprint{}, false
@@ -857,38 +856,16 @@ func (c cursorSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 		h.Write([]byte(t.role))
 		h.Write([]byte{0})
 	}
-	sum := h.Sum(nil)
-	return recapFingerprint{
-		Mtime: int64(binary.BigEndian.Uint64(sum[:8])),
-		Size:  int64(binary.BigEndian.Uint64(sum[8:16])),
-	}, true
+	return hashFingerprint(h.Sum(nil)), true
 }
 
 // Excerpt re-queries first/last user text and last assistant text, rendered
 // through the shared excerpt builder so the egress shape is identical to the
 // other sources.
-func (c cursorSource) Excerpt(sess AgentSession) string {
+func (c *cursorSource) Excerpt(sess AgentSession) string {
 	turns, _, ok := c.turns(sess, true)
 	if !ok {
 		return ""
 	}
-	var firstUser, lastUser, lastAssistant string
-	for _, t := range turns {
-		text := strings.TrimSpace(t.text)
-		switch t.role {
-		case "user":
-			if text == "" || isEnvelopeText(text) {
-				continue
-			}
-			if firstUser == "" {
-				firstUser = text
-			}
-			lastUser = text
-		case "assistant":
-			if text != "" {
-				lastAssistant = text
-			}
-		}
-	}
-	return buildExcerpt(firstUser, lastUser, lastAssistant)
+	return excerptFromTurns(cursorSessionTurns(turns))
 }

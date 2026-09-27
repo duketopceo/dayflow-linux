@@ -206,12 +206,14 @@ func resolveCaptureCommand(cfg Config) ([]string, error) {
 
 func grabFrame(cmdArgs []string) ([]byte, error) {
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	// grim output is bounded by screen size, but a custom capture_command
+	// can stream arbitrarily — cap before an infinite stream OOMs us.
+	out := &cappedBuffer{limit: 64 << 20}
+	cmd.Stdout = out
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
-	return out.Bytes(), nil
+	return out.buf.Bytes(), nil
 }
 
 const dedupThreshold = 5 // hamming distance out of 256 bits
@@ -817,12 +819,13 @@ func runDaemon(cfg Config) error {
 			if !cfg.AutoPauseLocked {
 				continue
 			}
-			if screenLocked() && !paused() && !locked {
+			isLocked := screenLocked() // one loginctl spawn per tick, not two
+			if isLocked && !paused() && !locked {
 				locked = true
 				lastHash = nil
 				logEvent(db, "auto_paused", "screen locked")
 				debugf(cfg, "auto-paused: screen locked")
-			} else if !screenLocked() && locked {
+			} else if !isLocked && locked {
 				locked = false
 				logEvent(db, "auto_resumed", "screen unlocked")
 				debugf(cfg, "auto-resumed: screen unlocked")

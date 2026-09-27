@@ -354,10 +354,9 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 			// judges transient; the triaged flag makes it fire once only —
 			// attempts alone would cycle and re-ask Jev every sweep.
 			var triaged bool
-			db.QueryRow(`SELECT triaged FROM blocks WHERE start_ts=?`, start.Unix()).Scan(&triaged)
+			var errText string
+			db.QueryRow(`SELECT triaged, error FROM blocks WHERE start_ts=?`, start.Unix()).Scan(&triaged, &errText)
 			if !triaged {
-				var errText string
-				db.QueryRow(`SELECT error FROM blocks WHERE start_ts=?`, start.Unix()).Scan(&errText)
 				if judgeRetryable(db, cfg, start, errText) {
 					db.Exec(`UPDATE blocks SET attempts=?, triaged=1 WHERE start_ts=?`, maxAttempts-1, start.Unix())
 					logEvent(db, "judge_requeue", start.Format("15:04"))

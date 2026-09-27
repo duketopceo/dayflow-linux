@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"regexp"
@@ -31,23 +32,63 @@ func fingerprint(path string) (recapFingerprint, bool) {
 	return recapFingerprint{Mtime: st.ModTime().Unix(), Size: st.Size()}, true
 }
 
+// hashFingerprint folds a sha256 message-content hash into the
+// recapFingerprint pair every DB-backed source uses (first 16 bytes split
+// into Mtime/Size).
+func hashFingerprint(sum []byte) recapFingerprint {
+	return recapFingerprint{
+		Mtime: int64(binary.BigEndian.Uint64(sum[:8])),
+		Size:  int64(binary.BigEndian.Uint64(sum[8:16])),
+	}
+}
+
+// recapRow is one cached agent_recaps row's lookup-relevant fields.
+type recapRow struct {
+	recap   string
+	quality *float64
+	mtime   int64
+	size    int64
+}
+
+// cachedRecaps batch-loads all stored recaps for the given session keys —
+// one query per pass instead of one per session.
+func cachedRecaps(db *sql.DB, paths []string) map[string]recapRow {
+	out := map[string]recapRow{}
+	if len(paths) == 0 {
+		return out
+	}
+	var sb strings.Builder
+	args := make([]any, 0, len(paths))
+	for _, p := range paths {
+		if len(args) > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteByte('?')
+		args = append(args, p)
+	}
+	rows, err := db.Query(`SELECT path, recap, quality_confidence, file_mtime, file_size
+	  FROM agent_recaps WHERE path IN (`+sb.String()+`)`, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		var r recapRow
+		if rows.Scan(&p, &r.recap, &r.quality, &r.mtime, &r.size) == nil {
+			out[p] = r
+		}
+	}
+	return out
+}
+
 // cachedRecap returns the stored recap when its fingerprint still matches the
-// file on disk. A stored row with recap=” means "judged unworthy" — fresh so
+// file on disk. A stored row with recap="" means "judged unworthy" — fresh so
 // the session is never re-judged. Transient generation failures are NOT
 // persisted, so they retry on the next view.
 func cachedRecap(db *sql.DB, path string, fp recapFingerprint) (recap string, quality *float64, fresh bool) {
-	var r struct {
-		recap   string
-		quality *float64
-		mtime   int64
-		size    int64
-	}
-	err := db.QueryRow(`SELECT recap, quality_confidence, file_mtime, file_size
-	  FROM agent_recaps WHERE path = ?`, path).Scan(&r.recap, &r.quality, &r.mtime, &r.size)
-	if err != nil {
-		return "", nil, false
-	}
-	if r.mtime != fp.Mtime || r.size != fp.Size {
+	r, ok := cachedRecaps(db, []string{path})[path]
+	if !ok || r.mtime != fp.Mtime || r.size != fp.Size {
 		return "", nil, false
 	}
 	return r.recap, r.quality, true
@@ -98,6 +139,32 @@ func sessionExcerpt(path, source string) string {
 	}
 	if sc.Err() != nil {
 		return "" // scan error (e.g. >1MB line) — parity with scanJSONL
+	}
+	return buildExcerpt(firstUser, lastUser, lastAssistant)
+}
+
+// excerptFromTurns accumulates the excerpt inputs shared by every DB-backed
+// adapter — first/last usable user text and last assistant text — and
+// renders them through buildExcerpt. usableUser folds in each source's own
+// predicate (real typed input for Devin, non-empty text for Cursor).
+func excerptFromTurns(turns []sessionTurn) string {
+	var firstUser, lastUser, lastAssistant string
+	for _, t := range turns {
+		text := strings.TrimSpace(t.text)
+		switch t.role {
+		case "user":
+			if !t.usableUser || text == "" || isEnvelopeText(text) {
+				continue
+			}
+			if firstUser == "" {
+				firstUser = text
+			}
+			lastUser = text
+		case "assistant":
+			if text != "" {
+				lastAssistant = text
+			}
+		}
 	}
 	return buildExcerpt(firstUser, lastUser, lastAssistant)
 }
@@ -307,13 +374,37 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 	if db == nil {
 		return
 	}
+	// One adapter per source for the whole pass so DB-backed sources share
+	// a single lazily-opened store handle across sessions (KTD2); released
+	// when the pass ends.
+	srcs := map[string]agentSource{}
+	defer func() {
+		for _, s := range srcs {
+			if s != nil {
+				s.Close()
+			}
+		}
+	}()
+	srcFor := func(name string) agentSource {
+		if s, ok := srcs[name]; ok {
+			return s
+		}
+		s := agentSourceFor(name)
+		srcs[name] = s // cache the miss too — no repeat lookups
+		return s
+	}
 	// Cache hits first (any order), then generate for the largest uncached
 	// sessions within the cap. Fingerprint/excerpt come from the session's
 	// source adapter — File is a stat-able path only for JSONL sources, so
 	// attachRecaps never stats it directly (KTD2).
+	paths := make([]string, 0, len(sessions))
+	for i := range sessions {
+		paths = append(paths, sessions[i].File)
+	}
+	cached := cachedRecaps(db, paths)
 	order := make([]int, 0, len(sessions))
 	for i := range sessions {
-		src := agentSourceFor(sessions[i].Source)
+		src := srcFor(sessions[i].Source)
 		if src == nil {
 			continue
 		}
@@ -321,9 +412,9 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 		if !ok {
 			continue
 		}
-		if recap, quality, fresh := cachedRecap(db, sessions[i].File, fp); fresh {
-			sessions[i].Recap = recap
-			sessions[i].RecapConfidence = quality
+		if r, ok := cached[sessions[i].File]; ok && r.mtime == fp.Mtime && r.size == fp.Size {
+			sessions[i].Recap = r.recap
+			sessions[i].RecapConfidence = r.quality
 			continue
 		}
 		order = append(order, i)
@@ -343,7 +434,7 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 		if generated >= maxNewRecaps || time.Now().After(deadline) {
 			break
 		}
-		src := agentSourceFor(sessions[i].Source)
+		src := srcFor(sessions[i].Source)
 		if src == nil {
 			continue
 		}
