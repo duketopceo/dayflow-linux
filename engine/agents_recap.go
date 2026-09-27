@@ -83,9 +83,8 @@ func sessionExcerpt(path, source string) string {
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
 		role, text := lineRoleText(sc.Bytes(), source)
-		if text == "" || strings.HasPrefix(text, "<environment_context>") ||
-			strings.HasPrefix(text, "<user_instructions>") {
-			continue // codex-injected envelopes, not user intent
+		if text == "" || isEnvelopeText(text) {
+			continue // injected envelopes, not user intent
 		}
 		switch role {
 		case "user":
@@ -100,7 +99,19 @@ func sessionExcerpt(path, source string) string {
 	if sc.Err() != nil {
 		return "" // scan error (e.g. >1MB line) — parity with scanJSONL
 	}
+	return buildExcerpt(firstUser, lastUser, lastAssistant)
+}
 
+// isEnvelopeText filters tool-injected envelopes out of excerpt text.
+func isEnvelopeText(text string) bool {
+	return strings.HasPrefix(text, "<environment_context>") ||
+		strings.HasPrefix(text, "<user_instructions>")
+}
+
+// buildExcerpt renders the bounded excerpt layout shared by file-backed and
+// DB-backed sources: each field is rune-truncated and scrubbed before it can
+// reach a model endpoint.
+func buildExcerpt(firstUser, lastUser, lastAssistant string) string {
 	var b strings.Builder
 	write := func(label, s string) {
 		if s == "" {
@@ -297,10 +308,16 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 		return
 	}
 	// Cache hits first (any order), then generate for the largest uncached
-	// sessions within the cap.
+	// sessions within the cap. Fingerprint/excerpt come from the session's
+	// source adapter — File is a stat-able path only for JSONL sources, so
+	// attachRecaps never stats it directly (KTD2).
 	order := make([]int, 0, len(sessions))
 	for i := range sessions {
-		fp, ok := fingerprint(sessions[i].File)
+		src := agentSourceFor(sessions[i].Source)
+		if src == nil {
+			continue
+		}
+		fp, ok := src.Fingerprint(sessions[i])
 		if !ok {
 			continue
 		}
@@ -326,15 +343,19 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 		if generated >= maxNewRecaps || time.Now().After(deadline) {
 			break
 		}
+		src := agentSourceFor(sessions[i].Source)
+		if src == nil {
+			continue
+		}
 		// Fingerprint before extraction AND after generation — an active
 		// transcript can grow mid-pass, and a cached row must describe the
 		// excerpt it was generated from.
-		beforeFP, beforeOK := fingerprint(sessions[i].File)
-		excerpt := sessionExcerpt(sessions[i].File, sessions[i].Source)
+		beforeFP, beforeOK := src.Fingerprint(sessions[i])
+		excerpt := src.Excerpt(sessions[i])
 		if excerpt == "" {
 			// Settle it: nothing to summarize now. Fingerprint still
 			// invalidates the row if the transcript grows.
-			afterFP, afterOK := fingerprint(sessions[i].File)
+			afterFP, afterOK := src.Fingerprint(sessions[i])
 			if beforeOK && afterOK && beforeFP == afterFP {
 				if err := putRecap(db, sessions[i], afterFP, "", "", nil, nil); err != nil {
 					debugf(cfg, "recap cache write %s: %v", sessions[i].File, err)
@@ -344,7 +365,7 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 		}
 		generated++
 		res := generateRecap(db, cfg, sessions[i], excerpt)
-		afterFP, afterOK := fingerprint(sessions[i].File)
+		afterFP, afterOK := src.Fingerprint(sessions[i])
 		if res.Cacheable && beforeOK && afterOK && beforeFP == afterFP {
 			if err := putRecap(db, sessions[i], afterFP, res.Text, res.Model, res.Worthy, res.Quality); err != nil {
 				debugf(cfg, "recap cache write %s: %v", sessions[i].File, err)
