@@ -29,7 +29,7 @@ type Config struct {
 	BlockMinutes         int        `json:"block_minutes"`
 	FramesPerBlock       int        `json:"frames_per_block"`
 	JPEGQuality          int        `json:"jpeg_quality"`
-	FrameMaxDim          int        `json:"frame_max_dim"` // bound stored frames' longer edge (px); 0 = keep native size
+	FrameMaxDim          int        `json:"frame_max_dim"` // bound stored frames' longer edge (px); 0 = keep native size; min nonzero = minFrameMaxDim
 	KeepFrames           bool       `json:"keep_frames"`
 	RetentionDays        int        `json:"retention_days"`
 	IgnoreApps           []string   `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
@@ -70,6 +70,10 @@ func normalizeAPIBaseURL(u string) string {
 	}
 	return parsed.String()
 }
+
+// minFrameMaxDim floors frame_max_dim when normalization is enabled — a
+// sub-320px long edge destroys the journal's evidentiary value.
+const minFrameMaxDim = 320
 
 func configDir() string {
 	d, err := os.UserConfigDir()
@@ -185,6 +189,14 @@ func loadConfig() (Config, error) {
 	}
 	if cfg.JPEGQuality <= 0 || cfg.JPEGQuality > 100 {
 		cfg.JPEGQuality = 55
+	}
+	// frame_max_dim: 0 disables normalization; a tiny positive cap (patches
+	// bypass setConfigValue's floor) would destroy journal evidence, so
+	// sub-minimum values clamp up and negatives reset to the default.
+	if cfg.FrameMaxDim < 0 {
+		cfg.FrameMaxDim = defaultConfig().FrameMaxDim
+	} else if cfg.FrameMaxDim > 0 && cfg.FrameMaxDim < minFrameMaxDim {
+		cfg.FrameMaxDim = minFrameMaxDim
 	}
 	if cfg.Model == "" {
 		cfg.Model = "google/gemma-4-31b-it"
@@ -391,6 +403,13 @@ func setConfigValue(key, value string) error {
 		case "jpeg_quality":
 			cfg.JPEGQuality = n
 		case "frame_max_dim":
+			if n < 0 {
+				return fmt.Errorf("frame_max_dim must be >= 0 (0 disables normalization)")
+			}
+			if n > 0 && n < minFrameMaxDim {
+				fmt.Printf("warning: frame_max_dim %d is too small to be useful — clamped to %d\n", n, minFrameMaxDim)
+				n = minFrameMaxDim
+			}
 			cfg.FrameMaxDim = n
 		case "retention_days":
 			cfg.RetentionDays = n

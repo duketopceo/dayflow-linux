@@ -39,6 +39,10 @@ FloatingWindow {
 
   // ---- agents pane state ----
   property var agentSessions: []
+  // Per-source scan status from agents --json ({source, sessions, status,
+  // note?, drift?}) — lets the pane surface an unavailable or drifted store
+  // instead of looking like a session-free day.
+  property var agentSources: []
   property bool agentsLoading: false
   property string agentsError: ""
 
@@ -74,9 +78,11 @@ FloatingWindow {
         try {
           var d = JSON.parse(text)
           root.agentSessions = d.sessions || []
+          root.agentSources = d.sources || []
           root.agentsError = ""
         } catch (e) {
           root.agentSessions = []
+          root.agentSources = []
           root.agentsError = "could not load agent sessions"
         }
       }
@@ -94,6 +100,7 @@ FloatingWindow {
       root.agentsLoading = false
       if (exitCode !== 0 && !root.agentsTimedOut) {
         root.agentSessions = []
+        root.agentSources = []
         root.agentsError = "agent scan failed"
       }
       if (root.agentsPending) {
@@ -139,6 +146,7 @@ FloatingWindow {
       agentsProc.running = false
       root.agentsLoading = false
       root.agentSessions = []
+      root.agentSources = []
       root.agentsError = "agent scan timed out — recaps skipped"
     }
   }
@@ -458,6 +466,7 @@ FloatingWindow {
       root.tlIndex = 0
       root.tlPlaying = false
       root.agentSessions = []
+      root.agentSources = []
       if (root.section === "timelapse") root.tlLoad()
       if (root.section === "agents") root.agentsLoad()
     }

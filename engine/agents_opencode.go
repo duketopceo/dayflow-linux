@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,23 +47,39 @@ func opencodeDBPaths() []string {
 	return paths
 }
 
-func (o *opencodeSource) Scan(s, e time.Time) ([]AgentSession, string) {
+func (o *opencodeSource) Scan(s, e time.Time) ([]AgentSession, scanNote) {
 	var out []AgentSession
-	var notes []string
-	for _, path := range opencodeDBPaths() {
-		sessions, note := scanOpencodeDB(path, s, e)
+	var notes, missing []string
+	healthy := false
+	paths := opencodeDBPaths()
+	for _, path := range paths {
+		sessions, note := o.scanDB(path, s, e)
 		out = append(out, sessions...)
-		if note != "" {
+		switch {
+		case note == noteStoreMissing:
+			missing = append(missing, filepath.Base(path))
+		case note != "":
 			// Identifiers and sizes only — never message content (R3b).
 			notes = append(notes, filepath.Base(path)+": "+note)
-			// An absent store is the idle case (like a missing JSONL
-			// root) — status carries it; the debug log doesn't need it.
-			if note != "store not found" {
-				appendLog("opencode scan " + filepath.Base(path) + ": " + note)
-			}
+			appendLog("opencode scan " + filepath.Base(path) + ": " + note)
+		}
+		if note == "" || len(sessions) > 0 {
+			healthy = true
 		}
 	}
-	return out, strings.Join(notes, "; ")
+	// A missing sub-store is the idle case: its note is suppressed when a
+	// sibling scanned clean or produced sessions. When every store is
+	// absent the detail is still surfaced — as absence ("empty"), not
+	// corruption, so a store that never existed can't flag drift.
+	if !healthy {
+		for _, b := range missing {
+			notes = append(notes, b+": "+noteStoreMissing)
+		}
+	}
+	return out, scanNote{
+		text:   strings.Join(notes, "; "),
+		absent: len(missing) > 0 && len(missing) == len(paths),
+	}
 }
 
 // opencodeLayout picks the message-table generation actually carrying data:
@@ -87,17 +104,18 @@ func opencodeLayout(db *sql.DB) string {
 	return ""
 }
 
-// scanOpencodeDB lists sessions in one store with messages inside [s,e).
-// Schema drift or an unreadable store degrades to an empty result + note.
-func scanOpencodeDB(path string, s, e time.Time) ([]AgentSession, string) {
+// scanDB lists sessions in one store with messages inside [s,e). The store
+// handle comes from the adapter's per-pass cache so scan and recap share
+// one open (and at most one WAL temp copy). Schema drift or an unreadable
+// store degrades to an empty result + note.
+func (o *opencodeSource) scanDB(path string, s, e time.Time) ([]AgentSession, string) {
 	if _, err := os.Stat(path); err != nil {
-		return nil, "store not found"
+		return nil, noteStoreMissing
 	}
-	st, err := openROStore(path)
+	st, err := o.open(path)
 	if err != nil {
 		return nil, "store unreadable: " + err.Error()
 	}
-	defer st.close()
 	layout := opencodeLayout(st.db)
 	if layout == "" {
 		return nil, "no session message tables"
@@ -107,10 +125,23 @@ func scanOpencodeDB(path string, s, e time.Time) ([]AgentSession, string) {
 		return nil, "session query failed: " + err.Error()
 	}
 	var out []AgentSession
+	failures := 0
 	for _, c := range candidates {
-		if sess, ok := opencodeSession(st.db, path, layout, c); ok {
+		sess, ok, err := opencodeSession(st.db, path, layout, c)
+		if err != nil {
+			// Per-session extraction errors (e.g. a required column
+			// dropped from the message table) must not sink the scan NOR
+			// vanish as "empty" — count them into a note so the status
+			// reports unavailable (R3b).
+			failures++
+			continue
+		}
+		if ok {
 			out = append(out, sess)
 		}
+	}
+	if failures > 0 {
+		return out, fmt.Sprintf("%d session(s) failed to read", failures)
 	}
 	return out, ""
 }
@@ -134,9 +165,13 @@ func opencodeCandidates(db *sql.DB, layout string, sMs, eMs int64) ([]sessionCan
 	var out []sessionCandidate
 	for rows.Next() {
 		var c sessionCandidate
-		if err := rows.Scan(&c.id, &c.title, &c.dir); err != nil {
+		// title/directory are nullable — a NULL must not sink the day's
+		// whole candidate scan (mirrors devinCandidates).
+		var title, dir sql.NullString
+		if err := rows.Scan(&c.id, &title, &dir); err != nil {
 			return nil, err
 		}
+		c.title, c.dir = title.String, dir.String
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -211,8 +246,12 @@ func ocMessagesNext(db *sql.DB, sessionID string, withText bool) ([]ocMessage, e
 }
 
 func ocMessagesOld(db *sql.DB, sessionID string, withText bool) ([]ocMessage, error) {
-	rows, err := db.Query(`SELECT id, time_created, time_updated, data
-	  FROM message WHERE session_id = ? ORDER BY time_created, id`, sessionID)
+	dataCol := "''"
+	if withText {
+		dataCol = "data"
+	}
+	rows, err := db.Query(`SELECT id, time_created, time_updated, `+dataCol+
+		` FROM message WHERE session_id = ? ORDER BY time_created, id`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -225,11 +264,13 @@ func ocMessagesOld(db *sql.DB, sessionID string, withText bool) ([]ocMessage, er
 		if err := rows.Scan(&m.id, &m.created, &m.updated, &data); err != nil {
 			return nil, err
 		}
-		var d struct {
-			Role string `json:"role"`
+		if withText {
+			var d struct {
+				Role string `json:"role"`
+			}
+			json.Unmarshal([]byte(data), &d)
+			m.role = d.Role
 		}
-		json.Unmarshal([]byte(data), &d)
-		m.role = d.Role
 		byID[m.id] = len(out)
 		out = append(out, m)
 	}
@@ -287,11 +328,16 @@ func ocTurns(msgs []ocMessage) []sessionTurn {
 
 // opencodeSession folds one session's message rows into an AgentSession.
 // Sessions with no user messages are skipped — there is nothing to title or
-// excerpt — and Start/End span the whole session, not just the window.
-func opencodeSession(db *sql.DB, path, layout string, c sessionCandidate) (AgentSession, bool) {
+// excerpt — and Start/End span the whole session, not just the window. A
+// message-query error is returned, not folded into "skip": column-level
+// schema drift must surface as a scan note (R3b), not look like idleness.
+func opencodeSession(db *sql.DB, path, layout string, c sessionCandidate) (AgentSession, bool, error) {
 	msgs, err := ocMessages(db, layout, c.id, true)
-	if err != nil || len(msgs) == 0 {
-		return AgentSession{}, false
+	if err != nil {
+		return AgentSession{}, false, err
+	}
+	if len(msgs) == 0 {
+		return AgentSession{}, false, nil
 	}
 	sess := AgentSession{
 		Source: "opencode",
@@ -305,7 +351,7 @@ func opencodeSession(db *sql.DB, path, layout string, c sessionCandidate) (Agent
 	}
 	firstUser, userMsgs := foldSession(&sess, ocTurns(msgs))
 	if userMsgs == 0 || sess.Start == 0 {
-		return AgentSession{}, false
+		return AgentSession{}, false, nil
 	}
 	// "New session - <timestamp>" placeholders carry no signal — fall back to
 	// the first user prompt, matching the JSONL title convention.
@@ -313,7 +359,7 @@ func opencodeSession(db *sql.DB, path, layout string, c sessionCandidate) (Agent
 		sess.Title = truncTitle(firstUser)
 	}
 	sess.Project = projectName(sess.Cwd, sess.File)
-	return sess, true
+	return sess, true, nil
 }
 
 // messages re-queries a session's rows at recap time: withText=false is the
@@ -336,8 +382,8 @@ func (o *opencodeSource) messages(sess AgentSession, withText bool) ([]ocMessage
 		path = filepath.Join(filepath.Dir(opencodeDBPath()), base)
 		id = sid
 	}
-	st, ok := o.open(path)
-	if !ok {
+	st, err := o.open(path)
+	if err != nil {
 		return nil, false
 	}
 	layout := opencodeLayout(st.db)

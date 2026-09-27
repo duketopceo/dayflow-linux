@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,16 +78,15 @@ func cursorNote(msg string) string {
 	return msg
 }
 
-func (c *cursorSource) Scan(s, e time.Time) ([]AgentSession, string) {
+func (c *cursorSource) Scan(s, e time.Time) ([]AgentSession, scanNote) {
 	path := cursorDBPath()
 	if _, err := os.Stat(path); err != nil {
-		return nil, "store not found"
+		return nil, scanNote{text: noteStoreMissing, absent: true}
 	}
-	st, err := openROStore(path)
+	st, err := c.open(path)
 	if err != nil {
-		return nil, cursorNote("store unreadable: " + err.Error())
+		return nil, scanNote{text: cursorNote("store unreadable: " + err.Error())}
 	}
-	defer st.close()
 
 	hasKV := sqliteTableExists(st.db, "cursorDiskKV")
 	var headers []cursorHeader
@@ -95,7 +95,7 @@ func (c *cursorSource) Scan(s, e time.Time) ([]AgentSession, string) {
 	case sqliteTableExists(st.db, "composerHeaders"):
 		headers, err = cursorHeaderRows(st.db, s.Unix()*1000, e.Unix()*1000)
 		if err != nil {
-			return nil, cursorNote("composerHeaders query failed: " + err.Error())
+			return nil, scanNote{text: cursorNote("composerHeaders query failed: " + err.Error())}
 		}
 	case hasKV:
 		// Older layout without the headers table — index rows live as
@@ -103,16 +103,16 @@ func (c *cursorSource) Scan(s, e time.Time) ([]AgentSession, string) {
 		// sessions if the blobs carry their own timestamps.
 		headers, err = cursorHeaderFallback(st.db, s.Unix()*1000, e.Unix()*1000)
 		if err != nil {
-			return nil, cursorNote("composerData scan failed: " + err.Error())
+			return nil, scanNote{text: cursorNote("composerData scan failed: " + err.Error())}
 		}
 	default:
-		return nil, cursorNote("no composer tables")
+		return nil, scanNote{text: cursorNote("no composer tables")}
 	}
 	if !hasKV {
-		return nil, cursorNote("cursorDiskKV table missing")
+		return nil, scanNote{text: cursorNote("cursorDiskKV table missing")}
 	}
 	if len(headers) == 0 {
-		return nil, ""
+		return nil, scanNote{}
 	}
 
 	var out []AgentSession
@@ -131,7 +131,7 @@ func (c *cursorSource) Scan(s, e time.Time) ([]AgentSession, string) {
 		note = cursorNote(fmt.Sprintf(
 			"%d composer(s) in range had no usable turns", skipped))
 	}
-	return out, note
+	return out, scanNote{text: note}
 }
 
 // cursorHeaderRows lists composerHeaders overlapping [sMs,eMs): a composer
@@ -771,13 +771,18 @@ func cursorSession(db *sql.DB, path string, h cursorHeader) (AgentSession, bool)
 	return sess, true
 }
 
+// workspaceIDRe bounds what a composerHeaders workspaceId may look like
+// before it joins a workspaceStorage path — anything else is rejected so a
+// hostile or drifted id can't escape the storage root.
+var workspaceIDRe = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
 // cursorWorkspaceFolder maps a composerHeaders workspaceId to a project
 // directory via workspaceStorage/<id>/workspace.json (a {"folder": uri}
 // file). Returns the decoded URI path — a local filesystem path for file://
 // URIs, the remote path for vscode-remote:// ones, "" when unmappable (the
 // "empty-window" workspace included).
 func cursorWorkspaceFolder(wsid string) string {
-	if wsid == "" {
+	if !workspaceIDRe.MatchString(wsid) {
 		return ""
 	}
 	raw, err := os.ReadFile(filepath.Join(cursorWorkspacesRoot(), wsid, "workspace.json"))
@@ -825,8 +830,8 @@ func (c *cursorSource) turns(sess AgentSession, withText bool) ([]cursorTurn, in
 	if path == "" {
 		return nil, 0, false
 	}
-	st, ok := c.open(path)
-	if !ok {
+	st, err := c.open(path)
+	if err != nil {
 		return nil, 0, false
 	}
 	if !sqliteTableExists(st.db, "cursorDiskKV") {

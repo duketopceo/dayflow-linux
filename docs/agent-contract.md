@@ -27,13 +27,15 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 | `get_stats` | db stats, storage, config (no secrets) | — |
 | `get_standup` | blocks | — |
 | `get_insights` | blocks | — |
-| `get_agent_sessions` | Agent transcripts: Claude Code / Codex JSONL under `~/.claude/projects/` and `~/.codex/sessions/`, OpenCode `~/.local/share/opencode/opencode*.db`, Devin `~/.local/share/devin/cli/` (sessions.db + ATIF transcripts), Cursor `state.vscdb` — all read-only | — |
+| `get_agent_sessions` | Agent transcripts: Claude Code / Codex JSONL under `~/.claude/projects/` and `~/.codex/sessions/`, OpenCode `~/.local/share/opencode/opencode*.db`, Devin `~/.local/share/devin/cli/` (sessions.db + ATIF transcripts), Cursor `state.vscdb` — all stores opened read-only | meta/events drift bookkeeping only (`agent_source_seen`/`agent_source_drifted` markers + one `agent_source_drift` event per outage; no-ops under `--read-only`) |
 | `get_forecast` | blocks (same-weekday history blend) | — |
-| `chat` | blocks + journal context | **writes chat_conversations/chat_messages and sends journal-derived content to the configured AI provider** |
+| `chat` | blocks + journal context | **writes chat_conversations/chat_messages and sends journal-derived content to the configured AI provider** — a cli-routed provider can take minutes (`cli_timeout_sec`, default 180s); give the client a generous timeout |
 
 Every tool except `chat` is read-only — `get_agent_sessions` also reads
-agent JSONL transcripts on disk. `chat` is the only tool that mutates state
-or sends data to an external provider.
+agent transcript stores on disk (JSONL + sqlite) and performs the drift
+bookkeeping described above, which is intentionally side-effect-only and
+never touches journal content. `chat` is the only tool that mutates
+journal state or sends data to an external provider.
 
 ## Read-only mode
 
@@ -105,14 +107,18 @@ Notes:
 - `cards` is the merged activity-card array emitted — in identical shape
   and chronological order — by `today`/`day`/`timeline`/`week`/`month
   --json`, `insights --json`, and MCP `get_timeline`/`get_insights`.
-  Fields: `start`/`end` (local-time strings), `app`, `app_name`, `title`,
-  `summary`, `category`, `productive` (bool), `blocks` (child count),
-  `minutes`, `low_confidence`, `children` (the raw block objects, same
-  shape as `blocks[]`). Consecutive blocks fold into one card when
-  `same_as_prev` judged continuity against the previous *done* block, or
-  titles match, or app+category match with a non-empty app. There is no
-  separate per-surface merge — the panel and all JSON surfaces consume
-  this one array.
+  Fields: `start`/`end` (local-time strings), `start_ts`/`end_ts` (Unix
+  seconds), `app`, `app_name`, `title`, `summary`, `category`,
+  `productive` (bool), `blocks` (child count), `minutes`,
+  `low_confidence`, `children` (the raw block objects, same shape as
+  `blocks[]`). Day attribution: a card belongs to the day containing its
+  first child — a card spanning midnight is one card in the payload, and
+  consumers grouping by day should bucket `children` themselves (the QML
+  week view renders a per-day continuation span this way). Consecutive
+  blocks fold into one card when `same_as_prev` judged continuity against
+  the previous *done* block, or titles match, or app+category match with
+  a non-empty app. There is no separate per-surface merge — the panel and
+  all JSON surfaces consume this one array.
 - `get_forecast` / `dayflow forecast --json`: `confidence_score` is Jev's
   calibrated probability (0-1) that the predicted mix is plausible;
   `confidence` remains the sample-count heuristic. Jev unreachable → field
@@ -120,9 +126,13 @@ Notes:
 - Judge calls are recorded in `llm_calls` with `task='judge:<kind>'`,
   `provider='typesafe'` (kinds: block, triage, standup, forecast, shifts,
   agent_recap).
-- `dayflow agents --json`: `recap` is a generated one-line summary cached in
-  `agent_recaps` per transcript path (invalidated on file mtime/size);
-  `recap_confidence` is Jev's quality score. Both fields are `omitempty` —
+- `dayflow agents --json`: `file` is an opaque, stable per-session key —
+  the transcript path for claude/codex, a `<tool>://<store>/<id>` URI for
+  opencode/devin/cursor. `recap` is a generated one-line summary cached in
+  `agent_recaps` keyed on `file`; cache invalidation is file mtime/size
+  for the JSONL sources and a content hash of message ids + update times
+  for the DB sources. `recap_confidence` is Jev's quality score. Both
+  fields are `omitempty` —
   they are *absent* (not `""`/`null`) when a session has no recap or no
   quality score; consumers should treat a missing `recap` as "no recap",
   which includes sessions judged unworthy for that transcript version. `--no-recaps` skips all model calls; `dayflow mcp` never
@@ -132,6 +142,14 @@ Notes:
   excerpt (≤2 KB, first/last user message + last assistant reply) scrubbed
   of home paths and common token shapes; generation calls log as
   `task='agent_recap'` in `llm_calls`.
+  The payload also carries `sources` — one entry per store:
+  `{source, sessions, status: "ok"|"empty"|"unavailable", note?, drift?}`.
+  `drift` means a previously-productive store now scans unavailable;
+  `note` carries store-level detail (identifiers/sizes only, never
+  content). Store locations can be overridden for tests/portable
+  installs: `DAYFLOW_CLAUDE_DIR`, `DAYFLOW_CODEX_DIR`,
+  `DAYFLOW_OPENCODE_DB`, `DAYFLOW_DEVIN_DIR`, `DAYFLOW_CURSOR_DB`,
+  `DAYFLOW_CURSOR_WORKSPACES`.
 - `dayflow goal --json`: `streak` = `{current, best, total}` consecutive-day
   completion counts. Viewed day pending → `current` counts back from
   yesterday; any past day without a completed goal breaks a run.

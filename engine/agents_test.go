@@ -50,7 +50,7 @@ func TestAgentSessionsClaude(t *testing.T) {
 		`{"type":"user","timestamp":"2026-09-10T10:00:00Z","cwd":"/home/x/proj","message":{"role":"user","content":"old"}}`,
 	}, day.Add(-time.Hour))
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
@@ -80,7 +80,7 @@ func TestAgentSessionsCodex(t *testing.T) {
 		`{"timestamp":"2026-09-15T09:20:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}`,
 	}, mt)
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
@@ -122,11 +122,11 @@ func TestAgentSessionsDayBucketing(t *testing.T) {
 		line("2026-09-10T09:00:00Z", "old session"),
 	}, day.Add(3*time.Hour))
 
-	today := agentSessionsForDay(day)
+	today, _ := scanAgentSources(day)
 	if len(today) != 2 {
 		t.Fatalf("expected 2 sessions on day, got %d: %+v", len(today), today)
 	}
-	tomorrow := agentSessionsForDay(next)
+	tomorrow, _ := scanAgentSources(next)
 	if len(tomorrow) != 1 || tomorrow[0].Title != "late work" {
 		t.Fatalf("expected only the spanning session tomorrow, got %+v", tomorrow)
 	}
@@ -304,7 +304,7 @@ func TestAgentSessionsOpencode(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
 	}
@@ -320,7 +320,7 @@ func TestAgentSessionsOpencode(t *testing.T) {
 		t.Fatalf("File key should be synthetic, %q stats fine", s.File)
 	}
 	// The spanning session lands on tomorrow too.
-	tomorrow := agentSessionsForDay(next)
+	tomorrow, _ := scanAgentSources(next)
 	if len(tomorrow) != 1 || tomorrow[0].Title != "Fix the widget" {
 		t.Fatalf("expected spanning session tomorrow, got %+v", tomorrow)
 	}
@@ -343,7 +343,7 @@ func TestAgentSessionsOpencodeOldLayout(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
 	}
@@ -366,7 +366,7 @@ func TestAgentSessionsOpencodeNoUserMessages(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 0 {
 		t.Fatalf("expected no sessions, got %+v", sessions)
 	}
@@ -387,8 +387,10 @@ func TestAgentSessionsOpencodeMissingDB(t *testing.T) {
 			oc = st
 		}
 	}
-	if oc.Status != "unavailable" || oc.Note == "" {
-		t.Fatalf("expected unavailable status with note, got %+v", oc)
+	// A missing store is absence, not corruption: status "empty" (no
+	// drift flag) with the informational note kept for JSON detail.
+	if oc.Status != "empty" || oc.Note == "" {
+		t.Fatalf("expected empty status with absence note, got %+v", oc)
 	}
 }
 
@@ -436,7 +438,7 @@ func TestOpencodeFingerprintInvalidation(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
@@ -479,7 +481,7 @@ func TestOpencodeSessionKeyRebuild(t *testing.T) {
 				created: ms(day.Add(10 * time.Hour)), updated: ms(day.Add(10 * time.Hour))},
 		},
 	})
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
@@ -591,7 +593,7 @@ func TestRecapOpencodeSession(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 || sessions[0].Source != "opencode" {
 		t.Fatalf("expected 1 opencode session, got %+v", sessions)
 	}
@@ -606,7 +608,7 @@ func TestRecapOpencodeSession(t *testing.T) {
 	}
 	// Second attach: content-hash fingerprint hits — no new judge calls.
 	before := len(*reqs)
-	served := agentSessionsForDay(day)
+	served, _ := scanAgentSources(day)
 	attachRecaps(db, cfg, served)
 	if len(*reqs) != before {
 		t.Fatalf("cache miss on identical messages: %d new calls", len(*reqs)-before)
@@ -744,15 +746,22 @@ func writeDevinTranscript(t *testing.T, dir, sessionID, schemaVersion string, mt
 	return p
 }
 
-func devinStatus(t *testing.T, statuses []sourceScanStatus) sourceScanStatus {
+// sourceStatus pulls one source's scan status out of a scanAgentSources
+// result.
+func sourceStatus(t *testing.T, statuses []sourceScanStatus, name string) sourceScanStatus {
 	t.Helper()
 	for _, st := range statuses {
-		if st.Source == "devin" {
+		if st.Source == name {
 			return st
 		}
 	}
-	t.Fatal("no devin source status")
+	t.Fatalf("no %s source status", name)
 	return sourceScanStatus{}
+}
+
+func devinStatus(t *testing.T, statuses []sourceScanStatus) sourceScanStatus {
+	t.Helper()
+	return sourceStatus(t, statuses, "devin")
 }
 
 func TestAgentSessionsDevin(t *testing.T) {
@@ -782,7 +791,7 @@ func TestAgentSessionsDevin(t *testing.T) {
 		{source: "agent", text: "done", ts: day.Add(10*time.Hour + 5*time.Minute)},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
 	}
@@ -818,7 +827,7 @@ func TestAgentSessionsDevinDBOnly(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
 	}
@@ -853,7 +862,7 @@ func TestAgentSessionsDevinTranscriptOnly(t *testing.T) {
 		{source: "agent", text: "working", ts: day.Add(14*time.Hour + 2*time.Minute)},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 2 {
 		t.Fatalf("expected 2 sessions, got %d: %+v", len(sessions), sessions)
 	}
@@ -916,8 +925,10 @@ func TestAgentSessionsDevinMissing(t *testing.T) {
 		t.Fatalf("expected no sessions, got %+v", sessions)
 	}
 	st := devinStatus(t, statuses)
-	if st.Status != "unavailable" || st.Note == "" {
-		t.Fatalf("expected unavailable status with note, got %+v", st)
+	// The whole store dir is absent — absence reports "empty" with the
+	// note kept, never "unavailable" (a never-installed tool can't drift).
+	if st.Status != "empty" || st.Note == "" {
+		t.Fatalf("expected empty status with absence note, got %+v", st)
 	}
 }
 
@@ -935,7 +946,7 @@ func TestDevinFingerprintInvalidation(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
@@ -992,7 +1003,7 @@ func TestDevinSessionKeyRebuild(t *testing.T) {
 		{source: "agent", text: "yo", ts: day.Add(12*time.Hour + time.Minute)},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 2 {
 		t.Fatalf("expected 2 sessions, got %d", len(sessions))
 	}
@@ -1034,7 +1045,7 @@ func TestDevinExcerpt(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
@@ -1139,13 +1150,7 @@ func writeCursorDB(t *testing.T, path string, composers ...cuFixtureComposer) {
 
 func cursorStatus(t *testing.T, statuses []sourceScanStatus) sourceScanStatus {
 	t.Helper()
-	for _, st := range statuses {
-		if st.Source == "cursor" {
-			return st
-		}
-	}
-	t.Fatal("no cursor source status")
-	return sourceScanStatus{}
+	return sourceStatus(t, statuses, "cursor")
 }
 
 func TestAgentSessionsCursor(t *testing.T) {
@@ -1177,7 +1182,7 @@ func TestAgentSessionsCursor(t *testing.T) {
 		created: day.Add(11 * time.Hour).UnixMilli(), updated: day.Add(11 * time.Hour).UnixMilli(),
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
 	}
@@ -1250,7 +1255,7 @@ func TestAgentSessionsCursorNoUserTurns(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 0 {
 		t.Fatalf("expected no sessions, got %+v", sessions)
 	}
@@ -1335,7 +1340,7 @@ func TestCursorFingerprintInvalidation(t *testing.T) {
 		},
 	})
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
@@ -1399,7 +1404,7 @@ func TestCursorSessionKeyRebuild(t *testing.T) {
 			{id: "b2", typ: 2, text: "hello", ms: day.Add(10*time.Hour + time.Minute).UnixMilli()},
 		},
 	})
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
@@ -1438,7 +1443,7 @@ func TestCursorExcerpt(t *testing.T) {
 				ms: day.Add(10*time.Hour + 3*time.Minute).UnixMilli()},
 		},
 	})
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
@@ -1486,9 +1491,385 @@ func TestAgentSessionsCursorContentBlobFallback(t *testing.T) {
 		string(blob))
 	db.Close()
 
-	sessions := agentSessionsForDay(day)
+	sessions, _ := scanAgentSources(day)
 	if len(sessions) != 1 || sessions[0].Source != "cursor" ||
 		sessions[0].Title != "content blob work" || sessions[0].Messages != 2 {
 		t.Fatalf("expected content-blob session, got %+v", sessions)
+	}
+}
+
+// --- Store absence / failure taxonomy (R3b) ---
+
+// writeOpencodeDBDrifted builds a store whose session_message table exists
+// and resolves candidates, but dropped the type/data columns — per-session
+// extraction fails, which must surface as "failed to read", not a silent
+// empty scan.
+func writeOpencodeDBDrifted(t *testing.T, path, sessID string, created int64) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, ddl := range []string{
+		`CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT,
+		  directory TEXT, time_created INTEGER, time_updated INTEGER)`,
+		`CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT,
+		  seq INTEGER, time_created INTEGER, time_updated INTEGER)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO session
+	  (id, title, directory, time_created, time_updated) VALUES(?,?,?,?,?)`,
+		sessID, "T", "/x/p", created, created); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO session_message
+	  (id, session_id, seq, time_created, time_updated) VALUES(?,?,?,?,?)`,
+		"m1", sessID, 1, created, created); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An absent sibling sub-store is the idle case: when another store scans
+// clean or produces sessions, the missing one's note is suppressed entirely
+// — no false degradation, no drift bait.
+func TestAgentSessionsOpencodeAbsentSibling(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	// Primary store absent; the opencode-next.db sibling exists and scans
+	// clean — the missing primary must not surface a note at all.
+	writeOpencodeDB(t, filepath.Join(dir, "opencode-next.db"))
+	_, statuses := scanAgentSources(day)
+	oc := sourceStatus(t, statuses, "opencode")
+	if oc.Status != "empty" || oc.Note != "" {
+		t.Fatalf("absent sibling should report empty with no note, got %+v", oc)
+	}
+
+	// Same suppression when the sibling produces sessions.
+	if err := os.Remove(filepath.Join(dir, "opencode-next.db")); err != nil {
+		t.Fatal(err)
+	}
+	writeOpencodeDB(t, filepath.Join(dir, "opencode-next.db"), ocFixtureSession{
+		id: "ses_1", title: "Next work", dir: "/x/next",
+		msgs: []ocFixtureMsg{
+			{id: "m1", typ: "user", seq: 1, text: "next-gen work",
+				created: ms(day.Add(10 * time.Hour)), updated: ms(day.Add(10 * time.Hour))},
+		},
+	})
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session from the sibling store, got %+v", sessions)
+	}
+	oc = sourceStatus(t, statuses, "opencode")
+	if oc.Status != "ok" || oc.Note != "" {
+		t.Fatalf("absent sibling should be invisible when sibling produced sessions, got %+v", oc)
+	}
+}
+
+// A store removed after productive use is absence, not corruption: the scan
+// reports "empty" with the note kept and no drift is flagged. Drift only
+// fires when the store exists but can't be read.
+func TestAgentSourceAbsentStoreNotDrift(t *testing.T) {
+	testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+	dbPath := filepath.Join(dir, "opencode.db")
+	driftEvents := func() int {
+		var n int
+		db.QueryRow(`SELECT COUNT(1) FROM events WHERE type='agent_source_drift'`).Scan(&n)
+		return n
+	}
+
+	// Productive scan marks the source as seen.
+	writeOpencodeDB(t, dbPath, ocFixtureSession{
+		id: "ses_1", title: "T", dir: "/x/p",
+		msgs: []ocFixtureMsg{
+			{id: "m1", typ: "user", seq: 1, text: "real work",
+				created: ms(day.Add(10 * time.Hour)), updated: ms(day.Add(10 * time.Hour))},
+		},
+	})
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %+v", sessions)
+	}
+	recordAgentSourceScans(db, statuses)
+
+	// Store removed entirely → "empty" + kept note, no drift flag/event.
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	sessions, statuses = scanAgentSources(day)
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %+v", sessions)
+	}
+	recordAgentSourceScans(db, statuses)
+	oc := sourceStatus(t, statuses, "opencode")
+	if oc.Status != "empty" || oc.Note == "" {
+		t.Fatalf("removed store should report empty + note, got %+v", oc)
+	}
+	if oc.Drift {
+		t.Fatal("absent store must not flag drift")
+	}
+	if n := driftEvents(); n != 0 {
+		t.Fatalf("absent store logged %d drift events", n)
+	}
+
+	// Store exists but is corrupt (message table present, required column
+	// gone) → real degradation: unavailable + drift.
+	writeOpencodeDBDrifted(t, dbPath, "ses_1", ms(day.Add(10*time.Hour)))
+	sessions, statuses = scanAgentSources(day)
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %+v", sessions)
+	}
+	recordAgentSourceScans(db, statuses)
+	oc = sourceStatus(t, statuses, "opencode")
+	if oc.Status != "unavailable" || !strings.Contains(oc.Note, "failed to read") {
+		t.Fatalf("corrupt store should report unavailable + failure note, got %+v", oc)
+	}
+	if !oc.Drift {
+		t.Fatal("present-but-corrupt store not flagged as drift")
+	}
+	if n := driftEvents(); n != 1 {
+		t.Fatalf("expected 1 drift event, got %d", n)
+	}
+}
+
+// A healthy-but-idle store reports "empty" through the real adapter path:
+// schema valid, zero in-window sessions, no note.
+func TestAgentSessionsOpencodeHealthyEmpty(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	writeOpencodeDB(t, filepath.Join(dir, "opencode.db")) // schema only
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %+v", sessions)
+	}
+	oc := sourceStatus(t, statuses, "opencode")
+	if oc.Status != "empty" || oc.Note != "" {
+		t.Fatalf("healthy-empty store should report empty, got %+v", oc)
+	}
+}
+
+// The day window is [s,e): a message at exactly s is included, one at
+// exactly e is excluded.
+func TestAgentSessionsOpencodeDayBoundary(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+	s, e := dayBounds(day)
+
+	writeOpencodeDB(t, filepath.Join(dir, "opencode.db"),
+		ocFixtureSession{id: "lo", title: "Lo", dir: "/x/lo",
+			msgs: []ocFixtureMsg{
+				{id: "lo1", typ: "user", seq: 1, text: "at day start",
+					created: ms(s), updated: ms(s)},
+			}},
+		ocFixtureSession{id: "hi", title: "Hi", dir: "/x/hi",
+			msgs: []ocFixtureMsg{
+				{id: "hi1", typ: "user", seq: 1, text: "at day end",
+					created: ms(e), updated: ms(e)},
+			}})
+
+	sessions, _ := scanAgentSources(day)
+	if len(sessions) != 1 || sessions[0].Title != "Lo" {
+		t.Fatalf("boundary session mismatch, got %+v", sessions)
+	}
+	if sessions[0].Start != s.Unix() {
+		t.Fatalf("start = %d, want %d (day open bound)", sessions[0].Start, s.Unix())
+	}
+}
+
+// A NULL title/directory must not sink the day's whole candidate scan —
+// the session falls back to the first user prompt for its title.
+func TestAgentSessionsOpencodeNullTitleDir(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "opencode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ddl := range []string{
+		`CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT,
+		  directory TEXT, time_created INTEGER, time_updated INTEGER)`,
+		`CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT,
+		  type TEXT, seq INTEGER, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ts := ms(day.Add(10 * time.Hour))
+	if _, err := db.Exec(`INSERT INTO session_message
+	  (id, session_id, type, seq, time_created, time_updated, data)
+	  VALUES('m1','ses_null','user',1,?,?,'{"text":"null-title prompt"}')`, ts, ts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO session
+	  (id, title, directory, time_created, time_updated) VALUES('ses_null',NULL,NULL,?,?)`, ts, ts); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	sessions, _ := scanAgentSources(day)
+	if len(sessions) != 1 || sessions[0].Title != "null-title prompt" {
+		t.Fatalf("NULL title/dir session not scanned: %+v", sessions)
+	}
+}
+
+// Devin's message_nodes table present but with chat_message dropped is
+// column-level schema drift: candidates resolve, per-session extraction
+// fails — the note must read as unavailable, never "empty".
+func TestAgentSessionsDevinColumnDrift(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	devin := filepath.Join(dir, "devin")
+	t.Setenv("DAYFLOW_DEVIN_DIR", devin)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	dbPath := filepath.Join(devin, "sessions.db")
+	if err := os.MkdirAll(devin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ddl := range []string{
+		`CREATE TABLE sessions (id TEXT PRIMARY KEY, working_directory TEXT,
+		  created_at INTEGER, last_activity_at INTEGER, title TEXT)`,
+		// message_nodes exists but dropped chat_message.
+		`CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY,
+		  session_id TEXT, node_id INTEGER, created_at INTEGER)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ts := day.Add(10 * time.Hour).Unix()
+	if _, err := db.Exec(`INSERT INTO sessions
+	  (id, working_directory, created_at, last_activity_at, title)
+	  VALUES('ses-1','/x/p',?,?,'T')`, ts, ts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO message_nodes
+	  (session_id, node_id, created_at) VALUES('ses-1',1,?)`, ts); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %+v", sessions)
+	}
+	st := devinStatus(t, statuses)
+	if st.Status != "unavailable" || !strings.Contains(st.Note, "failed to read") {
+		t.Fatalf("column drift should report unavailable + failure note, got %+v", st)
+	}
+}
+
+// An in-place message rewrite — same node ids and timestamps, different
+// body — must still invalidate the cached recap: the fingerprint folds in
+// the chat_message byte length.
+func TestDevinFingerprintTextRewrite(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	devin := filepath.Join(dir, "devin")
+	t.Setenv("DAYFLOW_DEVIN_DIR", devin)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+	dbPath := filepath.Join(devin, "sessions.db")
+	writeDevinDB(t, dbPath, dvFixtureSession{
+		id: "ses-1", title: "T", dir: "/x/p",
+		msgs: []dvFixtureMsg{
+			{role: "user", text: "hi", created: day.Add(10 * time.Hour).Unix(), userInput: true},
+		},
+	})
+
+	sessions, _ := scanAgentSources(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	src := &devinSource{}
+	fp1, ok := src.Fingerprint(sessions[0])
+	if !ok {
+		t.Fatal("fingerprint failed on scanned session")
+	}
+
+	// Rewrite the body in place — node_id and created_at untouched.
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm, _ := json.Marshal(map[string]any{
+		"message_id": "msg-1", "role": "user",
+		"content":  "a much longer rewritten prompt body",
+		"metadata": map[string]any{"is_user_input": true},
+	})
+	if _, err := db.Exec(`UPDATE message_nodes SET chat_message=?
+	  WHERE session_id='ses-1' AND node_id=1`, string(cm)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	fp2, ok := src.Fingerprint(sessions[0])
+	if !ok || fp2 == fp1 {
+		t.Fatal("in-place body rewrite did not change fingerprint")
+	}
+}
+
+// The mergeCards heuristic positive arm: adjacent blocks sharing
+// app+category fold into one card even when the titles differ; the latest
+// block's title wins.
+func TestMergeCardsAdjacentSameApp(t *testing.T) {
+	base := time.Date(2026, 9, 18, 9, 0, 0, 0, time.Local)
+	mk := func(i int, title string) Block {
+		s := base.Add(time.Duration(i*15) * time.Minute)
+		return Block{Start: s, End: s.Add(15 * time.Minute), Title: title,
+			App: "neovim", Category: "coding", Status: "done",
+			StartStr: s.Format("15:04"), EndStr: s.Add(15 * time.Minute).Format("15:04")}
+	}
+	cards := mergeCards([]Block{mk(0, "Refactor engine"), mk(1, "Fix engine test")})
+	if len(cards) != 1 || cards[0].Blocks != 2 {
+		t.Fatalf("cards = %+v, want one merged card", cards)
+	}
+	if cards[0].Title != "Fix engine test" {
+		t.Fatalf("latest title should win, got %q", cards[0].Title)
+	}
+}
+
+// A composerHeaders workspaceId containing traversal or separators must
+// never reach filepath.Join under workspaceStorage — the regexp gate
+// rejects it outright, before any filesystem read.
+func TestCursorWorkspaceFolderRejectsUnsafeID(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DAYFLOW_CURSOR_WORKSPACES", dir)
+	// A trap file a traversal would resolve if the id weren't gated.
+	trap := filepath.Join(filepath.Dir(dir), "escape-ws-trap")
+	if err := os.MkdirAll(trap, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(trap, "workspace.json"),
+		[]byte(`{"folder":"file:///trap"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(trap)
+	for _, wsid := range []string{"../escape-ws-trap", "a/b", "a b", "..", ""} {
+		if got := cursorWorkspaceFolder(wsid); got != "" {
+			t.Fatalf("cursorWorkspaceFolder(%q) = %q, want rejected", wsid, got)
+		}
 	}
 }

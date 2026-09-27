@@ -47,11 +47,11 @@ type AgentSession struct {
 type agentSource interface {
 	// Name matches AgentSession.Source.
 	Name() string
-	// Scan returns sessions overlapping [s,e); note describes a degraded
-	// store for drift surfacing (identifiers/sizes only — never content).
-	// A missing or schema-incompatible store returns an empty slice and a
-	// note, never an error that could sink the other sources.
-	Scan(s, e time.Time) (sessions []AgentSession, note string)
+	// Scan returns sessions overlapping [s,e); note describes a degraded or
+	// absent store for drift surfacing (identifiers/sizes only — never
+	// content). A missing or schema-incompatible store returns an empty
+	// slice and a note, never an error that could sink the other sources.
+	Scan(s, e time.Time) (sessions []AgentSession, note scanNote)
 	// Fingerprint is the recap-cache invalidator; false skips the session.
 	Fingerprint(sess AgentSession) (recapFingerprint, bool)
 	// Excerpt is the bounded transcript sample for recap generation.
@@ -60,6 +60,20 @@ type agentSource interface {
 	// (DB-backed sources share one handle per store per pass). No-op for
 	// file-backed sources.
 	Close()
+}
+
+// noteStoreMissing is the shared absence sentinel leaf helpers return when
+// a store file/dir isn't there at all. Absence is not corruption — an
+// all-absent aggregate reports "empty", never "unavailable", so an
+// uninstalled tool or a store removed after productive use can't pin drift.
+const noteStoreMissing = "store not found"
+
+// scanNote is one source's aggregate store detail for drift surfacing.
+// absent marks pure absence (every sub-store missing); the note text is
+// kept either way so the detail stays visible in JSON output.
+type scanNote struct {
+	text   string
+	absent bool
 }
 
 // sourceScanStatus records one adapter's outcome for drift surfacing (R3b):
@@ -75,21 +89,12 @@ type sourceScanStatus struct {
 
 func agentSources() []agentSource {
 	return []agentSource{
-		jsonlSource{name: "claude", root: claudeDir(), parse: parseClaudeLine},
-		jsonlSource{name: "codex", root: codexDir(), parse: parseCodexLine},
+		jsonlSource{name: "claude", root: claudeDir(), parse: parseClaudeLine, lineRoleText: claudeLineRoleText},
+		jsonlSource{name: "codex", root: codexDir(), parse: parseCodexLine, lineRoleText: codexLineRoleText},
 		&opencodeSource{},
 		&devinSource{},
 		&cursorSource{},
 	}
-}
-
-func agentSourceFor(name string) agentSource {
-	for _, s := range agentSources() {
-		if s.Name() == name {
-			return s
-		}
-	}
-	return nil
 }
 
 // jsonlSource adapts a file-per-session JSONL transcript root to the
@@ -99,15 +104,20 @@ type jsonlSource struct {
 	name  string
 	root  string
 	parse func([]byte, *AgentSession)
+	// lineRoleText decodes one transcript line into (role, text) for the
+	// excerpt — the seam counterpart to parse, populated at registration so
+	// a new JSONL source can't silently produce empty excerpts that settle
+	// as cached recaps.
+	lineRoleText func([]byte) (role, text string)
 }
 
 func (j jsonlSource) Name() string { return j.name }
 
-func (j jsonlSource) Scan(s, e time.Time) ([]AgentSession, string) {
+func (j jsonlSource) Scan(s, e time.Time) ([]AgentSession, scanNote) {
 	if _, err := os.Stat(j.root); err != nil {
-		return nil, "transcript root not found"
+		return nil, scanNote{text: "transcript root not found", absent: true}
 	}
-	return scanJSONL(j.root, j.name, s, e, j.parse), ""
+	return scanJSONL(j.root, j.name, s, e, j.parse), scanNote{}
 }
 
 func (j jsonlSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
@@ -115,7 +125,7 @@ func (j jsonlSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 }
 
 func (j jsonlSource) Excerpt(sess AgentSession) string {
-	return sessionExcerpt(sess.File, j.name)
+	return sessionExcerpt(sess.File, j.lineRoleText)
 }
 
 // Close is a no-op — file-backed sources hold no store handles.
@@ -185,35 +195,37 @@ func sqliteTableExists(db *sql.DB, name string) bool {
 	return n > 0
 }
 
-// storeCache lazily opens one read-only handle per store path for an
-// adapter pass — Fingerprint/Excerpt calls share it instead of re-opening
-// (and possibly temp-copying a live WAL store) per session. Failed opens
-// are cached too so a dead store doesn't retry the copy each call.
-type storeCache struct {
-	stores map[string]*roStore
+// storeEntry is one lazily-opened store handle or its open error — failed
+// opens are cached too so a dead store doesn't retry the copy each call.
+type storeEntry struct {
+	st  *roStore
+	err error
 }
 
-func (c *storeCache) open(path string) (*roStore, bool) {
+// storeCache lazily opens one read-only handle per store path for an
+// adapter pass — Scan/Fingerprint/Excerpt calls share it instead of
+// re-opening (and possibly temp-copying a live WAL store) per session.
+type storeCache struct {
+	stores map[string]storeEntry
+}
+
+func (c *storeCache) open(path string) (*roStore, error) {
 	if c.stores == nil {
-		c.stores = map[string]*roStore{}
+		c.stores = map[string]storeEntry{}
 	}
-	if st, ok := c.stores[path]; ok {
-		return st, st != nil
+	if e, ok := c.stores[path]; ok {
+		return e.st, e.err
 	}
 	st, err := openROStore(path)
-	if err != nil {
-		c.stores[path] = nil
-		return nil, false
-	}
-	c.stores[path] = st
-	return st, true
+	c.stores[path] = storeEntry{st: st, err: err}
+	return st, err
 }
 
 // Close releases every lazily-opened store; safe on an unused cache.
 func (c *storeCache) Close() {
-	for _, st := range c.stores {
-		if st != nil {
-			st.close()
+	for _, e := range c.stores {
+		if e.st != nil {
+			e.st.close()
 		}
 	}
 	c.stores = nil
@@ -285,18 +297,32 @@ func codexDir() string {
 // scanAgentSources runs every registered source adapter over the day window
 // and returns the merged, start-sorted session list plus per-source scan
 // status. A failed source degrades to a status note — never a hard error.
-func scanAgentSources(d time.Time) ([]AgentSession, []sourceScanStatus) {
+//
+// Callers that go on to attachRecaps may pass the adapter set to share
+// (built once via agentSources): a store handle opened during the scan —
+// possibly through the WAL temp-copy fallback — is then reused for
+// fingerprint/excerpt instead of opening again, and the caller closes it
+// once via closeAgentSources. With no adapters passed, scanAgentSources
+// builds its own set and releases it before returning.
+func scanAgentSources(d time.Time, srcs ...agentSource) ([]AgentSession, []sourceScanStatus) {
+	own := len(srcs) == 0
+	if own {
+		srcs = agentSources()
+		defer closeAgentSources(srcs)
+	}
 	s, e := dayBounds(d)
 	out := []AgentSession{}
-	statuses := make([]sourceScanStatus, 0, len(agentSources()))
-	for _, src := range agentSources() {
+	statuses := make([]sourceScanStatus, 0, len(srcs))
+	for _, src := range srcs {
 		sessions, note := src.Scan(s, e)
-		src.Close() // adapters may hold lazily-opened store handles
-		st := sourceScanStatus{Source: src.Name(), Sessions: len(sessions), Note: note}
+		st := sourceScanStatus{Source: src.Name(), Sessions: len(sessions), Note: note.text}
 		switch {
-		case note != "" && len(sessions) == 0:
+		case note.text != "" && len(sessions) == 0 && !note.absent:
 			st.Status = "unavailable"
 		case len(sessions) == 0:
+			// A purely absent store lands here too — "empty" (tool not
+			// installed / store never created), not "unavailable", so it
+			// can't flag drift.
 			st.Status = "empty"
 		default:
 			st.Status = "ok"
@@ -308,12 +334,14 @@ func scanAgentSources(d time.Time) ([]AgentSession, []sourceScanStatus) {
 	return out, statuses
 }
 
-// agentSessionsForDay collects agent sessions active inside the given day —
-// a session counts when its [Start, End] message-timestamp range overlaps
-// the day, so one spanning midnight appears on both days.
-func agentSessionsForDay(d time.Time) []AgentSession {
-	sessions, _ := scanAgentSources(d)
-	return sessions
+// closeAgentSources releases every adapter's lazily-opened store handles.
+// The owner of a passed-in adapter set calls it once when the pass ends.
+func closeAgentSources(srcs []agentSource) {
+	for _, s := range srcs {
+		if s != nil {
+			s.Close()
+		}
+	}
 }
 
 // jsonlFiles walks root for *.jsonl files modified at or after s. No upper
@@ -335,7 +363,9 @@ func jsonlFiles(root string, s time.Time) []string {
 }
 
 func truncTitle(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
+	// stripCtl first: titles come from transcript/store text that can carry
+	// ESC or other control bytes — they must not reach the terminal raw.
+	s = strings.Join(strings.Fields(stripCtl(s)), " ")
 	const max = 120
 	if r := []rune(s); len(r) > max {
 		return string(r[:max]) + "…"
@@ -534,10 +564,14 @@ func recordAgentSourceScans(db *sql.DB, statuses []sourceScanStatus) {
 }
 
 func printAgentSessions(db *sql.DB, cfg Config, d time.Time, jsonOut, recaps bool) {
-	sessions, statuses := scanAgentSources(d)
+	srcs := agentSources()
+	defer closeAgentSources(srcs)
+	sessions, statuses := scanAgentSources(d, srcs...)
 	recordAgentSourceScans(db, statuses)
 	if recaps {
-		attachRecaps(db, cfg, sessions)
+		// Reuse the scan's adapters so DB-backed stores (and any WAL temp
+		// copies) open once per pass, not once per phase.
+		attachRecaps(db, cfg, sessions, srcs...)
 	}
 	if jsonOut {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
@@ -555,7 +589,7 @@ func printAgentSessions(db *sql.DB, cfg Config, d time.Time, jsonOut, recaps boo
 			start := time.Unix(s.Start, 0).Local().Format("15:04")
 			end := time.Unix(s.End, 0).Local().Format("15:04")
 			fmt.Printf("%s–%s  %-6s %-20s %d msgs  %s\n",
-				start, end, s.Source, s.Project, s.Messages, s.Title)
+				start, end, s.Source, truncTitle(s.Project), s.Messages, truncTitle(s.Title))
 			if s.Recap != "" {
 				fmt.Printf("         └─ %s\n", s.Recap)
 			}

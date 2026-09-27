@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -132,6 +133,27 @@ func providerForTask(cfg Config, task string) (Provider, error) {
 	if id := cfg.Routing.TaskProvider[task]; id != "" {
 		if p := find(id); p != nil {
 			return *p, nil
+		}
+		// The configured route names a provider that exists but is ineligible
+		// (disabled, or a cli provider without allow_hot_path on the
+		// vision/summary hot path) — warn rather than silently rerouting.
+		for i := range provs {
+			if provs[i].ID != id {
+				continue
+			}
+			reason := "disabled"
+			if provs[i].Enabled {
+				reason = "cli provider without allow_hot_path"
+			}
+			target := "first enabled provider"
+			if p := find(cfg.Routing.Primary); p != nil {
+				target = "primary " + p.ID
+			} else if p := find(cfg.Routing.Secondary); p != nil {
+				target = "secondary " + p.ID
+			}
+			debugf(cfg, "routing: task %q provider %q skipped (%s) — falling back to %s",
+				task, id, reason, target)
+			break
 		}
 	}
 	if p := find(cfg.Routing.Primary); p != nil {
@@ -519,6 +541,9 @@ func runProvider(cfg Config, args []string, jsonOut bool) error {
 			return fmt.Errorf("unknown provider key %q (name, kind, api_base_url, api_key, model, enabled, vision, chat, command, args, cli_timeout_sec, allow_hot_path, scratch_home, env_passthrough, *_prompt)", args[2])
 		}
 		if p.Kind == "cli" {
+			if cliCommandDenied(p.Command) {
+				return fmt.Errorf("provider %s: command %q is an interpreter (sh/python/node/...) that would run the prompt as code — pick an agent CLI like cursor-agent or opencode", p.ID, filepath.Base(p.Command))
+			}
 			if err := validateCLIArgs(p.Args); err != nil {
 				return fmt.Errorf("provider %s: %w", p.ID, err)
 			}

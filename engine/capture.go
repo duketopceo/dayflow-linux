@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -204,13 +205,22 @@ func resolveCaptureCommand(cfg Config) ([]string, error) {
 	return append(args, "-"), nil
 }
 
+// grabFrameTimeout bounds one capture_command run — a hung screenshot tool
+// must not stall the capture loop forever. A var so tests can shrink it.
+var grabFrameTimeout = 30 * time.Second
+
 func grabFrame(cmdArgs []string) ([]byte, error) {
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	ctx, cancel := context.WithTimeout(context.Background(), grabFrameTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
 	// grim output is bounded by screen size, but a custom capture_command
 	// can stream arbitrarily — cap before an infinite stream OOMs us.
 	out := &cappedBuffer{limit: 64 << 20}
 	cmd.Stdout = out
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("capture command timed out after %s: %w", grabFrameTimeout, err)
+		}
 		return nil, err
 	}
 	return out.buf.Bytes(), nil

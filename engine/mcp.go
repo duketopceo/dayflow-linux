@@ -67,7 +67,7 @@ var mcpTools = []map[string]any{
 	{"name": "get_forecast", "description": "Predicted category mix for a date (default tomorrow), blended from same-weekday history.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD; default tomorrow"}}}},
-	{"name": "chat", "description": "Ask a question about the user's work journal. Optionally continue an existing conversation.",
+	{"name": "chat", "description": "Ask a question about the user's work journal. Optionally continue an existing conversation. A cli-routed chat provider can take minutes to answer (cli_timeout_sec, default 180s) — allow a generous call timeout.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"message":         map[string]any{"type": "string", "description": "The user's question"},
 			"conversation_id": map[string]any{"type": "integer", "description": "Optional existing conversation id"}},
@@ -136,10 +136,10 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{
-			"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"),
-			"blocks": blocks, "cards": mergeCards(blocks),
-		}, nil
+		res := timelineJSON(blocks)
+		res["start"] = start.Format("2006-01-02")
+		res["end"] = end.Format("2006-01-02")
+		return res, nil
 
 	case "get_status":
 		now := time.Now()
@@ -339,7 +339,9 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 			}
 			t = parsed
 		}
-		sessions, statuses := scanAgentSources(t)
+		srcs := agentSources()
+		defer closeAgentSources(srcs)
+		sessions, statuses := scanAgentSources(t, srcs...)
 		// Drift bookkeeping matches the CLI path — writes degrade silently
 		// on a read-only db.
 		recordAgentSourceScans(db, statuses)
@@ -347,7 +349,7 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		// cached recaps only by forcing the judges-disabled path.
 		recapCfg := cfg
 		recapCfg.DisableJudges = true
-		attachRecaps(db, recapCfg, sessions)
+		attachRecaps(db, recapCfg, sessions, srcs...)
 		return map[string]any{
 			"date":     t.Local().Format("2006-01-02"),
 			"sessions": sessions,

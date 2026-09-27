@@ -284,14 +284,34 @@ Panel {
     return ""
   }
 
+  // Message shown when the dayflow binary on PATH predates engine-side card
+  // emission — a missing "cards" key must surface as version skew, not an
+  // empty day. engineVersion comes from status --json and may still be ""
+  // on the first load, so it is optional.
+  function engineSkewNotice() {
+    return "engine upgrade required — the dayflow binary on PATH does not emit timeline cards" +
+      (dayflow.engineVersion !== "" ? " (engine " + dayflow.engineVersion + ")" : "")
+  }
+
   function applyTimeline(raw) {
     dayflow.timelineLoading = false
     try {
       var d = JSON.parse(raw)
       dayflow.blocks = d.blocks || []
       // Engine-merged cards (mergeCards in Go), newest first to match the
-      // timeline's previous display order.
-      var cards = d.cards || []
+      // timeline's previous display order. null distinguishes a missing
+      // key (older binary) from a genuinely empty array.
+      var cards = ("cards" in d) ? (d.cards || []) : null
+      if (cards === null) {
+        dayflow.spans = []
+        dayflow.dateLabel = d.date || ""
+        if (dayflow.blocks.length > 0) {
+          dayflow.errorText = dayflow.engineSkewNotice()
+        }
+        // Old binary + empty day: indistinguishable from a real empty day,
+        // but don't clear a skew notice the week loader may have raised.
+        return
+      }
       var spans = []
       for (var i = cards.length - 1; i >= 0; i--) {
         spans.push(dayflow.cardToSpan(cards[i]))
@@ -386,7 +406,13 @@ Panel {
     try {
       var d = JSON.parse(raw)
       dayflow.weekBlocks = d.blocks || []
-      dayflow.weekCards = d.cards || []
+      // null = the binary predates the "cards" key — a version-skew state,
+      // not an empty week. weekDaySpans treats null like empty, but the
+      // skew is surfaced via errorText while blocks exist.
+      dayflow.weekCards = ("cards" in d) ? (d.cards || []) : null
+      if (dayflow.weekCards === null && dayflow.weekBlocks.length > 0) {
+        dayflow.errorText = dayflow.engineSkewNotice()
+      }
       dayflow.weekStart = d.start || ""
       dayflow.weekEnd = d.end || ""
     } catch (e) {
@@ -465,17 +491,35 @@ Panel {
   }
 
   // Cards for one week day, newest first — filtered from the week payload's
-  // engine-emitted cards array (a card belongs to the day it started on).
+  // engine-emitted cards array. A card emits one span per day its children
+  // touch, built from only that day's children, so a card spanning midnight
+  // renders a continuation span in the next day's column instead of being
+  // owned wholly by its start day.
   function weekDaySpans(dayIndex) {
-    if (!dayflow.weekCards.length) return []
+    if (!dayflow.weekCards || !dayflow.weekCards.length) return []
     var dayStart = dayflow.weekStartDate().getTime() + dayIndex * 86400000
     var dayEnd = dayStart + 86400000
     var spans = []
     for (var i = 0; i < dayflow.weekCards.length; i++) {
       var c = dayflow.weekCards[i]
       var kids = c.children || []
-      var s = kids.length > 0 ? Number(kids[0].start_ts || 0) * 1000 : 0
-      if (s >= dayStart && s < dayEnd) spans.push(dayflow.cardToSpan(c))
+      var dayKids = []
+      for (var k = 0; k < kids.length; k++) {
+        var s = Number(kids[k].start_ts || 0) * 1000
+        if (s >= dayStart && s < dayEnd) dayKids.push(kids[k])
+      }
+      if (dayKids.length === 0) continue
+      // cardToSpan derives start_ts/end_ts from children and mutates the
+      // object it is given — copy the card so each day gets its own span
+      // instead of overwriting the shared payload entry. start/end strings
+      // and the child count reflect this day's segment of the card only.
+      var span = {}
+      for (var key in c) span[key] = c[key]
+      span.children = dayKids
+      span.blocks = dayKids.length
+      span.start = dayKids[0].start
+      span.end = dayKids[dayKids.length - 1].end
+      spans.push(dayflow.cardToSpan(span))
     }
     spans.reverse()
     return spans

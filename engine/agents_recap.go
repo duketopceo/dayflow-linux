@@ -13,10 +13,13 @@ import (
 	"time"
 )
 
-// Agent-session recaps: a generated one-sentence summary of what a Claude
-// Code / Codex session accomplished, cached per transcript file and gated by
-// Jev worthiness + quality judgments. All failures degrade to the plain
-// session listing — recaps are an enhancement, never a dependency.
+// Agent-session recaps: a generated one-sentence summary of what a coding-
+// agent session accomplished, cached per session and gated by Jev
+// worthiness + quality judgments. Per-source adapters (agentSource) supply
+// the cache fingerprint and bounded excerpt, so this file never knows a
+// store's shape — File is a stat-able transcript path only for JSONL
+// sources. All failures degrade to the plain session listing — recaps are
+// an enhancement, never a dependency.
 
 // recapFingerprint invalidates a cached recap when the transcript changes.
 type recapFingerprint struct {
@@ -82,13 +85,19 @@ func cachedRecaps(db *sql.DB, paths []string) map[string]recapRow {
 	return out
 }
 
+// fresh reports whether a cached recap row still describes the session —
+// the stored fingerprint must equal the adapter's current one.
+func fresh(r recapRow, fp recapFingerprint) bool {
+	return r.mtime == fp.Mtime && r.size == fp.Size
+}
+
 // cachedRecap returns the stored recap when its fingerprint still matches the
 // file on disk. A stored row with recap="" means "judged unworthy" — fresh so
 // the session is never re-judged. Transient generation failures are NOT
 // persisted, so they retry on the next view.
-func cachedRecap(db *sql.DB, path string, fp recapFingerprint) (recap string, quality *float64, fresh bool) {
+func cachedRecap(db *sql.DB, path string, fp recapFingerprint) (string, *float64, bool) {
 	r, ok := cachedRecaps(db, []string{path})[path]
-	if !ok || r.mtime != fp.Mtime || r.size != fp.Size {
+	if !ok || !fresh(r, fp) {
 		return "", nil, false
 	}
 	return r.recap, r.quality, true
@@ -108,11 +117,16 @@ func putRecap(db *sql.DB, sess AgentSession, fp recapFingerprint, recap, model s
 	return err
 }
 
-// sessionExcerpt pulls a bounded text sample from a transcript: first user
-// message, last user message, and last assistant text. Everything is
-// rune-truncated and the user's home path is scrubbed to ~ before it can
-// leave the machine.
-func sessionExcerpt(path, source string) string {
+// sessionExcerpt pulls a bounded text sample from a JSONL transcript: first
+// user message, last user message, and last assistant text. The decoder is
+// the source's registered lineRoleText — the seam counterpart to its parse
+// func — so a source's excerpt can't silently be empty because its name was
+// missing from a switch. Everything is rune-truncated and the user's home
+// path is scrubbed to ~ before it can leave the machine.
+func sessionExcerpt(path string, lineRoleText func([]byte) (role, text string)) string {
+	if lineRoleText == nil {
+		return ""
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -123,7 +137,7 @@ func sessionExcerpt(path, source string) string {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
-		role, text := lineRoleText(sc.Bytes(), source)
+		role, text := lineRoleText(sc.Bytes())
 		if text == "" || isEnvelopeText(text) {
 			continue // injected envelopes, not user intent
 		}
@@ -221,37 +235,37 @@ func scrubText(s string) string {
 	return s
 }
 
-// lineRoleText decodes one JSONL line into (role, text) for a known source.
-func lineRoleText(raw []byte, source string) (string, string) {
-	switch source {
-	case "claude":
-		var line claudeLine
-		if json.Unmarshal(raw, &line) != nil {
-			return "", ""
-		}
-		if line.Type != "user" && line.Type != "assistant" {
-			return "", ""
-		}
-		var msg claudeMessage
-		if json.Unmarshal(line.Message, &msg) != nil {
-			return "", ""
-		}
-		return line.Type, strings.TrimSpace(contentText(msg.Content))
-	case "codex":
-		var line codexLine
-		if json.Unmarshal(raw, &line) != nil {
-			return "", ""
-		}
-		var p codexPayload
-		if json.Unmarshal(line.Payload, &p) != nil || p.Type != "message" {
-			return "", ""
-		}
-		if p.Role != "user" && p.Role != "assistant" {
-			return "", ""
-		}
-		return p.Role, strings.TrimSpace(contentText(p.Content))
+// claudeLineRoleText / codexLineRoleText are the per-source line decoders
+// registered on each jsonlSource — they decode one transcript line into
+// (role, text) for the excerpt, returning "" for non-message lines.
+func claudeLineRoleText(raw []byte) (string, string) {
+	var line claudeLine
+	if json.Unmarshal(raw, &line) != nil {
+		return "", ""
 	}
-	return "", ""
+	if line.Type != "user" && line.Type != "assistant" {
+		return "", ""
+	}
+	var msg claudeMessage
+	if json.Unmarshal(line.Message, &msg) != nil {
+		return "", ""
+	}
+	return line.Type, strings.TrimSpace(contentText(msg.Content))
+}
+
+func codexLineRoleText(raw []byte) (string, string) {
+	var line codexLine
+	if json.Unmarshal(raw, &line) != nil {
+		return "", ""
+	}
+	var p codexPayload
+	if json.Unmarshal(line.Payload, &p) != nil || p.Type != "message" {
+		return "", ""
+	}
+	if p.Role != "user" && p.Role != "assistant" {
+		return "", ""
+	}
+	return p.Role, strings.TrimSpace(contentText(p.Content))
 }
 
 const recapPrompt = `You are summarizing one coding-agent session for a personal work journal.
@@ -274,15 +288,14 @@ type recapResult struct {
 
 // generateRecap produces a recap for one session: Jev worthiness gate, chat
 // generation, Jev quality gate with one regeneration. Errors degrade to an
-// empty, non-cacheable result.
-func generateRecap(db *sql.DB, cfg Config, sess AgentSession, excerpt string) recapResult {
+// empty, non-cacheable result. chatModel is the chat provider's model id,
+// resolved once per pass by attachRecaps.
+func generateRecap(db *sql.DB, cfg Config, sess AgentSession, excerpt, chatModel string) recapResult {
 	var res recapResult
 	if cfg.DisableJudges {
 		return res // defense-in-depth — attachRecaps gates before calling
 	}
-	if p, err := providerForTask(cfg, "chat"); err == nil {
-		res.Model = p.Model
-	}
+	res.Model = chatModel
 	// Title/Project carry the same transcript text as the excerpt — scrub
 	// them before they reach the judge endpoint too.
 	state := boundState("project: "+scrubText(sess.Project)+"\ntitle: "+scrubText(sess.Title)+
@@ -370,28 +383,26 @@ const maxNewRecaps = 8
 // caching where needed. Cached rows are always served; new generation is
 // suppressed when cfg.DisableJudges is set (read-only/no-egress contexts) or
 // the excerpt is empty. Individual failures never fail the listing.
-func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
+//
+// srcs should be the adapter set the scan pass used (scanAgentSources'
+// optional share): DB-backed sources keep one lazily-opened store handle —
+// and at most one WAL temp copy — across the whole pass. With no adapters
+// passed, attachRecaps builds its own set and releases it before returning.
+func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession, srcs ...agentSource) {
 	if db == nil {
 		return
 	}
-	// One adapter per source for the whole pass so DB-backed sources share
-	// a single lazily-opened store handle across sessions (KTD2); released
-	// when the pass ends.
-	srcs := map[string]agentSource{}
-	defer func() {
+	if len(srcs) == 0 {
+		srcs = agentSources()
+		defer closeAgentSources(srcs)
+	}
+	srcFor := func(name string) agentSource {
 		for _, s := range srcs {
-			if s != nil {
-				s.Close()
+			if s != nil && s.Name() == name {
+				return s
 			}
 		}
-	}()
-	srcFor := func(name string) agentSource {
-		if s, ok := srcs[name]; ok {
-			return s
-		}
-		s := agentSourceFor(name)
-		srcs[name] = s // cache the miss too — no repeat lookups
-		return s
+		return nil
 	}
 	// Cache hits first (any order), then generate for the largest uncached
 	// sessions within the cap. Fingerprint/excerpt come from the session's
@@ -412,7 +423,7 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 		if !ok {
 			continue
 		}
-		if r, ok := cached[sessions[i].File]; ok && r.mtime == fp.Mtime && r.size == fp.Size {
+		if r, ok := cached[sessions[i].File]; ok && fresh(r, fp) {
 			sessions[i].Recap = r.recap
 			sessions[i].RecapConfidence = r.quality
 			continue
@@ -421,6 +432,15 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 	}
 	if cfg.DisableJudges || !cfg.AgentRecaps {
 		return // no-egress contexts and the durable opt-out serve cache only
+	}
+	// Resolve the chat route once per pass. A cli provider runs at
+	// minutes-scale while the 45s deadline is only checked between
+	// sessions — one exec could stall the whole view and starve every
+	// recap, so the pass degrades to cache-only like DisableJudges.
+	chatP, _ := providerForTask(cfg, "chat")
+	if chatP.Kind == "cli" {
+		debugf(cfg, "agent recaps: chat provider %q is cli (minutes-scale); serving cached only", chatP.ID)
+		return
 	}
 	sort.Slice(order, func(a, b int) bool {
 		return sessions[order[a]].Messages > sessions[order[b]].Messages
@@ -455,7 +475,7 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 			continue
 		}
 		generated++
-		res := generateRecap(db, cfg, sessions[i], excerpt)
+		res := generateRecap(db, cfg, sessions[i], excerpt, chatP.Model)
 		afterFP, afterOK := src.Fingerprint(sessions[i])
 		if res.Cacheable && beforeOK && afterOK && beforeFP == afterFP {
 			if err := putRecap(db, sessions[i], afterFP, res.Text, res.Model, res.Worthy, res.Quality); err != nil {

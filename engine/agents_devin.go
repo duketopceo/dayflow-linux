@@ -41,48 +41,71 @@ type devinMessage struct {
 	role      string // "user" | "assistant" | other
 	created   int64  // epoch s
 	text      string
-	userInput bool // real typed input, not an injected continuation/context
+	bodyLen   int64 // chat_message byte length — fingerprint content signal
+	userInput bool  // real typed input, not an injected continuation/context
 }
 
-func (d *devinSource) Scan(s, e time.Time) ([]AgentSession, string) {
+func (d *devinSource) Scan(s, e time.Time) ([]AgentSession, scanNote) {
 	dir := devinDir()
 	if _, err := os.Stat(dir); err != nil {
-		return nil, "store dir not found"
+		return nil, scanNote{text: "store dir not found", absent: true}
 	}
 	var out []AgentSession
-	var notes []string
-	sessions, known, note := scanDevinDB(filepath.Join(dir, "sessions.db"), s, e)
+	var notes, missing []string
+	healthy := false
+	sessions, known, note := d.scanDB(filepath.Join(dir, "sessions.db"), s, e)
 	out = append(out, sessions...)
-	if note != "" {
-		// Identifiers and sizes only — never message content (R3b). An
-		// absent store is the idle case — status carries it, no log.
+	switch {
+	case note == noteStoreMissing:
+		missing = append(missing, "sessions.db")
+	case note != "":
+		// Identifiers and sizes only — never message content (R3b).
 		notes = append(notes, "sessions.db: "+note)
-		if note != "store not found" {
-			appendLog("devin scan sessions.db: " + note)
-		}
+		appendLog("devin scan sessions.db: " + note)
+	}
+	if note == "" || len(sessions) > 0 {
+		healthy = true
 	}
 	ts, tnote := scanDevinTranscripts(filepath.Join(dir, "transcripts"), known, s, e)
 	out = append(out, ts...)
-	if tnote != "" {
+	switch {
+	case tnote == noteStoreMissing:
+		missing = append(missing, "transcripts")
+	case tnote != "":
 		notes = append(notes, "transcripts: "+tnote)
 		appendLog("devin scan transcripts: " + tnote)
 	}
-	return out, strings.Join(notes, "; ")
+	if tnote == "" || len(ts) > 0 {
+		healthy = true
+	}
+	// A missing sub-store is the idle case: its note is suppressed when a
+	// sibling scanned clean or produced sessions. When every store is
+	// absent the detail is still surfaced — as absence ("empty"), not
+	// corruption, so a store that never existed can't flag drift.
+	if !healthy {
+		for _, b := range missing {
+			notes = append(notes, b+": "+noteStoreMissing)
+		}
+	}
+	return out, scanNote{
+		text:   strings.Join(notes, "; "),
+		absent: len(missing) == 2,
+	}
 }
 
-// scanDevinDB lists sessions with at least one message inside [s,e) — the
-// same message-timestamp overlap rule the JSONL scanners apply. known holds
+// scanDB lists sessions with at least one message inside [s,e) — the same
+// message-timestamp overlap rule the JSONL scanners apply. known holds
 // every session id present in the sessions table so scanDevinTranscripts
-// only picks up sessions the DB lacks, never duplicates.
-func scanDevinDB(path string, s, e time.Time) (sessions []AgentSession, known map[string]bool, note string) {
+// only picks up sessions the DB lacks, never duplicates. The store handle
+// comes from the adapter's per-pass cache (KTD2).
+func (d *devinSource) scanDB(path string, s, e time.Time) (sessions []AgentSession, known map[string]bool, note string) {
 	if _, err := os.Stat(path); err != nil {
-		return nil, nil, "store not found"
+		return nil, nil, noteStoreMissing
 	}
-	st, err := openROStore(path)
+	st, err := d.open(path)
 	if err != nil {
 		return nil, nil, "store unreadable: " + err.Error()
 	}
-	defer st.close()
 	if !sqliteTableExists(st.db, "sessions") {
 		return nil, nil, "sessions table missing"
 	}
@@ -94,15 +117,26 @@ func scanDevinDB(path string, s, e time.Time) (sessions []AgentSession, known ma
 	if err != nil {
 		return nil, known, "session query failed: " + err.Error()
 	}
+	failures := 0
 	for _, c := range candidates {
 		msgs, err := devinDBMessages(st.db, c.id, true)
-		if err != nil || len(msgs) == 0 {
+		if err != nil {
+			// Per-session extraction errors (e.g. chat_message column
+			// dropped) must not silently read as "empty" — count them
+			// into a note so the status reports unavailable (R3b).
+			failures++
+			continue
+		}
+		if len(msgs) == 0 {
 			continue
 		}
 		if sess, ok := devinSession(c.dir, c.title,
 			"devin://sessions.db/"+c.id, path, c.id, msgs); ok {
 			sessions = append(sessions, sess)
 		}
+	}
+	if failures > 0 {
+		return sessions, known, fmt.Sprintf("%d session(s) failed to read", failures)
 	}
 	return sessions, known, ""
 }
@@ -166,7 +200,8 @@ func devinDBMessages(db *sql.DB, sessionID string, withText bool) ([]devinMessag
 		col = "chat_message"
 	}
 	rows, err := db.Query(`SELECT node_id, created_at, `+col+
-		` FROM message_nodes WHERE session_id = ? ORDER BY node_id`, sessionID)
+		`, COALESCE(LENGTH(chat_message), 0) FROM message_nodes
+	  WHERE session_id = ? ORDER BY node_id`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +211,7 @@ func devinDBMessages(db *sql.DB, sessionID string, withText bool) ([]devinMessag
 		var nodeID int64
 		var m devinMessage
 		var raw string
-		if err := rows.Scan(&nodeID, &m.created, &raw); err != nil {
+		if err := rows.Scan(&nodeID, &m.created, &raw, &m.bodyLen); err != nil {
 			return nil, err
 		}
 		m.id = strconv.FormatInt(nodeID, 10)
@@ -199,7 +234,12 @@ func devinDBMessages(db *sql.DB, sessionID string, withText bool) ([]devinMessag
 func scanDevinTranscripts(dir string, known map[string]bool, s, e time.Time) ([]AgentSession, string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, "" // no transcripts dir is not a degraded store
+		// A missing transcripts dir is absence, not corruption — the
+		// sentinel lets Scan apply the all-sub-stores-absent taxonomy.
+		if os.IsNotExist(err) {
+			return nil, noteStoreMissing
+		}
+		return nil, "transcripts unreadable: " + err.Error()
 	}
 	var out []AgentSession
 	skipped := 0
@@ -351,8 +391,8 @@ func devinLocate(sess AgentSession) (path, sessionID string, transcript bool) {
 // role/text for the excerpt. The store handle comes from the per-pass
 // cache — one open per store, not per call.
 func (d *devinSource) dbMessages(path, sessionID string, withText bool) ([]devinMessage, bool) {
-	st, ok := d.open(path)
-	if !ok {
+	st, err := d.open(path)
+	if err != nil {
 		return nil, false
 	}
 	msgs, err := devinDBMessages(st.db, sessionID, withText)
@@ -381,7 +421,9 @@ func (d *devinSource) messages(sess AgentSession, withText bool) ([]devinMessage
 // mtime+size like the JSONL sources instead of re-parsing the JSON body.
 // A shared DB file's mtime would thrash the recap cache on every session's
 // writes, so DB-backed sessions content-hash their own message ids +
-// timestamps (KTD2).
+// timestamps + body lengths (KTD2) — the length folds in a cheap content
+// signal so an in-place rewrite that keeps ids and timestamps still
+// invalidates the recap, without decoding the JSON bodies.
 func (d *devinSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 	path, id, transcript := devinLocate(sess)
 	if path == "" {
@@ -400,6 +442,8 @@ func (d *devinSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 		h.Write([]byte(m.id))
 		h.Write([]byte{0})
 		binary.BigEndian.PutUint64(b[:], uint64(m.created))
+		h.Write(b[:])
+		binary.BigEndian.PutUint64(b[:], uint64(m.bodyLen))
 		h.Write(b[:])
 	}
 	return hashFingerprint(h.Sum(nil)), true

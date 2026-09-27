@@ -452,9 +452,10 @@ func main() {
 		blocks, err := blocksBetween(db, start, end)
 		fatal(err)
 		if jsonOut {
-			json.NewEncoder(os.Stdout).Encode(map[string]any{
-				"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"),
-				"blocks": blocks, "cards": mergeCards(blocks)})
+			payload := timelineJSON(blocks)
+			payload["start"] = start.Format("2006-01-02")
+			payload["end"] = end.Format("2006-01-02")
+			json.NewEncoder(os.Stdout).Encode(payload)
 		} else {
 			fmt.Print(markdownTimeline(blocks, "dayflow "+cmd))
 		}
@@ -1132,11 +1133,9 @@ func printTimeline(cfg Config, day time.Time, asJSON bool) {
 	blocks, err := blocksForDay(db, day, true)
 	fatal(err)
 	if asJSON {
-		json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"date":   day.Format("2006-01-02"),
-			"blocks": blocks,
-			"cards":  mergeCards(blocks),
-		})
+		payload := timelineJSON(blocks)
+		payload["date"] = day.Format("2006-01-02")
+		json.NewEncoder(os.Stdout).Encode(payload)
 		return
 	}
 	fmt.Printf("== %s ==\n", day.Format("Monday, 2 January 2006"))

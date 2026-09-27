@@ -342,6 +342,12 @@ func TestMCPServesCachedRecapOnly(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DAYFLOW_CLAUDE_DIR", dir)
 	t.Setenv("DAYFLOW_CODEX_DIR", filepath.Join(dir, "none"))
+	// Pin every DB-backed source at nonexistent paths — otherwise this
+	// test reads the real $HOME stores on a machine with live data.
+	t.Setenv("DAYFLOW_OPENCODE_DB", filepath.Join(dir, "none", "opencode.db"))
+	t.Setenv("DAYFLOW_DEVIN_DIR", filepath.Join(dir, "none-devin"))
+	t.Setenv("DAYFLOW_CURSOR_DB", filepath.Join(dir, "none.vscdb"))
+	t.Setenv("DAYFLOW_CURSOR_WORKSPACES", filepath.Join(dir, "none-ws"))
 	// Session transcript whose message timestamp lands today.
 	path := writeClaudeTranscript(t, dir, 3)
 
@@ -407,7 +413,7 @@ func TestSessionExcerptBounds(t *testing.T) {
 		`{"type":"user","message":{"role":"user","content":"`+big+`"}}`+"\n"+
 			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"`+big+`"}]}}`+"\n"),
 		0o644)
-	ex := sessionExcerpt(path, "claude")
+	ex := sessionExcerpt(path, claudeLineRoleText)
 	if len(ex) > 2000 {
 		t.Fatalf("excerpt %d bytes, want ≤2000", len(ex))
 	}
@@ -428,7 +434,7 @@ func TestSessionExcerptCodex(t *testing.T) {
 		`{"timestamp":"2026-09-20T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the bug"}]}}`+"\n"+
 			`{"timestamp":"2026-09-20T10:01:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"shipped the fix"}]}}`+"\n"),
 		0o644)
-	ex := sessionExcerpt(path, "codex")
+	ex := sessionExcerpt(path, codexLineRoleText)
 	if !strings.Contains(ex, "fix the bug") {
 		t.Fatalf("codex excerpt=%q", ex)
 	}
@@ -444,7 +450,7 @@ func TestSessionExcerptSkipsEnvelopes(t *testing.T) {
 		`{"type":"user","message":{"role":"user","content":"<environment_context>cwd=/x</environment_context>"}}`+"\n"+
 			`{"type":"user","message":{"role":"user","content":"real first prompt"}}`+"\n"),
 		0o644)
-	ex := sessionExcerpt(path, "claude")
+	ex := sessionExcerpt(path, claudeLineRoleText)
 	if !strings.Contains(ex, "first user message: real first prompt") {
 		t.Fatalf("envelope not skipped: %q", ex)
 	}
@@ -461,7 +467,7 @@ func TestSessionExcerptRedacts(t *testing.T) {
 		`{"type":"user","message":{"role":"user","content":"key is sk-`+
 			strings.Repeat("a", 20)+` and file `+home+`/secret.txt"}}`+"\n"),
 		0o644)
-	ex := sessionExcerpt(path, "claude")
+	ex := sessionExcerpt(path, claudeLineRoleText)
 	if strings.Contains(ex, "sk-"+strings.Repeat("a", 20)) {
 		t.Fatalf("secret not redacted: %q", ex)
 	}
@@ -529,5 +535,59 @@ func TestRecapRowRoundtrip(t *testing.T) {
 	_, _, fresh = cachedRecap(db, sess.File, recapFingerprint{Mtime: 11, Size: 20})
 	if fresh {
 		t.Fatal("stale fingerprint served")
+	}
+}
+
+// When the chat route resolves to a cli provider (a minutes-scale
+// subprocess), attachRecaps must not exec it at all — the 45s deadline is
+// only checked between sessions, so one call could stall the whole view and
+// starve every recap. The pass serves cached rows only.
+func TestRecapCLIChatProviderServesCacheOnly(t *testing.T) {
+	cfg := testEnv(t)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "cli-execed")
+	script := filepath.Join(dir, "fake-cli.sh")
+	if err := os.WriteFile(script,
+		[]byte("#!/bin/sh\ntouch \""+marker+"\"\necho never\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Providers = []Provider{{
+		ID: "cli1", Kind: "cli", Command: script, Enabled: true,
+	}}
+	cfg.Routing = Routing{TaskProvider: map[string]string{"chat": "cli1"}}
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Uncached session: nothing generated, the cli never ran.
+	path := writeClaudeTranscript(t, t.TempDir(), 3)
+	sessions := []AgentSession{recapSess(path)}
+	attachRecaps(db, cfg, sessions)
+	if sessions[0].Recap != "" {
+		t.Fatalf("cli chat route generated a recap: %q", sessions[0].Recap)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("cli provider was execed for recaps")
+	}
+
+	// Cached rows still serve under a cli chat route — cache-only, like
+	// the DisableJudges path.
+	sess := recapSess(path)
+	fp, ok := fingerprint(path)
+	if !ok {
+		t.Fatal("fingerprint failed")
+	}
+	if err := putRecap(db, sess, fp, "Cached recap.", "m", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	sessions2 := []AgentSession{recapSess(path)}
+	attachRecaps(db, cfg, sessions2)
+	if sessions2[0].Recap != "Cached recap." {
+		t.Fatalf("cached recap not served under cli chat route: %q", sessions2[0].Recap)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("cli provider was execed on the cached pass")
 	}
 }

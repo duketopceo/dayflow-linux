@@ -92,6 +92,8 @@ func monthBounds(t time.Time) (time.Time, time.Time) {
 type Card struct {
 	Start         time.Time `json:"-"`
 	End           time.Time `json:"-"`
+	StartTs       int64     `json:"start_ts"`
+	EndTs         int64     `json:"end_ts"`
 	StartStr      string    `json:"start"`
 	EndStr        string    `json:"end"`
 	App           string    `json:"app"`
@@ -131,6 +133,7 @@ func mergeCards(blocks []Block) []Card {
 				b.Title == out[n-1].Title ||
 				(b.App != "" && out[n-1].App == b.App && b.Category == out[n-1].Category)) {
 			out[n-1].End = b.End
+			out[n-1].EndTs = b.EndTs
 			out[n-1].EndStr = b.EndStr
 			out[n-1].Blocks++
 			out[n-1].Minutes += mins
@@ -142,13 +145,23 @@ func mergeCards(blocks []Block) []Card {
 			continue
 		}
 		out = append(out, Card{
-			Start: b.Start, End: b.End, StartStr: b.StartStr, EndStr: b.EndStr,
+			Start: b.Start, End: b.End, StartTs: b.StartTs, EndTs: b.EndTs,
+			StartStr: b.StartStr, EndStr: b.EndStr,
 			App: b.App, AppName: b.AppName, Title: b.Title, Summary: b.Summary,
 			Category: b.Category, Productive: b.IsProductive(), Blocks: 1, Minutes: mins,
 			LowConfidence: blockLowConfidence(b), Children: []Block{b},
 		})
 	}
 	return out
+}
+
+// timelineJSON is the shared {"blocks","cards"} payload emitted by the
+// timeline surfaces — `today`/`day`/`timeline`/`week`/`month --json` and MCP
+// `get_timeline`. Callers add their own range keys (date or start/end).
+// Keeping the pair in one place means no JSON surface can forget the merged
+// cards array the QML panel renders from.
+func timelineJSON(blocks []Block) map[string]any {
+	return map[string]any{"blocks": blocks, "cards": mergeCards(blocks)}
 }
 
 // blockLowConfidence reports whether Jev scored any of the block's judgments

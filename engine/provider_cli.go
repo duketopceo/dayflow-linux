@@ -41,19 +41,61 @@ const (
 // Enforced on the args template at config-write time and again on the final
 // computed argv at exec time, so a hand-edited config cannot sneak them in.
 var cliDenyFlags = map[string]bool{
+	// Bypass / auto-approve switches.
 	"--yolo": true, "--force": true, "--auto": true, "-f": true,
 	"--yes": true, "-y": true, "--auto-approve": true,
 	"--approve-all": true, "--allow-all": true, "--full-auto": true,
 	"--no-confirm": true, "--skip-permissions": true,
 	"--dangerously-skip-permissions": true,
+	// Value-carried escalation selectors (claude/codex-style flag names):
+	// `--permission-mode bypassPermissions` must die on the flag, not the
+	// value — cliArgDenied matches the --name base of --flag=value forms.
+	"--permission-mode": true, "--approval-mode": true,
+	"--ask-for-approval": true, "--sandbox": true,
+	"--dangerously-bypass-approvals-and-sandbox": true,
+	// Code-consuming flags: they hand the invoked program a program string,
+	// script file, or interactive session, which would let prompt text (or a
+	// hand-edited args template) run as code. -c/-e/-i are also matched
+	// inside short-flag bundles; -file is the single-dash long form.
+	"-c": true, "-e": true, "-i": true, "-file": true,
+	"--command": true, "--eval": true,
+}
+
+// cliDenyCommands are executable basenames that interpret stdin or argv as
+// code — shells, interpreters, and launchers that compose them (env, xargs).
+// With one of these as `command`, the stdin prompt or a `-c {prompt}` arg
+// template becomes a program, defeating the argv-only exec boundary.
+// python* is prefix-matched so python3.11 etc. are covered.
+var cliDenyCommands = map[string]bool{
+	"sh": true, "bash": true, "dash": true, "zsh": true, "fish": true,
+	"node": true, "perl": true, "ruby": true, "php": true,
+	"env": true, "xargs": true,
+}
+
+// cliCommandDenied reports whether a configured command is an interpreter
+// that would execute the prompt as code. Matched on filepath.Base,
+// case-insensitive.
+func cliCommandDenied(command string) bool {
+	base := strings.ToLower(filepath.Base(command))
+	if cliDenyCommands[base] {
+		return true
+	}
+	return strings.HasPrefix(base, "python")
 }
 
 // cliEnvDeny lists env vars env_passthrough may not carry: the managed
-// allowlist names, plus loader hooks that could inject code into the child.
+// allowlist names, loader hooks that could inject code into the child,
+// interpreter startup hooks (BASH_ENV, PYTHONSTARTUP, NODE_OPTIONS), remote
+// exec hooks (GIT_SSH_COMMAND), and proxy vars (a proxy in the child env
+// would silently reroute its egress).
 var cliEnvDeny = map[string]bool{
 	"PATH": true, "HOME": true, "LANG": true, "TMPDIR": true,
 	"LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "LD_AUDIT": true,
 	"DYLD_INSERT_LIBRARIES": true, "DYLD_FALLBACK_LIBRARY_PATH": true,
+	"NODE_OPTIONS": true, "BASH_ENV": true, "ENV": true,
+	"PYTHONSTARTUP": true, "GIT_SSH_COMMAND": true,
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true,
+	"http_proxy": true, "https_proxy": true, "all_proxy": true,
 }
 
 // cliPresetArgs returns a sensible args template for a known CLI, applied
@@ -85,6 +127,11 @@ func cliArgDenied(arg string) bool {
 		return false
 	}
 	if strings.HasPrefix(arg, "-") && len(arg) > 1 {
+		// Exact match catches single-dash long flags (-file, -file=x); the
+		// per-char loop below catches bundled shorts (-yf).
+		if cliDenyFlags[strings.SplitN(arg, "=", 2)[0]] {
+			return true
+		}
 		for _, c := range arg[1:] {
 			if c == '=' {
 				break
@@ -268,13 +315,14 @@ func (b *cappedBuffer) String() string { return b.buf.String() }
 
 // stripCtl removes control characters (keeping \n and \t) so CLI output is
 // stored as plain text — no ANSI escapes or terminal control sequences make
-// it into blocks, chat replies, or logs.
+// it into blocks, chat replies, or logs. C0 controls, DEL, and the C1 range
+// (U+0080–U+009F — CSI/OSC live there too) all go.
 func stripCtl(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\t' {
 			return r
 		}
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 			return -1
 		}
 		return r
@@ -329,6 +377,9 @@ func runCLIProvider(cfg Config, p Provider, prompt string, files []string) (stri
 	if strings.TrimSpace(p.Command) == "" {
 		return "", fmt.Errorf("cli provider %q has no command configured (`dayflow provider set %s command <name>`)", p.ID, p.ID)
 	}
+	if cliCommandDenied(p.Command) {
+		return "", fmt.Errorf("cli provider %q: command %q is an interpreter (sh/python/node/...); it would run the prompt as code and is denied at the exec boundary", p.ID, filepath.Base(p.Command))
+	}
 	if err := validateCLIArgs(p.Args); err != nil {
 		return "", fmt.Errorf("cli provider %q: %w", p.ID, err)
 	}
@@ -379,7 +430,10 @@ func runCLIProvider(cfg Config, p Provider, prompt string, files []string) (stri
 	// Kill the whole process group on timeout — a CLI's own children (sleep,
 	// tool calls) must not survive the deadline — and bound Wait so a
 	// grandchild still holding the stdout/stderr pipes cannot stall us.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Pdeathsig reaps the child if dayflow itself dies — a watchdog kill or
+	// restart would otherwise orphan a minutes-scale CLI. Setpgid + Cancel +
+	// WaitDelay still own the timeout path.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
 	cmd.Cancel = func() error {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}

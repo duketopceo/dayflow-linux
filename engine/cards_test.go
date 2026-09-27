@@ -148,6 +148,116 @@ func TestTimelineCardsSameAsPrev(t *testing.T) {
 	}
 }
 
+// TestCardEmitsUnixTimestamps pins the machine-readable card fields: alongside
+// the local-time start/end strings, cards carry start_ts/end_ts unix seconds
+// so consumers never re-parse strings. The merged card's end_ts tracks the
+// last folded block.
+func TestCardEmitsUnixTimestamps(t *testing.T) {
+	s := time.Date(2026, 9, 7, 21, 0, 0, 0, time.Local).Unix()
+	e1 := s + 900
+	e2 := s + 1800
+	blocks := []Block{
+		{Start: time.Unix(s, 0).Local(), End: time.Unix(e1, 0).Local(),
+			StartTs: s, EndTs: e1, StartStr: "9:00 PM", EndStr: "9:15 PM",
+			Title: "Coding", Category: "coding", App: "neovim", Status: "done"},
+		{Start: time.Unix(e1, 0).Local(), End: time.Unix(e2, 0).Local(),
+			StartTs: e1, EndTs: e2, StartStr: "9:15 PM", EndStr: "9:30 PM",
+			Title: "Coding", Category: "coding", App: "neovim", Status: "done"},
+	}
+	cards := mergeCards(blocks)
+	if len(cards) != 1 {
+		t.Fatalf("cards=%d, want 1", len(cards))
+	}
+	var m map[string]any
+	raw, err := json.Marshal(cards[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := m["start_ts"]; !ok || got != float64(s) {
+		t.Fatalf("start_ts = %v (present=%v), want %d", got, ok, s)
+	}
+	if got, ok := m["end_ts"]; !ok || got != float64(e2) {
+		t.Fatalf("end_ts = %v (present=%v), want %d (merged end)", got, ok, e2)
+	}
+}
+
+// TestTimelineJSONContract pins the payload shape the QML panel parses:
+// "cards" must be a present key — the panel distinguishes "no data" from
+// "engine too old to emit cards" by key presence, so an empty day still
+// marshals the key (as null/[]), never omits it.
+func TestTimelineJSONContract(t *testing.T) {
+	p := timelineJSON(nil)
+	for _, k := range []string{"blocks", "cards"} {
+		if _, ok := p[k]; !ok {
+			t.Fatalf("timelineJSON(nil) missing key %q", k)
+		}
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := back["cards"]; !ok {
+		t.Fatalf("marshaled payload lost the cards key: %s", raw)
+	}
+
+	// Non-empty input carries the merged cards through.
+	s := time.Date(2026, 9, 7, 9, 0, 0, 0, time.Local).Unix()
+	blocks := []Block{
+		{Start: time.Unix(s, 0).Local(), End: time.Unix(s+900, 0).Local(),
+			StartTs: s, EndTs: s + 900, Title: "Coding", Category: "coding",
+			App: "neovim", Status: "done"},
+	}
+	p = timelineJSON(blocks)
+	cards, ok := p["cards"].([]Card)
+	if !ok || len(cards) != 1 {
+		t.Fatalf("timelineJSON cards = %v, want 1 card", p["cards"])
+	}
+}
+
+// TestMCPGetTimelineWeekEmitsCards covers the range path: a "week" request
+// goes through the same timelineJSON payload, so blocks+cards+start/end all
+// appear in the result.
+func TestMCPGetTimelineWeekEmitsCards(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ws, _ := weekBounds(time.Now())
+	b := ws.Add(10 * time.Hour) // Monday 10:00 — inside this week
+	if err := upsertBlockFull(db, b, b.Add(15*time.Minute),
+		"Week block", "s", "coding", "neovim", "", 3, 0, "done", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := mcpCall(db, cfg, false, "get_timeline", map[string]any{"date": "week"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := res.(map[string]any)
+	if !ok {
+		t.Fatalf("get_timeline week result is %T, want map", res)
+	}
+	for _, k := range []string{"blocks", "cards", "start", "end"} {
+		if _, ok := m[k]; !ok {
+			t.Fatalf("get_timeline week missing key %q", k)
+		}
+	}
+	cards, ok := m["cards"].([]Card)
+	if !ok || len(cards) != 1 {
+		t.Fatalf("week cards = %v, want 1 card", m["cards"])
+	}
+}
+
 // TestMergeCardsNullAppSplits is the drift regression: the deleted JS
 // mergeSpans folded adjacent null-app blocks on category alone; mergeCards
 // requires a non-empty app for the app+category merge, so app-less blocks

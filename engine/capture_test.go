@@ -636,3 +636,90 @@ func TestConfigSetFrameMaxDim(t *testing.T) {
 		t.Fatalf("frame_max_dim=%d after set 0", cfg.FrameMaxDim)
 	}
 }
+
+// A sub-320px long edge destroys journal evidence: setConfigValue rejects
+// negatives and clamps tiny positives; a config patch bypasses setConfigValue
+// entirely, so loadConfig floors the value too.
+func TestFrameMaxDimFloor(t *testing.T) {
+	dir := t.TempDir()
+	cp := filepath.Join(dir, "config.json")
+	t.Setenv("DAYFLOW_CONFIG", cp)
+	t.Setenv("DAYFLOW_DATA_DIR", dir)
+	t.Setenv("OPENROUTER_API_KEY", "")
+	os.WriteFile(cp, []byte(`{}`), 0o600)
+
+	if err := setConfigValue("frame_max_dim", "-5"); err == nil {
+		t.Fatal("negative frame_max_dim accepted")
+	}
+	if err := setConfigValue("frame_max_dim", "64"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := loadConfig()
+	if cfg.FrameMaxDim != minFrameMaxDim {
+		t.Fatalf("tiny positive should clamp to %d, got %d", minFrameMaxDim, cfg.FrameMaxDim)
+	}
+
+	// config patch / hand-edit bypasses setConfigValue — loadConfig floors it.
+	os.WriteFile(cp, []byte(`{"frame_max_dim": 100}`), 0o600)
+	cfg, _ = loadConfig()
+	if cfg.FrameMaxDim != minFrameMaxDim {
+		t.Fatalf("patched tiny value not floored: %d", cfg.FrameMaxDim)
+	}
+	// A patched negative is invalid (0 is the only sub-minimum that means
+	// something) — reset to the default.
+	os.WriteFile(cp, []byte(`{"frame_max_dim": -10}`), 0o600)
+	cfg, _ = loadConfig()
+	if cfg.FrameMaxDim != defaultConfig().FrameMaxDim {
+		t.Fatalf("patched negative not reset to default: %d", cfg.FrameMaxDim)
+	}
+	// 0 still means "keep native size".
+	os.WriteFile(cp, []byte(`{"frame_max_dim": 0}`), 0o600)
+	cfg, _ = loadConfig()
+	if cfg.FrameMaxDim != 0 {
+		t.Fatalf("frame_max_dim=0 must stay disabled, got %d", cfg.FrameMaxDim)
+	}
+}
+
+// jpeg_quality owns the re-encode of oversized frames: the same source must
+// shrink at q10 vs q95, and both results must still decode as JPEG.
+func TestJPEGQualityAffectsStoredSize(t *testing.T) {
+	stored := func(t *testing.T, quality int) int64 {
+		cfg := testEnv(t)
+		cfg.JPEGQuality = quality
+		db, err := openDB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		src := jpegBytes(t, sizedImage(3456, 2160), 90)
+		if _, _, err := captureJPEG(t, db, cfg, src, nil); err != nil {
+			t.Fatal(err)
+		}
+		// lastStoredFrame also asserts the file JPEG-decodes and frames.bytes
+		// matches the on-disk size.
+		_, b := lastStoredFrame(t, db)
+		return b
+	}
+	lo := stored(t, 10)
+	hi := stored(t, 95)
+	if lo >= hi {
+		t.Fatalf("quality had no effect: q10=%d bytes, q95=%d bytes", lo, hi)
+	}
+}
+
+// A hung capture_command must not stall the capture loop — grabFrame is
+// bounded by grabFrameTimeout.
+func TestGrabFrameTimeout(t *testing.T) {
+	orig := grabFrameTimeout
+	grabFrameTimeout = 250 * time.Millisecond
+	t.Cleanup(func() { grabFrameTimeout = orig })
+
+	start := time.Now()
+	_, err := grabFrame([]string{"sleep", "30"})
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err=%v, want a timeout error", err)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("grabFrame did not return promptly after the timeout")
+	}
+}

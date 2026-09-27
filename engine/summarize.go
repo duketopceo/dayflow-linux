@@ -164,10 +164,24 @@ func callOpenRouter(cfg Config, frames []string) (*blockResult, int, int, error)
 
 // blockResultFromText parses a provider's text response into a blockResult
 // and applies the standard sanitization — shared by the HTTP and cli paths.
+// Fence-stripping lives here so both paths normalize identically; the HTTP
+// path already strips in providerChatOnce, and stripFences is a no-op on
+// bare JSON, so double application is harmless.
 func blockResultFromText(cfg Config, text string) (*blockResult, error) {
 	var res blockResult
-	if err := json.Unmarshal([]byte(text), &res); err != nil {
+	if err := json.Unmarshal([]byte(stripFences(text)), &res); err != nil {
 		return nil, fmt.Errorf("bad model JSON: %w (raw: %s)", err, truncate(text, 200))
+	}
+	// Escapes inside the JSON (\u001b, \u0007, ...) decode to live control
+	// characters — strip them from every stored field.
+	res.Title = stripCtl(res.Title)
+	res.Summary = stripCtl(res.Summary)
+	res.Category = stripCtl(res.Category)
+	for i := range res.Activities {
+		res.Activities[i].App = stripCtl(res.Activities[i].App)
+		res.Activities[i].Title = stripCtl(res.Activities[i].Title)
+		res.Activities[i].Summary = stripCtl(res.Activities[i].Summary)
+		res.Activities[i].Category = stripCtl(res.Activities[i].Category)
 	}
 	sanitizeResult(cfg, &res)
 	return &res, nil
@@ -333,8 +347,20 @@ func pendingBlocks(db *sql.DB, cfg Config, now time.Time) ([]time.Time, error) {
 }
 
 func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) {
-	if _, err := providerForTask(cfg, "vision"); err != nil {
+	vp, err := providerForTask(cfg, "vision")
+	if err != nil {
 		return 0, err
+	}
+	// Log/api_calls provenance: for a cli provider cfg.Model is meaningless —
+	// record the command; otherwise record the routed provider's model.
+	modelLabel, callTarget := cfg.Model, providerChatURL(vp)
+	if vp.Kind == "cli" {
+		modelLabel, callTarget = "cli:"+vp.ID, "cli:"+vp.ID
+		if vp.Command != "" {
+			modelLabel, callTarget = "cli:"+vp.Command, "cli:"+vp.Command
+		}
+	} else if vp.Model != "" {
+		modelLabel = vp.Model
 	}
 	now := time.Now()
 	if includeCurrent {
@@ -379,14 +405,14 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		}
 		paths := sampleFrames(frames, cfg.FramesPerBlock)
 		debugf(cfg, "summarize %s: sending %d/%d frames to %s (%s)",
-			start.Format("15:04"), len(paths), len(frames), cfg.Model, chatURL(cfg))
+			start.Format("15:04"), len(paths), len(frames), modelLabel, callTarget)
 		t0 := time.Now()
 		res, pt, ct, err := callOpenRouter(cfg, paths)
 		latency := int(time.Since(t0).Milliseconds())
 		if err != nil {
 			upsertBlock(db, start, end, "", "", "", len(frames), "failed", err.Error())
 			db.Exec(`UPDATE blocks SET attempts=? WHERE start_ts=?`, attempts+1, start.Unix())
-			logAPICall(db, start, cfg.Model, len(paths), 0, 0, latency, "error", err.Error())
+			logAPICall(db, start, modelLabel, len(paths), 0, 0, latency, "error", err.Error())
 			logEvent(db, "summarize_error", start.Format("15:04")+": "+err.Error())
 			log.Printf("summarize %s: %v", start.Format("15:04"), err)
 			debugf(cfg, "summarize %s: error after %dms: %v", start.Format("15:04"), latency, err)
@@ -394,7 +420,7 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 		}
 		debugf(cfg, "summarize %s: ok in %dms, tokens in=%d out=%d, title=%q",
 			start.Format("15:04"), latency, pt, ct, res.Title)
-		logAPICall(db, start, cfg.Model, len(paths), pt, ct, latency, "ok", "")
+		logAPICall(db, start, modelLabel, len(paths), pt, ct, latency, "ok", "")
 		logEvent(db, "summarized", start.Format("15:04")+" "+res.Title)
 		app := dominantApp(db, start, end)
 		if res.Title == "" && len(res.Activities) > 0 {
@@ -419,7 +445,7 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 					res2, pt2, ct2, err2 := callOpenRouter(cfg, paths)
 					lat2 := int(time.Since(t1).Milliseconds())
 					if err2 == nil {
-						logAPICall(db, start, cfg.Model, len(paths), pt2, ct2, lat2, "ok", "")
+						logAPICall(db, start, modelLabel, len(paths), pt2, ct2, lat2, "ok", "")
 						logEvent(db, "judge_retry", start.Format("15:04"))
 						j2, jerr2 := judgeBlock(db, cfg, res2, app, prevTitle, prevApp, hasPrev)
 						if jerr2 == nil && j2.Quality != nil && *j2.Quality > *j.Quality {
@@ -428,7 +454,7 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 							applyJudgment(res, j)
 						}
 					} else {
-						logAPICall(db, start, cfg.Model, len(paths), 0, 0, lat2, "error", err2.Error())
+						logAPICall(db, start, modelLabel, len(paths), 0, 0, lat2, "error", err2.Error())
 					}
 				}
 			}
