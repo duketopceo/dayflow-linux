@@ -12,10 +12,11 @@ import (
 	"time"
 )
 
-// AgentSession is one coding-agent session recap (Claude Code, Codex, or
-// OpenCode), derived from the tool's on-disk transcript store.
+// AgentSession is one coding-agent session recap (Claude Code, Codex,
+// OpenCode, Devin, or Cursor), derived from the tool's on-disk transcript
+// store.
 type AgentSession struct {
-	Source   string `json:"source"` // "claude" | "codex" | "opencode"
+	Source   string `json:"source"` // "claude" | "codex" | "opencode" | "devin" | "cursor"
 	Project  string `json:"project"`
 	Cwd      string `json:"cwd"`
 	Start    int64  `json:"start"`
@@ -73,6 +74,8 @@ func agentSources() []agentSource {
 		jsonlSource{name: "claude", root: claudeDir(), parse: parseClaudeLine},
 		jsonlSource{name: "codex", root: codexDir(), parse: parseCodexLine},
 		opencodeSource{},
+		devinSource{},
+		cursorSource{},
 	}
 }
 

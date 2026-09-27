@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +34,8 @@ func TestAgentSessionsClaude(t *testing.T) {
 	t.Setenv("DAYFLOW_CLAUDE_DIR", dir)
 	t.Setenv("DAYFLOW_CODEX_DIR", filepath.Join(dir, "empty-codex"))
 	t.Setenv("DAYFLOW_OPENCODE_DB", filepath.Join(dir, "no-opencode.db"))
+	t.Setenv("DAYFLOW_DEVIN_DIR", filepath.Join(dir, "no-devin"))
+	t.Setenv("DAYFLOW_CURSOR_DB", filepath.Join(dir, "no-cursor.vscdb"))
 
 	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
 	mt := day.Add(10 * time.Hour)
@@ -64,6 +68,8 @@ func TestAgentSessionsCodex(t *testing.T) {
 	t.Setenv("DAYFLOW_CLAUDE_DIR", filepath.Join(dir, "empty-claude"))
 	t.Setenv("DAYFLOW_CODEX_DIR", dir)
 	t.Setenv("DAYFLOW_OPENCODE_DB", filepath.Join(dir, "no-opencode.db"))
+	t.Setenv("DAYFLOW_DEVIN_DIR", filepath.Join(dir, "no-devin"))
+	t.Setenv("DAYFLOW_CURSOR_DB", filepath.Join(dir, "no-cursor.vscdb"))
 
 	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
 	mt := day.Add(9 * time.Hour)
@@ -89,6 +95,8 @@ func TestAgentSessionsDayBucketing(t *testing.T) {
 	t.Setenv("DAYFLOW_CLAUDE_DIR", dir)
 	t.Setenv("DAYFLOW_CODEX_DIR", filepath.Join(dir, "empty-codex"))
 	t.Setenv("DAYFLOW_OPENCODE_DB", filepath.Join(dir, "no-opencode.db"))
+	t.Setenv("DAYFLOW_DEVIN_DIR", filepath.Join(dir, "no-devin"))
+	t.Setenv("DAYFLOW_CURSOR_DB", filepath.Join(dir, "no-cursor.vscdb"))
 
 	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
 	next := day.Add(24 * time.Hour)
@@ -263,6 +271,9 @@ func setAgentDirs(t *testing.T, dir string) {
 	t.Setenv("DAYFLOW_CLAUDE_DIR", filepath.Join(dir, "no-claude"))
 	t.Setenv("DAYFLOW_CODEX_DIR", filepath.Join(dir, "no-codex"))
 	t.Setenv("DAYFLOW_OPENCODE_DB", filepath.Join(dir, "opencode.db"))
+	t.Setenv("DAYFLOW_DEVIN_DIR", filepath.Join(dir, "no-devin"))
+	t.Setenv("DAYFLOW_CURSOR_DB", filepath.Join(dir, "state.vscdb"))
+	t.Setenv("DAYFLOW_CURSOR_WORKSPACES", filepath.Join(dir, "workspaceStorage"))
 }
 
 func TestAgentSessionsOpencode(t *testing.T) {
@@ -570,5 +581,882 @@ func TestRecapOpencodeSession(t *testing.T) {
 	}
 	if served[0].Recap != "Wired the OpenCode adapter into the agents scan." {
 		t.Fatalf("cached recap not served: %q", served[0].Recap)
+	}
+}
+
+// --- Devin fixtures ---
+
+// dvFixtureMsg is one message_nodes row in a fixture store. role is the
+// chat_message.role value; userInput sets metadata.is_user_input (true only
+// on real typed turns — injected continuations leave it false). Devin
+// timestamps are epoch seconds.
+type dvFixtureMsg struct {
+	role      string
+	text      string
+	created   int64 // epoch s
+	userInput bool
+}
+
+type dvFixtureSession struct {
+	id, title, dir string
+	msgs           []dvFixtureMsg
+}
+
+// writeDevinDB builds a fixture sessions.db matching the real store's
+// relevant schema: sessions (id/working_directory/title/epoch-second
+// timestamps) + message_nodes (chat_message JSON per node).
+func writeDevinDB(t *testing.T, path string, sessions ...dvFixtureSession) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, ddl := range []string{
+		`CREATE TABLE sessions (id TEXT PRIMARY KEY, working_directory TEXT NOT NULL,
+		  backend_type TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+		  agent_mode TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
+		  last_activity_at INTEGER NOT NULL, title TEXT)`,
+		`CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  session_id TEXT NOT NULL, node_id INTEGER NOT NULL, parent_node_id INTEGER,
+		  chat_message TEXT NOT NULL, created_at INTEGER NOT NULL)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, s := range sessions {
+		var lo, hi int64
+		for j, m := range s.msgs {
+			nodeID := i*100 + j + 1
+			if lo == 0 || m.created < lo {
+				lo = m.created
+			}
+			if m.created > hi {
+				hi = m.created
+			}
+			meta := map[string]any{}
+			if m.userInput {
+				meta["is_user_input"] = true
+			}
+			cm, _ := json.Marshal(map[string]any{
+				"message_id": "msg-" + strconv.Itoa(nodeID),
+				"role":       m.role,
+				"content":    m.text,
+				"metadata":   meta,
+			})
+			if _, err := db.Exec(`INSERT INTO message_nodes
+			  (session_id, node_id, chat_message, created_at) VALUES(?,?,?,?)`,
+				s.id, nodeID, string(cm), m.created); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := db.Exec(`INSERT INTO sessions
+		  (id, working_directory, created_at, last_activity_at, title)
+		  VALUES(?,?,?,?,?)`, s.id, s.dir, lo, hi, s.title); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// dvFixtureStep is one ATIF transcript step. source is the ATIF actor —
+// "user" | "agent" | "system".
+type dvFixtureStep struct {
+	source string
+	text   string
+	ts     time.Time
+}
+
+// writeDevinTranscript writes transcripts/<sessionID>.json in ATIF shape.
+// mt sets the file mtime — the scanner bounds on it like jsonlFiles.
+func writeDevinTranscript(t *testing.T, dir, sessionID, schemaVersion string, mt time.Time, steps []dvFixtureStep) string {
+	t.Helper()
+	type step struct {
+		StepID    int    `json:"step_id"`
+		Timestamp string `json:"timestamp"`
+		Source    string `json:"source"`
+		Message   string `json:"message"`
+	}
+	doc := map[string]any{
+		"schema_version": schemaVersion,
+		"session_id":     sessionID,
+		"steps":          []step{},
+	}
+	arr := doc["steps"].([]step)
+	for i, s := range steps {
+		arr = append(arr, step{
+			StepID:    i + 1,
+			Timestamp: s.ts.UTC().Format(time.RFC3339Nano),
+			Source:    s.source,
+			Message:   s.text,
+		})
+	}
+	doc["steps"] = arr
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "transcripts", sessionID+".json")
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p, mt, mt); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func devinStatus(t *testing.T, statuses []sourceScanStatus) sourceScanStatus {
+	t.Helper()
+	for _, st := range statuses {
+		if st.Source == "devin" {
+			return st
+		}
+	}
+	t.Fatal("no devin source status")
+	return sourceScanStatus{}
+}
+
+func TestAgentSessionsDevin(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	devin := filepath.Join(dir, "devin")
+	t.Setenv("DAYFLOW_DEVIN_DIR", devin)
+
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	writeDevinDB(t, filepath.Join(devin, "sessions.db"), dvFixtureSession{
+		id: "calm-fox", title: "Parity work", dir: "/home/x/dayflow",
+		msgs: []dvFixtureMsg{
+			{role: "user", text: "implement the devin adapter",
+				created: day.Add(10 * time.Hour).Unix(), userInput: true},
+			{role: "assistant", text: "done",
+				created: day.Add(10*time.Hour + 5*time.Minute).Unix()},
+			// Injected continuation — counted as a message but never
+			// excerpt or title material.
+			{role: "user", text: "continue",
+				created: day.Add(10*time.Hour + 10*time.Minute).Unix()},
+		},
+	})
+	// A matching transcript exists — the DB row wins, no double-listing.
+	writeDevinTranscript(t, devin, "calm-fox", "ATIF-v1.7", day.Add(11*time.Hour), []dvFixtureStep{
+		{source: "user", text: "implement the devin adapter", ts: day.Add(10 * time.Hour)},
+		{source: "agent", text: "done", ts: day.Add(10*time.Hour + 5*time.Minute)},
+	})
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
+	}
+	s := sessions[0]
+	if s.Source != "devin" || s.Project != "dayflow" || s.Messages != 3 || s.Title != "Parity work" {
+		t.Fatalf("bad session: %+v", s)
+	}
+	if s.Start != day.Add(10*time.Hour).Unix() ||
+		s.End != day.Add(10*time.Hour+10*time.Minute).Unix() {
+		t.Fatalf("bad range: start=%d end=%d", s.Start, s.End)
+	}
+	if _, err := os.Stat(s.File); err == nil {
+		t.Fatalf("File key should be synthetic, %q stats fine", s.File)
+	}
+}
+
+func TestAgentSessionsDevinDBOnly(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	devin := filepath.Join(dir, "devin")
+	t.Setenv("DAYFLOW_DEVIN_DIR", devin)
+
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	// Session row with no transcript file — listed from the DB alone.
+	writeDevinDB(t, filepath.Join(devin, "sessions.db"), dvFixtureSession{
+		id: "loud-owl", title: "API fix", dir: "/home/x/api",
+		msgs: []dvFixtureMsg{
+			{role: "user", text: "fix the api route",
+				created: day.Add(14 * time.Hour).Unix(), userInput: true},
+			{role: "assistant", text: "fixed",
+				created: day.Add(14*time.Hour + 2*time.Minute).Unix()},
+		},
+	})
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
+	}
+	s := sessions[0]
+	if s.Source != "devin" || s.Project != "api" || s.Title != "API fix" || s.Messages != 2 {
+		t.Fatalf("bad session: %+v", s)
+	}
+}
+
+func TestAgentSessionsDevinTranscriptOnly(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	devin := filepath.Join(dir, "devin")
+	t.Setenv("DAYFLOW_DEVIN_DIR", devin)
+
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	// sessions.db holds a different session — the orphan transcript is the
+	// ATIF fallback path.
+	writeDevinDB(t, filepath.Join(devin, "sessions.db"), dvFixtureSession{
+		id: "db-sess", title: "DB session", dir: "/home/x/dbproj",
+		msgs: []dvFixtureMsg{
+			{role: "user", text: "db work",
+				created: day.Add(9 * time.Hour).Unix(), userInput: true},
+			{role: "assistant", text: "ok",
+				created: day.Add(9*time.Hour + time.Minute).Unix()},
+		},
+	})
+	writeDevinTranscript(t, devin, "orphan-slug", "ATIF-v1.7", day.Add(15*time.Hour), []dvFixtureStep{
+		{source: "system", text: "context", ts: day.Add(14 * time.Hour)},
+		{source: "user", text: "orphan transcript work", ts: day.Add(14*time.Hour + time.Minute)},
+		{source: "agent", text: "working", ts: day.Add(14*time.Hour + 2*time.Minute)},
+	})
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 sessions, got %d: %+v", len(sessions), sessions)
+	}
+	var orphan *AgentSession
+	for i := range sessions {
+		if sessions[i].Title == "orphan transcript work" {
+			orphan = &sessions[i]
+		}
+	}
+	if orphan == nil {
+		t.Fatalf("transcript-only session not listed: %+v", sessions)
+	}
+	if orphan.Source != "devin" || orphan.Messages != 2 {
+		t.Fatalf("bad orphan session: %+v", orphan)
+	}
+	// No working_directory anywhere — project stays empty, not guessed.
+	if orphan.Project != "" || orphan.Cwd != "" {
+		t.Fatalf("orphan project must be empty, got %+v", orphan)
+	}
+	if orphan.Start != day.Add(14*time.Hour).Unix() ||
+		orphan.End != day.Add(14*time.Hour+2*time.Minute).Unix() {
+		t.Fatalf("bad orphan range: start=%d end=%d", orphan.Start, orphan.End)
+	}
+}
+
+func TestAgentSessionsDevinBadSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	devin := filepath.Join(dir, "devin")
+	t.Setenv("DAYFLOW_DEVIN_DIR", devin)
+
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	// Unrecognized schema_version skips only that file.
+	writeDevinTranscript(t, devin, "future-fmt", "ATIF-v9.9", day.Add(12*time.Hour), []dvFixtureStep{
+		{source: "user", text: "skipped work", ts: day.Add(10 * time.Hour)},
+	})
+	writeDevinTranscript(t, devin, "good-slug", "ATIF-v1.7", day.Add(12*time.Hour), []dvFixtureStep{
+		{source: "user", text: "kept work", ts: day.Add(11 * time.Hour)},
+		{source: "agent", text: "ok", ts: day.Add(11*time.Hour + time.Minute)},
+	})
+
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 1 || sessions[0].Title != "kept work" {
+		t.Fatalf("expected only the good transcript, got %+v", sessions)
+	}
+	st := devinStatus(t, statuses)
+	if !strings.Contains(st.Note, "skipped") {
+		t.Fatalf("expected a skipped-transcript note, got %+v", st)
+	}
+}
+
+func TestAgentSessionsDevinMissing(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir) // DAYFLOW_DEVIN_DIR points at a dir that does not exist
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %+v", sessions)
+	}
+	st := devinStatus(t, statuses)
+	if st.Status != "unavailable" || st.Note == "" {
+		t.Fatalf("expected unavailable status with note, got %+v", st)
+	}
+}
+
+func TestDevinFingerprintInvalidation(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	devin := filepath.Join(dir, "devin")
+	t.Setenv("DAYFLOW_DEVIN_DIR", devin)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+	dbPath := filepath.Join(devin, "sessions.db")
+	writeDevinDB(t, dbPath, dvFixtureSession{
+		id: "ses-1", title: "T", dir: "/home/x/p",
+		msgs: []dvFixtureMsg{
+			{role: "user", text: "hi", created: day.Add(10 * time.Hour).Unix(), userInput: true},
+		},
+	})
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	src := devinSource{}
+	fp1, ok := src.Fingerprint(sessions[0])
+	if !ok {
+		t.Fatal("fingerprint failed on scanned session")
+	}
+	fp2, ok := src.Fingerprint(sessions[0])
+	if !ok || fp2 != fp1 {
+		t.Fatal("identical messages produced different fingerprints")
+	}
+
+	// Append a message → fingerprint must invalidate the cached recap.
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm, _ := json.Marshal(map[string]any{
+		"message_id": "msg-2", "role": "assistant", "content": "ok",
+		"metadata": map[string]any{},
+	})
+	if _, err := db.Exec(`INSERT INTO message_nodes
+	  (session_id, node_id, chat_message, created_at) VALUES('ses-1',2,?,?)`,
+		string(cm), day.Add(11*time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	fp3, ok := src.Fingerprint(sessions[0])
+	if !ok || fp3 == fp1 {
+		t.Fatal("appended message did not change fingerprint")
+	}
+}
+
+// TestDevinSessionKeyRebuild is the devin half of the KTD2 regression: a
+// session rebuilt from its serialized File key (store/sessionID stripped)
+// must still resolve its store for both DB-backed and transcript-only
+// sessions.
+func TestDevinSessionKeyRebuild(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	devin := filepath.Join(dir, "devin")
+	t.Setenv("DAYFLOW_DEVIN_DIR", devin)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	writeDevinDB(t, filepath.Join(devin, "sessions.db"), dvFixtureSession{
+		id: "ses-1", title: "T", dir: "/home/x/p",
+		msgs: []dvFixtureMsg{
+			{role: "user", text: "hi there", created: day.Add(10 * time.Hour).Unix(), userInput: true},
+		},
+	})
+	writeDevinTranscript(t, devin, "t-only", "ATIF-v1.7", day.Add(12*time.Hour), []dvFixtureStep{
+		{source: "user", text: "transcript hi", ts: day.Add(12 * time.Hour)},
+		{source: "agent", text: "yo", ts: day.Add(12*time.Hour + time.Minute)},
+	})
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(sessions))
+	}
+	src := devinSource{}
+	for _, s := range sessions {
+		rebuilt := AgentSession{Source: "devin", File: s.File}
+		fp, ok := src.Fingerprint(rebuilt)
+		if !ok {
+			t.Fatalf("fingerprint failed for rebuilt key %q", s.File)
+		}
+		want, _ := src.Fingerprint(s)
+		if fp != want {
+			t.Fatalf("rebuilt key fingerprint differs for %q", s.File)
+		}
+		if ex := src.Excerpt(rebuilt); ex == "" {
+			t.Fatalf("excerpt empty for rebuilt key %q", s.File)
+		}
+	}
+}
+
+func TestDevinExcerpt(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	devin := filepath.Join(dir, "devin")
+	t.Setenv("DAYFLOW_DEVIN_DIR", devin)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	writeDevinDB(t, filepath.Join(devin, "sessions.db"), dvFixtureSession{
+		id: "ses-1", title: "T", dir: "/home/x/p",
+		msgs: []dvFixtureMsg{
+			{role: "user", text: "first real prompt",
+				created: day.Add(10 * time.Hour).Unix(), userInput: true},
+			{role: "assistant", text: "answer",
+				created: day.Add(10*time.Hour + time.Minute).Unix()},
+			{role: "user", text: "continue", // injected — not excerpt material
+				created: day.Add(10*time.Hour + 2*time.Minute).Unix()},
+			{role: "user", text: "last real prompt",
+				created: day.Add(10*time.Hour + 3*time.Minute).Unix(), userInput: true},
+		},
+	})
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	ex := devinSource{}.Excerpt(sessions[0])
+	if !strings.Contains(ex, "first user message: first real prompt") ||
+		!strings.Contains(ex, "last user message: last real prompt") ||
+		!strings.Contains(ex, "last assistant reply: answer") {
+		t.Fatalf("bad excerpt: %q", ex)
+	}
+	if strings.Contains(ex, "continue") {
+		t.Fatalf("injected prompt leaked into excerpt: %q", ex)
+	}
+}
+
+// --- Cursor fixtures ---
+
+// cuFixtureBubble is one composer turn: a fullConversationHeadersOnly entry
+// plus its bubbleId:<composerId>:<id> body row. typ is the Cursor bubble
+// type — 1 = user, 2 = assistant (matching the real store).
+type cuFixtureBubble struct {
+	id   string
+	typ  int
+	text string
+	ms   int64 // epoch ms; 0 = no timestamp on the bubble row
+}
+
+type cuFixtureComposer struct {
+	id, name, wsid   string
+	created, updated int64 // epoch ms
+	draft            bool
+	bubbles          []cuFixtureBubble
+	contentBlob      string // optional raw composer.content.<id> value
+}
+
+// writeCursorDB builds a fixture state.vscdb matching the real store's
+// relevant schema: composerHeaders (epoch-ms timestamps) + cursorDiskKV
+// carrying composerData:<id> indexes and bubbleId:<id>:<bid> bodies.
+func writeCursorDB(t *testing.T, path string, composers ...cuFixtureComposer) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, ddl := range []string{
+		`CREATE TABLE composerHeaders (composerId TEXT PRIMARY KEY, workspaceId TEXT,
+		  createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER,
+		  recency INTEGER, checkpointAt INTEGER, subagentTypeName TEXT, value TEXT)`,
+		`CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)`,
+		`CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range composers {
+		head, _ := json.Marshal(map[string]any{
+			"type": "head", "composerId": c.id, "createdAt": c.created,
+			"lastUpdatedAt": c.updated, "isDraft": c.draft,
+			"name": c.name, "workspaceIdentifier": map[string]any{"id": c.wsid},
+		})
+		if _, err := db.Exec(`INSERT INTO composerHeaders
+		  (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, value)
+		  VALUES(?,?,?,?,0,0,?)`, c.id, c.wsid, c.created, c.updated, string(head)); err != nil {
+			t.Fatal(err)
+		}
+		var heads []map[string]any
+		for _, b := range c.bubbles {
+			heads = append(heads, map[string]any{"bubbleId": b.id, "type": b.typ})
+		}
+		data, _ := json.Marshal(map[string]any{
+			"_v": 18, "composerId": c.id, "createdAt": c.created,
+			"lastUpdatedAt": c.updated, "fullConversationHeadersOnly": heads,
+			"conversationMap": map[string]any{},
+		})
+		if _, err := db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES(?,?)`,
+			"composerData:"+c.id, string(data)); err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range c.bubbles {
+			body := map[string]any{"type": b.typ, "bubbleId": b.id, "text": b.text}
+			if b.ms > 0 {
+				body["createdAt"] = b.ms
+			}
+			raw, _ := json.Marshal(body)
+			if _, err := db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES(?,?)`,
+				"bubbleId:"+c.id+":"+b.id, string(raw)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if c.contentBlob != "" {
+			if _, err := db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES(?,?)`,
+				"composer.content."+c.id, c.contentBlob); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func cursorStatus(t *testing.T, statuses []sourceScanStatus) sourceScanStatus {
+	t.Helper()
+	for _, st := range statuses {
+		if st.Source == "cursor" {
+			return st
+		}
+	}
+	t.Fatal("no cursor source status")
+	return sourceScanStatus{}
+}
+
+func TestAgentSessionsCursor(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	// workspaceId -> project dir via workspaceStorage/<id>/workspace.json.
+	ws := filepath.Join(dir, "workspaceStorage", "ws-1")
+	if err := os.MkdirAll(ws, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(ws, "workspace.json"),
+		[]byte(`{"folder": "file:///home/x/widget"}`), 0o600)
+
+	start := day.Add(10 * time.Hour)
+	writeCursorDB(t, filepath.Join(dir, "state.vscdb"), cuFixtureComposer{
+		id: "comp-1", name: "Widget fix", wsid: "ws-1",
+		created: start.UnixMilli(), updated: start.Add(20 * time.Minute).UnixMilli(),
+		bubbles: []cuFixtureBubble{
+			{id: "b1", typ: 1, text: "fix the widget crash", ms: start.UnixMilli()},
+			{id: "b2", typ: 2, text: "looking at the stack", ms: start.Add(5 * time.Minute).UnixMilli()},
+			{id: "b3", typ: 1, text: "also add a test", ms: start.Add(15 * time.Minute).UnixMilli()},
+		},
+	})
+	// A draft composer in range must not produce a session.
+	writeCursorDB2(t, filepath.Join(dir, "state.vscdb"), cuFixtureComposer{
+		id: "draft-aaaa", wsid: "empty-window", draft: true,
+		created: day.Add(11 * time.Hour).UnixMilli(), updated: day.Add(11 * time.Hour).UnixMilli(),
+	})
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
+	}
+	s := sessions[0]
+	if s.Source != "cursor" || s.Project != "widget" || s.Messages != 3 || s.Title != "Widget fix" {
+		t.Fatalf("bad session: %+v", s)
+	}
+	if s.Start != start.Unix() || s.End != start.Add(20*time.Minute).Unix() {
+		t.Fatalf("bad range: start=%d end=%d", s.Start, s.End)
+	}
+	if s.File != "cursor://comp-1" {
+		t.Fatalf("bad File key: %q", s.File)
+	}
+	if _, err := os.Stat(s.File); err == nil {
+		t.Fatalf("File key should be synthetic, %q stats fine", s.File)
+	}
+}
+
+// writeCursorDB2 appends a composer to an existing fixture DB (mirrors how a
+// live store gains rows between scans).
+func writeCursorDB2(t *testing.T, path string, composers ...cuFixtureComposer) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, c := range composers {
+		head, _ := json.Marshal(map[string]any{
+			"type": "head", "composerId": c.id, "createdAt": c.created,
+			"lastUpdatedAt": c.updated, "isDraft": c.draft,
+		})
+		if _, err := db.Exec(`INSERT INTO composerHeaders
+		  (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, value)
+		  VALUES(?,?,?,?,0,0,?)`, c.id, c.wsid, c.created, c.updated, string(head)); err != nil {
+			t.Fatal(err)
+		}
+		var heads []map[string]any
+		for _, b := range c.bubbles {
+			heads = append(heads, map[string]any{"bubbleId": b.id, "type": b.typ})
+		}
+		data, _ := json.Marshal(map[string]any{
+			"_v": 18, "composerId": c.id, "createdAt": c.created,
+			"lastUpdatedAt": c.updated, "fullConversationHeadersOnly": heads,
+			"conversationMap": map[string]any{},
+		})
+		db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES(?,?)`,
+			"composerData:"+c.id, string(data))
+		for _, b := range c.bubbles {
+			raw, _ := json.Marshal(map[string]any{
+				"type": b.typ, "bubbleId": b.id, "text": b.text, "createdAt": b.ms,
+			})
+			db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES(?,?)`,
+				"bubbleId:"+c.id+":"+b.id, string(raw))
+		}
+	}
+}
+
+func TestAgentSessionsCursorNoUserTurns(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	writeCursorDB(t, filepath.Join(dir, "state.vscdb"), cuFixtureComposer{
+		id: "comp-ai", wsid: "ws-1",
+		created: day.Add(10 * time.Hour).UnixMilli(),
+		updated: day.Add(10*time.Hour + time.Minute).UnixMilli(),
+		bubbles: []cuFixtureBubble{
+			{id: "b1", typ: 2, text: "unsolicited reply", ms: day.Add(10 * time.Hour).UnixMilli()},
+		},
+	})
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %+v", sessions)
+	}
+}
+
+func TestAgentSessionsCursorMalformedBlob(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	dbPath := filepath.Join(dir, "state.vscdb")
+	writeCursorDB(t, dbPath)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Header row whose content is unparseable garbage in every location.
+	head, _ := json.Marshal(map[string]any{
+		"type": "head", "composerId": "comp-bad", "createdAt": day.Add(10 * time.Hour).UnixMilli(),
+	})
+	if _, err := db.Exec(`INSERT INTO composerHeaders
+	  (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, value)
+	  VALUES('comp-bad','ws-1',?,?,0,0,?)`,
+		day.Add(10*time.Hour).UnixMilli(), day.Add(10*time.Hour).UnixMilli(), string(head)); err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES('composerData:comp-bad','{{not json')`)
+	db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES('composer.content.comp-bad','# just a markdown doc')`)
+	db.Close()
+
+	// A claude session proves the cursor failure didn't sink other sources.
+	writeJSONL(t, filepath.Join(dir, "claude-root", "-proj", "s1.jsonl"), []string{
+		`{"type":"user","timestamp":"2026-09-15T10:00:00Z","cwd":"/home/x/proj","message":{"role":"user","content":"fix it"}}`,
+	}, day.Add(10*time.Hour))
+	t.Setenv("DAYFLOW_CLAUDE_DIR", filepath.Join(dir, "claude-root"))
+
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 1 || sessions[0].Source != "claude" {
+		t.Fatalf("other sources must still scan, got %+v", sessions)
+	}
+	st := cursorStatus(t, statuses)
+	if st.Sessions != 0 || st.Note == "" {
+		t.Fatalf("expected skipped-composer note, got %+v", st)
+	}
+}
+
+func TestAgentSessionsCursorMissingTables(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "state.vscdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE unrelated (id INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %+v", sessions)
+	}
+	st := cursorStatus(t, statuses)
+	if st.Status != "unavailable" || st.Note == "" {
+		t.Fatalf("expected unavailable status with note, got %+v", st)
+	}
+}
+
+func TestCursorFingerprintInvalidation(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+	dbPath := filepath.Join(dir, "state.vscdb")
+	writeCursorDB(t, dbPath, cuFixtureComposer{
+		id: "comp-1", wsid: "ws-1",
+		created: day.Add(10 * time.Hour).UnixMilli(),
+		updated: day.Add(10 * time.Hour).UnixMilli(),
+		bubbles: []cuFixtureBubble{
+			{id: "b1", typ: 1, text: "hi", ms: day.Add(10 * time.Hour).UnixMilli()},
+		},
+	})
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	src := cursorSource{}
+	fp1, ok := src.Fingerprint(sessions[0])
+	if !ok {
+		t.Fatal("fingerprint failed on scanned session")
+	}
+	fp2, ok := src.Fingerprint(sessions[0])
+	if !ok || fp2 != fp1 {
+		t.Fatal("identical turns produced different fingerprints")
+	}
+
+	// Append a turn → fingerprint must invalidate the cached recap.
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newUp := day.Add(11 * time.Hour).UnixMilli()
+	data, _ := json.Marshal(map[string]any{
+		"_v": 18, "composerId": "comp-1", "createdAt": day.Add(10 * time.Hour).UnixMilli(),
+		"lastUpdatedAt": newUp,
+		"fullConversationHeadersOnly": []map[string]any{
+			{"bubbleId": "b1", "type": 1}, {"bubbleId": "b2", "type": 2},
+		},
+		"conversationMap": map[string]any{},
+	})
+	if _, err := db.Exec(`UPDATE cursorDiskKV SET value=? WHERE key='composerData:comp-1'`,
+		string(data)); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"type": 2, "bubbleId": "b2", "text": "ok", "createdAt": newUp,
+	})
+	if _, err := db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES('bubbleId:comp-1:b2',?)`,
+		string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`UPDATE composerHeaders SET lastUpdatedAt=? WHERE composerId='comp-1'`, newUp)
+	db.Close()
+
+	fp3, ok := src.Fingerprint(sessions[0])
+	if !ok || fp3 == fp1 {
+		t.Fatal("appended turn did not change fingerprint")
+	}
+}
+
+// TestCursorSessionKeyRebuild is the cursor half of the KTD2 regression: a
+// session rebuilt from its serialized File key (store/sessionID stripped)
+// must still resolve its store.
+func TestCursorSessionKeyRebuild(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+	writeCursorDB(t, filepath.Join(dir, "state.vscdb"), cuFixtureComposer{
+		id: "comp-1", wsid: "ws-1",
+		created: day.Add(10 * time.Hour).UnixMilli(),
+		updated: day.Add(10 * time.Hour).UnixMilli(),
+		bubbles: []cuFixtureBubble{
+			{id: "b1", typ: 1, text: "hi there", ms: day.Add(10 * time.Hour).UnixMilli()},
+			{id: "b2", typ: 2, text: "hello", ms: day.Add(10*time.Hour + time.Minute).UnixMilli()},
+		},
+	})
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	rebuilt := AgentSession{Source: "cursor", File: sessions[0].File}
+	src := cursorSource{}
+	fp, ok := src.Fingerprint(rebuilt)
+	if !ok {
+		t.Fatal("fingerprint failed for rebuilt session key")
+	}
+	want, _ := src.Fingerprint(sessions[0])
+	if fp != want {
+		t.Fatal("rebuilt key fingerprint differs from scanned")
+	}
+	if ex := src.Excerpt(rebuilt); ex == "" {
+		t.Fatal("excerpt empty for rebuilt session key")
+	}
+}
+
+func TestCursorExcerpt(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+	writeCursorDB(t, filepath.Join(dir, "state.vscdb"), cuFixtureComposer{
+		id: "comp-1", wsid: "ws-1",
+		created: day.Add(10 * time.Hour).UnixMilli(),
+		updated: day.Add(10*time.Hour + 3*time.Minute).UnixMilli(),
+		bubbles: []cuFixtureBubble{
+			// Injected envelope first — never excerpt material.
+			{id: "b0", typ: 1, text: "<environment_context>os=linux</environment_context>",
+				ms: day.Add(10 * time.Hour).UnixMilli()},
+			{id: "b1", typ: 1, text: "first real prompt",
+				ms: day.Add(10*time.Hour + time.Minute).UnixMilli()},
+			{id: "b2", typ: 2, text: "answer",
+				ms: day.Add(10*time.Hour + 2*time.Minute).UnixMilli()},
+			{id: "b3", typ: 1, text: "last real prompt",
+				ms: day.Add(10*time.Hour + 3*time.Minute).UnixMilli()},
+		},
+	})
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	ex := cursorSource{}.Excerpt(sessions[0])
+	if !strings.Contains(ex, "first user message: first real prompt") ||
+		!strings.Contains(ex, "last user message: last real prompt") ||
+		!strings.Contains(ex, "last assistant reply: answer") {
+		t.Fatalf("bad excerpt: %q", ex)
+	}
+	if strings.Contains(ex, "environment_context") {
+		t.Fatalf("envelope leaked into excerpt: %q", ex)
+	}
+}
+
+func TestAgentSessionsCursorContentBlobFallback(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+	dbPath := filepath.Join(dir, "state.vscdb")
+	writeCursorDB(t, dbPath)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Header row but the body lives only in a composer.content.<id> JSON blob
+	// (the plan-described alternate layout) — an array of role/text turns.
+	head, _ := json.Marshal(map[string]any{
+		"type": "head", "composerId": "comp-c", "createdAt": day.Add(9 * time.Hour).UnixMilli(),
+		"lastUpdatedAt": day.Add(9*time.Hour + 5*time.Minute).UnixMilli(),
+	})
+	if _, err := db.Exec(`INSERT INTO composerHeaders
+	  (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, value)
+	  VALUES('comp-c','ws-1',?,?,0,0,?)`,
+		day.Add(9*time.Hour).UnixMilli(), day.Add(9*time.Hour+5*time.Minute).UnixMilli(),
+		string(head)); err != nil {
+		t.Fatal(err)
+	}
+	blob, _ := json.Marshal(map[string]any{
+		"turns": []map[string]any{
+			{"role": "user", "text": "content blob work", "id": "t1"},
+			{"role": "assistant", "text": "did it", "id": "t2"},
+		},
+	})
+	db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES('composer.content.comp-c',?)`,
+		string(blob))
+	db.Close()
+
+	sessions := agentSessionsForDay(day)
+	if len(sessions) != 1 || sessions[0].Source != "cursor" ||
+		sessions[0].Title != "content blob work" || sessions[0].Messages != 2 {
+		t.Fatalf("expected content-blob session, got %+v", sessions)
 	}
 }
