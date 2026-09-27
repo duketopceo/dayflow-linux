@@ -87,6 +87,32 @@ func TestWaylandReachable(t *testing.T) {
 	}
 }
 
+func TestWaylandReachableAbsolutePath(t *testing.T) {
+	// An absolute WAYLAND_DISPLAY is used as-is, without XDG_RUNTIME_DIR.
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	sock := filepath.Join(t.TempDir(), "abs-display")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	t.Setenv("WAYLAND_DISPLAY", sock)
+	if !waylandReachable() {
+		t.Fatal("absolute socket path should be reachable")
+	}
+	ln.Close()
+	os.Remove(sock)
+	if waylandReachable() {
+		t.Fatal("removed absolute socket should be unreachable")
+	}
+	// Unset runtime dir can't resolve a relative display — defer to command.
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("WAYLAND_DISPLAY", "wayland-9")
+	if !waylandReachable() {
+		t.Fatal("relative display with no XDG_RUNTIME_DIR should defer to the command")
+	}
+}
+
 func TestCaptureFailVisible(t *testing.T) {
 	// First failure always logs; the streak then reports every ~5 min
 	// (30 ticks at the default 10s interval) so a dead-session window
