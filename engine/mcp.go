@@ -58,10 +58,10 @@ var mcpTools = []map[string]any{
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "get_standup", "description": "Generate a standup update from yesterday and today's blocks.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "get_insights", "description": "Focus, category, app, and distraction analytics for a range (day, week, month).",
+	{"name": "get_insights", "description": "Focus, category, app, and distraction analytics for a range (day, week, month), plus 'cards' — merged activity spans for the range.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"range": map[string]any{"type": "string", "description": "day, week, or month"}}}},
-	{"name": "get_agent_sessions", "description": "Claude Code and Codex session recaps for a date (YYYY-MM-DD, default today): project, time range, message count, first prompt.",
+	{"name": "get_agent_sessions", "description": "Agent-session recaps for a date (YYYY-MM-DD, default today) across Claude Code, Codex, OpenCode, Devin, and Cursor: project, time range, message count, first prompt. Includes a per-source status array so unavailable or drifted stores are visible.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD; default today"}}}},
 	{"name": "get_forecast", "description": "Predicted category mix for a date (default tomorrow), blended from same-weekday history.",

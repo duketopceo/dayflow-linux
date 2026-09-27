@@ -87,9 +87,9 @@ Control:
   config                  Print config path and current config
   config set <key> <val>  Update config (model, api_base_url, capture_interval_sec,
                           block_minutes, frames_per_block, jpeg_quality, keep_frames,
-                          retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
-                          output, capture_command, openrouter_api_key, provider,
-                          filter_inappropriate, panel_expanded, debug)
+                          frame_max_dim, retention_days, max_storage_mb, auto_pause_locked,
+                          ignore_apps, output, capture_command, openrouter_api_key,
+                          provider, filter_inappropriate, panel_expanded, debug)
                           Use "-" as the value to read it from stdin (keeps
                           secrets out of argv and shell history)
   config patch <json|-> Merge a JSON object into the config
@@ -98,11 +98,14 @@ Control:
   log [--limit N] [--json]   Tail debug.log (default last 50 lines)
   provider [list]       List configured providers and routing
   provider add <id> <kind>          Add a provider (openrouter, local, custom,
-                                    gemini, chatgpt, claude, mcp)
+                                    gemini, chatgpt, claude, mcp, cli)
   provider set <id> <key> <value>   Update a provider (name, kind, api_base_url,
                                     api_key, model, enabled, vision, chat,
                                     title_prompt, summary_prompt,
-                                    detailed_prompt, chat_prompt)
+                                    detailed_prompt, chat_prompt;
+                                    cli: command, args, cli_timeout_sec,
+                                    env_passthrough, scratch_home,
+                                    allow_hot_path)
   provider remove <id>              Remove a provider
   provider test <id|task>           Test a provider or a routed task (vision,
                                     summary, detailed, chat, review, standup)

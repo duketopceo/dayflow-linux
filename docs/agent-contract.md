@@ -27,7 +27,7 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 | `get_stats` | db stats, storage, config (no secrets) | — |
 | `get_standup` | blocks | — |
 | `get_insights` | blocks | — |
-| `get_agent_sessions` | Claude Code / Codex JSONL transcripts under `~/.claude/projects/` and `~/.codex/sessions/` (read-only) | — |
+| `get_agent_sessions` | Agent transcripts: Claude Code / Codex JSONL under `~/.claude/projects/` and `~/.codex/sessions/`, OpenCode `~/.local/share/opencode/opencode*.db`, Devin `~/.local/share/devin/cli/` (sessions.db + ATIF transcripts), Cursor `state.vscdb` — all read-only | — |
 | `get_forecast` | blocks (same-weekday history blend) | — |
 | `chat` | blocks + journal context | **writes chat_conversations/chat_messages and sends journal-derived content to the configured AI provider** |
 
