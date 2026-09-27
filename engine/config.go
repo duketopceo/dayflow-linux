@@ -29,6 +29,7 @@ type Config struct {
 	BlockMinutes         int        `json:"block_minutes"`
 	FramesPerBlock       int        `json:"frames_per_block"`
 	JPEGQuality          int        `json:"jpeg_quality"`
+	FrameMaxDim          int        `json:"frame_max_dim"` // bound stored frames' longer edge (px); 0 = keep native size
 	KeepFrames           bool       `json:"keep_frames"`
 	RetentionDays        int        `json:"retention_days"`
 	IgnoreApps           []string   `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
@@ -108,6 +109,7 @@ func defaultConfig() Config {
 		BlockMinutes:         15,
 		FramesPerBlock:       30,
 		JPEGQuality:          55,
+		FrameMaxDim:          1920,
 		KeepFrames:           false,
 		RetentionDays:        0, // storage caps own eviction; days only prune when set explicitly
 		IgnoreApps:           []string{"swaylock", "hyprlock", "waylock", "gtklock", "i3lock", "xscreensaver", "screensaver"},
@@ -348,7 +350,7 @@ func writeDefaultConfig() error {
 
 // setConfigValue updates one key in config.json. Supported keys:
 // provider, model, api_base_url, capture_interval_sec, block_minutes, frames_per_block,
-// jpeg_quality, keep_frames, retention_days, ignore_apps (comma list),
+// jpeg_quality, frame_max_dim, keep_frames, retention_days, ignore_apps (comma list),
 // openrouter_api_key, output, capture_command, max_storage_mb, max_frames_mb,
 // max_db_mb, auto_pause_locked, filter_inappropriate, debug.
 func setConfigValue(key, value string) error {
@@ -374,7 +376,7 @@ func setConfigValue(key, value string) error {
 		cfg.APIBaseURL = normalizeAPIBaseURL(value)
 	case "openrouter_api_key":
 		cfg.OpenRouterAPIKey = value
-	case "capture_interval_sec", "block_minutes", "frames_per_block", "jpeg_quality", "retention_days":
+	case "capture_interval_sec", "block_minutes", "frames_per_block", "jpeg_quality", "frame_max_dim", "retention_days":
 		n, err := strconv.Atoi(value)
 		if err != nil {
 			return fmt.Errorf("%s must be an integer", key)
@@ -388,6 +390,8 @@ func setConfigValue(key, value string) error {
 			cfg.FramesPerBlock = n
 		case "jpeg_quality":
 			cfg.JPEGQuality = n
+		case "frame_max_dim":
+			cfg.FrameMaxDim = n
 		case "retention_days":
 			cfg.RetentionDays = n
 		}

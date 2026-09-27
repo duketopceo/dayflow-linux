@@ -377,6 +377,14 @@ Flickable {
         }
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3
+          label: "Frame max dim (px)"
+          value: String(dayflow.configDraft.frame_max_dim !== undefined ? dayflow.configDraft.frame_max_dim : 1920)
+          hint: "1920; 0 = off"
+          numeric: true
+          onEdited: dayflow.configDraft.frame_max_dim = parseInt(text, 10) || 0
+        }
+        SettingsField { dayflow: root.dayflow;
+          width: (parent.width - 2 * parent.spacing) / 3
           label: "Retention (days)"
           value: String(dayflow.configDraft.retention_days !== undefined ? dayflow.configDraft.retention_days : 0)
           hint: "0 = until caps"
