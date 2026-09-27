@@ -450,7 +450,8 @@ func main() {
 		fatal(err)
 		if jsonOut {
 			json.NewEncoder(os.Stdout).Encode(map[string]any{
-				"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"), "blocks": blocks})
+				"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"),
+				"blocks": blocks, "cards": mergeCards(blocks)})
 		} else {
 			fmt.Print(markdownTimeline(blocks, "dayflow "+cmd))
 		}

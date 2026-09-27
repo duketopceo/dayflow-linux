@@ -26,6 +26,10 @@ type insights struct {
 	FocusBlocks     []Block
 	TopDistractions []insightDist
 	Days            int
+	// Cards is the same merged-card array `timeline --json` emits for the
+	// queried range — one merge implementation (mergeCards) feeds every
+	// card surface.
+	Cards []Card
 }
 
 func (i insights) JSON() map[string]any {
@@ -39,6 +43,7 @@ func (i insights) JSON() map[string]any {
 		"focus_blocks":        i.FocusBlocks,
 		"top_distractions":    i.distMaps(i.TopDistractions, appDisplayName),
 		"days":                i.Days,
+		"cards":               i.Cards,
 	}
 }
 
@@ -103,6 +108,9 @@ func generateInsightsFromBlocks(blocks []Block, cfg Config, start, end time.Time
 		TopDistractions: []insightDist{},
 	}
 	in.Days = int(math.Max(1, end.Sub(start).Hours()/24))
+	// Cards merge the unfiltered block list — idle/excluded rows still shape
+	// the timeline even though they drop out of the analytics below.
+	in.Cards = mergeCards(blocks)
 	catMins := map[string]float64{}
 	catCount := map[string]int{}
 	appMins := map[string]float64{}

@@ -102,6 +102,17 @@ Notes:
   true when any judgment scored < 0.55; on timeline cards it aggregates
   the children. Read-only MCP sessions never egress to Jev — the fields
   are simply absent there.
+- `cards` is the merged activity-card array emitted — in identical shape
+  and chronological order — by `today`/`day`/`timeline`/`week`/`month
+  --json`, `insights --json`, and MCP `get_timeline`/`get_insights`.
+  Fields: `start`/`end` (local-time strings), `app`, `app_name`, `title`,
+  `summary`, `category`, `productive` (bool), `blocks` (child count),
+  `minutes`, `low_confidence`, `children` (the raw block objects, same
+  shape as `blocks[]`). Consecutive blocks fold into one card when
+  `same_as_prev` judged continuity against the previous *done* block, or
+  titles match, or app+category match with a non-empty app. There is no
+  separate per-surface merge — the panel and all JSON surfaces consume
+  this one array.
 - `get_forecast` / `dayflow forecast --json`: `confidence_score` is Jev's
   calibrated probability (0-1) that the predicted mix is plausible;
   `confidence` remains the sample-count heuristic. Jev unreachable → field

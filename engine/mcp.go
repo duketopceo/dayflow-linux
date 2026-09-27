@@ -35,7 +35,7 @@ func mcpErr(id json.RawMessage, code int, msg string) {
 }
 
 var mcpTools = []map[string]any{
-	{"name": "get_timeline", "description": "Summarized activity blocks for a date (YYYY-MM-DD, 'today', 'yesterday') or a range ('week', 'month'). Returns title/summary/category per 15-min block.",
+	{"name": "get_timeline", "description": "Summarized activity blocks for a date (YYYY-MM-DD, 'today', 'yesterday') or a range ('week', 'month'). Returns title/summary/category per 15-min block plus 'cards' — the same merged activity-card array as 'timeline --json'.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD, today, yesterday, week, month"}}}},
 	{"name": "get_status", "description": "Current recording state: paused, frames today, blocks done/pending, model.",
@@ -136,7 +136,10 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"), "blocks": blocks}, nil
+		return map[string]any{
+			"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"),
+			"blocks": blocks, "cards": mergeCards(blocks),
+		}, nil
 
 	case "get_status":
 		now := time.Now()

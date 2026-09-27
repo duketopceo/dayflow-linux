@@ -39,6 +39,7 @@ Panel {
   property var workflow: ({ date: "", slot_minutes: 15, total_minutes: 0, slots: [], categories: [] })
   property var insights: ({ total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, categories: [], apps: [], top_distractions: [], focus_blocks: [], days: 0 })
   property var weekBlocks: []
+  property var weekCards: []
   property string weekStart: ""
   property string weekEnd: ""
   property string weekSummary: ""
@@ -213,53 +214,19 @@ Panel {
     dayflow.loadWorkflow()
   }
 
-  // Merge consecutive blocks about the same thing (same title, or same
-  // app+category) into longer "blocked out" spans.
-  function mergeSpans(blocks) {
-    var list = (blocks || []).slice()
-    list.sort(function(a, b) { return Number(a.start_ts) - Number(b.start_ts) })
-    var spans = []
-    for (var i = 0; i < list.length; i++) {
-      var b = list[i]
-      var prev = spans.length ? spans[spans.length - 1] : null
-      // low_confidence is computed in Go (blockLowConfidence) — the UI reads
-      // the flag so the threshold lives in exactly one place.
-      var lowConf = b.low_confidence === true
-      // same_as_prev judged continuity vs the previous *done* block — only
-      // merge into the previous span when its last child is that block, not
-      // a "Recording failed" card sitting between them.
-      var prevKidDone = prev && prev.children.length > 0 &&
-        prev.children[prev.children.length - 1].status === "done"
-      var same = prev && ((b.same_as_prev === true && prevKidDone) ||
-        b.title === prev.title ||
-        (b.app === prev.app && b.category === prev.category))
-      if (same) {
-        prev.children.push(b)
-        prev.end = b.end
-        prev.end_ts = b.end_ts
-        prev.minutes += Math.round((Number(b.end_ts) - Number(b.start_ts)) / 60)
-        prev.count++
-        prev.title = b.title
-        prev.summary = b.summary
-        prev.productive = prev.productive || (b.productive === true)
-        prev.low_confidence = prev.low_confidence || lowConf
-      } else {
-        spans.push({
-          start: b.start, end: b.end,
-          start_ts: b.start_ts, end_ts: b.end_ts,
-          title: b.title, summary: b.summary,
-          category: b.category, app: b.app,
-          productive: b.productive === true,
-          appName: b.app_name || dayflow.appDisplayName(b.app),
-          minutes: Math.round((Number(b.end_ts) - Number(b.start_ts)) / 60),
-          count: 1,
-          low_confidence: lowConf,
-          children: [b]
-        })
-      }
+  // cardToSpan aliases an engine-emitted card (mergeCards in Go — the single
+  // merge implementation) onto the view contract the delegates were written
+  // against: count, appName, and span-level start_ts/end_ts. This is a field
+  // map, not a merge — merging happens once, engine-side.
+  function cardToSpan(c) {
+    c.count = Number(c.blocks || 0)
+    c.appName = c.app_name || dayflow.appDisplayName(c.app)
+    var kids = c.children || []
+    if (kids.length > 0) {
+      c.start_ts = kids[0].start_ts
+      c.end_ts = kids[kids.length - 1].end_ts
     }
-    spans.reverse()
-    return spans
+    return c
   }
 
   // ---- block editing ----
@@ -322,7 +289,14 @@ Panel {
     try {
       var d = JSON.parse(raw)
       dayflow.blocks = d.blocks || []
-      dayflow.spans = dayflow.mergeSpans(dayflow.blocks)
+      // Engine-merged cards (mergeCards in Go), newest first to match the
+      // timeline's previous display order.
+      var cards = d.cards || []
+      var spans = []
+      for (var i = cards.length - 1; i >= 0; i--) {
+        spans.push(dayflow.cardToSpan(cards[i]))
+      }
+      dayflow.spans = spans
       dayflow.dateLabel = d.date || ""
       dayflow.errorText = ""
     } catch (e) {
@@ -412,10 +386,12 @@ Panel {
     try {
       var d = JSON.parse(raw)
       dayflow.weekBlocks = d.blocks || []
+      dayflow.weekCards = d.cards || []
       dayflow.weekStart = d.start || ""
       dayflow.weekEnd = d.end || ""
     } catch (e) {
       dayflow.weekBlocks = []
+      dayflow.weekCards = []
     }
   }
 
@@ -488,8 +464,21 @@ Panel {
     return out
   }
 
+  // Cards for one week day, newest first — filtered from the week payload's
+  // engine-emitted cards array (a card belongs to the day it started on).
   function weekDaySpans(dayIndex) {
-    return dayflow.mergeSpans(dayflow.weekDayBlocks(dayIndex))
+    if (!dayflow.weekCards.length) return []
+    var dayStart = dayflow.weekStartDate().getTime() + dayIndex * 86400000
+    var dayEnd = dayStart + 86400000
+    var spans = []
+    for (var i = 0; i < dayflow.weekCards.length; i++) {
+      var c = dayflow.weekCards[i]
+      var kids = c.children || []
+      var s = kids.length > 0 ? Number(kids[0].start_ts || 0) * 1000 : 0
+      if (s >= dayStart && s < dayEnd) spans.push(dayflow.cardToSpan(c))
+    }
+    spans.reverse()
+    return spans
   }
 
   function weekDayMinutes(dayIndex) {
