@@ -1333,6 +1333,44 @@ func TestAgentSessionsCursorIdleComposers(t *testing.T) {
 	}
 }
 
+// A user head whose bubbleId body row is present but malformed is store
+// corruption, not an idle composer — the retained empty-text turn would
+// otherwise let the composer pass as having user turns and report "empty",
+// suppressing drift reporting.
+func TestAgentSessionsCursorMalformedBubble(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	dbPath := filepath.Join(dir, "state.vscdb")
+	writeCursorDB(t, dbPath,
+		cuFixtureComposer{id: "comp-corrupt", name: "broken", wsid: "ws-1",
+			created: day.Add(10 * time.Hour).UnixMilli(),
+			updated: day.Add(10 * time.Hour).UnixMilli(),
+			bubbles: []cuFixtureBubble{
+				{id: "b1", typ: 1, text: "fix it", ms: day.Add(10 * time.Hour).UnixMilli()},
+			}},
+	)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES(?,?)`,
+		"bubbleId:comp-corrupt:b1", "{{not json"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 0 {
+		t.Fatalf("corrupt composer must not yield a session, got %+v", sessions)
+	}
+	st := cursorStatus(t, statuses)
+	if st.Status != "unavailable" || st.Note == "" {
+		t.Fatalf("malformed user bubble must report unavailable, got %+v", st)
+	}
+}
+
 func TestAgentSessionsCursorMissingTables(t *testing.T) {
 	dir := t.TempDir()
 	setAgentDirs(t, dir)

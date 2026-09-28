@@ -699,7 +699,9 @@ func TestCLIProviderDenyFlags(t *testing.T) {
 	denied := [][]string{
 		{"--yolo"},
 		{"--force=true"},
-		{"-yf"}, // bundled shorts
+		{"-yf"},    // bundled shorts
+		{"-vvvvf"}, // longer bundle smuggling a denied -f
+		{"-model"}, // ambiguous single-dash long flag — use --model
 		{"-c", "print(1)"},
 		{"--eval", "x"},
 		{"-i"},

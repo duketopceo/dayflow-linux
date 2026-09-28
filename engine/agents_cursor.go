@@ -322,14 +322,16 @@ func cursorKV(db *sql.DB, key string) ([]byte, bool) {
 // fingerprint path — header ids/types + update times only, no bubble bodies;
 // withText=true also pulls bubbleId rows for turn text.
 // cursorMessages returns the composer's turns, its last-update ms, and
-// parseErr — true only when a composerData blob existed but failed to decode
-// and no fallback produced turns either (real degradation). A composer that
-// simply has no user turns (drafts, archived shells, assistant-only) is a
-// normal idle state, not an error.
+// parseErr — true when a composerData blob existed but failed to decode and
+// no fallback produced turns, or when a referenced user bubble's body row is
+// present but malformed (a retained empty-text turn would otherwise mask the
+// corruption as an idle composer). A composer that simply has no user turns
+// (drafts, archived shells, assistant-only) is a normal idle state, not an
+// error.
 func cursorMessages(db *sql.DB, composerID string, withText bool) ([]cursorTurn, int64, bool) {
 	var updated int64
 	var turns []cursorTurn
-	var parseErr bool
+	var parseErr, malformed bool
 
 	raw, ok := cursorKV(db, "composerData:"+composerID)
 	if ok {
@@ -357,12 +359,18 @@ func cursorMessages(db *sql.DB, composerID string, withText bool) ([]cursorTurn,
 				}
 				seen[hd.BubbleID] = true
 				t := cursorTurn{id: hd.BubbleID, role: cursorRole(hd.Type, nil)}
-				if bt, ok := cursorTurnFromBubble(bodies[hd.BubbleID]); ok {
-					if bt.role != "" {
-						t.role = bt.role
+				if body, present := bodies[hd.BubbleID]; present {
+					if bt, ok := cursorTurnFromBubble(body); ok {
+						if bt.role != "" {
+							t.role = bt.role
+						}
+						t.text = bt.text
+						t.ms = bt.ms
+					} else if t.role == "user" {
+						// The body row exists but doesn't decode — store
+						// corruption, not a composer the user left idle.
+						malformed = true
 					}
-					t.text = bt.text
-					t.ms = bt.ms
 				}
 				turns = append(turns, t)
 			}
@@ -403,7 +411,7 @@ func cursorMessages(db *sql.DB, composerID string, withText bool) ([]cursorTurn,
 			turns = cursorCollectTurns(raw, withText)
 		}
 	}
-	return turns, updated, parseErr && len(turns) == 0
+	return turns, updated, malformed || (parseErr && len(turns) == 0)
 }
 
 // cursorBubbleBodies loads every bubbleId:<composerId>:* row in one query —

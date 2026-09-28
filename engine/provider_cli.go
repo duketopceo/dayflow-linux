@@ -127,22 +127,18 @@ func cliArgDenied(arg string) bool {
 		return false
 	}
 	if strings.HasPrefix(arg, "-") && len(arg) > 1 {
-		// Exact match catches single-dash long flags (-file, -file=x); the
-		// per-char loop below catches bundled shorts (-yf).
-		if cliDenyFlags[strings.SplitN(arg, "=", 2)[0]] {
+		// Exact match catches short flags (-c) and single-dash long flags
+		// (-file, -file=x) that sit on the deny-list.
+		name := strings.SplitN(arg, "=", 2)[0]
+		if cliDenyFlags[name] {
 			return true
 		}
-		name := strings.SplitN(arg, "=", 2)[0]
-		if len(name) > 4 {
-			// Single-dash long flag (-model, -verbose), not a short bundle —
-			// per-char matching would false-positive on denied letters.
-			return false
-		}
-		for _, c := range name[1:] {
-			if cliDenyFlags["-"+string(c)] {
-				return true
-			}
-		}
+		// A single-dash token longer than one letter is ambiguous: it could
+		// be a bundled short-option group (-vvvvf smuggling a denied -f) or
+		// a single-dash long flag (-model). Without the command's flag
+		// grammar the two can't be told apart, so deny it — --long is the
+		// unambiguous spelling.
+		return len(name) > 2
 	}
 	return false
 }
