@@ -518,7 +518,7 @@ func (b Block) IsProductive() bool {
 
 func blocksForDay(db *sql.DB, day time.Time, desc bool) ([]Block, error) {
 	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
-	end := start.Add(24 * time.Hour)
+	end := start.AddDate(0, 0, 1)
 	order := "ASC"
 	if desc {
 		order = "DESC"

@@ -19,6 +19,10 @@ Panel {
   property bool configured: true
   property bool onboardingSkipped: false
   property string errorText: ""
+  // Skew flags tracked per loader — a successful daily load must not clear a
+  // skew the week loader raised, and vice versa.
+  property bool daySkew: false
+  property bool weekSkew: false
   property string modelName: ""
   property string activeApp: ""
   property var ignoredApps: []
@@ -293,6 +297,16 @@ Panel {
       (dayflow.engineVersion !== "" ? " (engine " + dayflow.engineVersion + ")" : "")
   }
 
+  // errorText reflects whichever skew flags are set; a non-skew error raised
+  // by a loader is preserved until that loader succeeds or skew appears.
+  function syncSkewError() {
+    if (dayflow.daySkew || dayflow.weekSkew) {
+      dayflow.errorText = dayflow.engineSkewNotice()
+    } else if (dayflow.errorText.indexOf("engine upgrade required") === 0) {
+      dayflow.errorText = ""
+    }
+  }
+
   function applyTimeline(raw) {
     dayflow.timelineLoading = false
     try {
@@ -305,20 +319,20 @@ Panel {
       if (cards === null) {
         dayflow.spans = []
         dayflow.dateLabel = d.date || ""
-        if (dayflow.blocks.length > 0) {
-          dayflow.errorText = dayflow.engineSkewNotice()
-        }
         // Old binary + empty day: indistinguishable from a real empty day,
-        // but don't clear a skew notice the week loader may have raised.
+        // so the flag only sets when blocks exist.
+        dayflow.daySkew = dayflow.blocks.length > 0
+        dayflow.syncSkewError()
         return
       }
+      dayflow.daySkew = false
       var spans = []
       for (var i = cards.length - 1; i >= 0; i--) {
         spans.push(dayflow.cardToSpan(cards[i]))
       }
       dayflow.spans = spans
       dayflow.dateLabel = d.date || ""
-      dayflow.errorText = ""
+      dayflow.syncSkewError()
     } catch (e) {
       dayflow.blocks = []
       dayflow.spans = []
@@ -410,9 +424,8 @@ Panel {
       // not an empty week. weekDaySpans treats null like empty, but the
       // skew is surfaced via errorText while blocks exist.
       dayflow.weekCards = ("cards" in d) ? (d.cards || []) : null
-      if (dayflow.weekCards === null && dayflow.weekBlocks.length > 0) {
-        dayflow.errorText = dayflow.engineSkewNotice()
-      }
+      dayflow.weekSkew = dayflow.weekCards === null && dayflow.weekBlocks.length > 0
+      dayflow.syncSkewError()
       dayflow.weekStart = d.start || ""
       dayflow.weekEnd = d.end || ""
     } catch (e) {

@@ -1302,6 +1302,37 @@ func TestAgentSessionsCursorMalformedBlob(t *testing.T) {
 	}
 }
 
+// A composer that exists but never produced user turns — opened and left
+// idle, or assistant-only — is a normal empty day, not store degradation:
+// it must not contribute a skipped note or trip the drift flag.
+func TestAgentSessionsCursorIdleComposers(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.Local)
+
+	dbPath := filepath.Join(dir, "state.vscdb")
+	writeCursorDB(t, dbPath,
+		cuFixtureComposer{id: "comp-empty", name: "untitled", wsid: "ws-1",
+			created: day.Add(10 * time.Hour).UnixMilli(),
+			updated: day.Add(10 * time.Hour).UnixMilli()},
+		cuFixtureComposer{id: "comp-ast", name: "assistant only", wsid: "ws-1",
+			created: day.Add(11 * time.Hour).UnixMilli(),
+			updated: day.Add(11 * time.Hour).UnixMilli(),
+			bubbles: []cuFixtureBubble{
+				{id: "b1", typ: 2, text: "unsolicited reply", ms: day.Add(11 * time.Hour).UnixMilli()},
+			}},
+	)
+
+	sessions, statuses := scanAgentSources(day)
+	if len(sessions) != 0 {
+		t.Fatalf("idle composers must not yield sessions, got %+v", sessions)
+	}
+	st := cursorStatus(t, statuses)
+	if st.Status != "empty" || st.Note != "" || st.Drift {
+		t.Fatalf("idle composers must report empty with no note, got %+v", st)
+	}
+}
+
 func TestAgentSessionsCursorMissingTables(t *testing.T) {
 	dir := t.TempDir()
 	setAgentDirs(t, dir)

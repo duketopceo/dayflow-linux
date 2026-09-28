@@ -64,8 +64,7 @@ Column {
   }
 
   Text {
-    visible: host !== null && !host.agentsLoading &&
-      host.agentSessions.length === 0 && pane.agentSourceNote !== ""
+    visible: host !== null && !host.agentsLoading && pane.agentSourceNote !== ""
     text: pane.agentSourceNote
     textFormat: Text.PlainText
     wrapMode: Text.WordWrap

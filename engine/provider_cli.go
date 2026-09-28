@@ -132,10 +132,13 @@ func cliArgDenied(arg string) bool {
 		if cliDenyFlags[strings.SplitN(arg, "=", 2)[0]] {
 			return true
 		}
-		for _, c := range arg[1:] {
-			if c == '=' {
-				break
-			}
+		name := strings.SplitN(arg, "=", 2)[0]
+		if len(name) > 4 {
+			// Single-dash long flag (-model, -verbose), not a short bundle —
+			// per-char matching would false-positive on denied letters.
+			return false
+		}
+		for _, c := range name[1:] {
 			if cliDenyFlags["-"+string(c)] {
 				return true
 			}
@@ -282,10 +285,11 @@ func stageCLIFiles(scratch string, files []string) []string {
 			src.Close()
 			continue
 		}
-		_, err = io.Copy(out, io.LimitReader(src, cliMaxFrameBytes))
+		n, err := io.Copy(out, io.LimitReader(src, cliMaxFrameBytes+1))
 		src.Close()
 		out.Close()
-		if err != nil {
+		if err != nil || n > cliMaxFrameBytes {
+			os.Remove(dst)
 			continue
 		}
 		staged = append(staged, dst)

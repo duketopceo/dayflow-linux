@@ -151,7 +151,10 @@ func (s *roStore) close() {
 func openROStore(path string) (*roStore, error) {
 	const ro = "?mode=ro&_pragma=busy_timeout(3000)&_pragma=query_only(1)"
 	if db, err := sql.Open("sqlite", "file:"+path+ro); err == nil {
-		if err := db.Ping(); err == nil {
+		// Ping only opens the connection — WAL recovery happens on the first
+		// real statement, so probe readability directly.
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM sqlite_master`).Scan(&n); err == nil {
 			return &roStore{db: db}, nil
 		}
 		db.Close()
@@ -178,7 +181,8 @@ func openROStore(path string) (*roStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Ping(); err != nil {
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master`).Scan(&n); err != nil {
 		db.Close()
 		return nil, err
 	}

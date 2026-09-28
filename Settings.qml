@@ -381,7 +381,10 @@ Flickable {
           value: String(dayflow.configDraft.frame_max_dim !== undefined ? dayflow.configDraft.frame_max_dim : 1920)
           hint: "1920; 0 = off"
           numeric: true
-          onEdited: dayflow.configDraft.frame_max_dim = parseInt(text, 10) || 0
+          onEdited: {
+            var n = parseInt(text, 10)
+            if (!isNaN(n)) dayflow.configDraft.frame_max_dim = n
+          }
         }
         SettingsField { dayflow: root.dayflow;
           width: (parent.width - 2 * parent.spacing) / 3

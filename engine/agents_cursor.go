@@ -121,15 +121,15 @@ func (c *cursorSource) Scan(s, e time.Time) ([]AgentSession, scanNote) {
 		if h.draft {
 			continue // unsent composer drafts — never sessions
 		}
-		if sess, ok := cursorSession(st.db, path, h); ok {
+		if sess, ok, broken := cursorSession(st.db, path, h); ok {
 			out = append(out, sess)
-		} else {
+		} else if broken {
 			skipped++
 		}
 	}
 	if skipped > 0 {
 		note = cursorNote(fmt.Sprintf(
-			"%d composer(s) in range had no usable turns", skipped))
+			"%d composer(s) in range failed to parse", skipped))
 	}
 	return out, scanNote{text: note}
 }
@@ -321,9 +321,15 @@ func cursorKV(db *sql.DB, key string) ([]byte, bool) {
 // cursorMessages loads one composer's turns. withText=false is the cheap
 // fingerprint path — header ids/types + update times only, no bubble bodies;
 // withText=true also pulls bubbleId rows for turn text.
-func cursorMessages(db *sql.DB, composerID string, withText bool) ([]cursorTurn, int64) {
+// cursorMessages returns the composer's turns, its last-update ms, and
+// parseErr — true only when a composerData blob existed but failed to decode
+// and no fallback produced turns either (real degradation). A composer that
+// simply has no user turns (drafts, archived shells, assistant-only) is a
+// normal idle state, not an error.
+func cursorMessages(db *sql.DB, composerID string, withText bool) ([]cursorTurn, int64, bool) {
 	var updated int64
 	var turns []cursorTurn
+	var parseErr bool
 
 	raw, ok := cursorKV(db, "composerData:"+composerID)
 	if ok {
@@ -380,6 +386,8 @@ func cursorMessages(db *sql.DB, composerID string, withText bool) ([]cursorTurn,
 					turns = append(turns, t)
 				}
 			}
+		} else {
+			parseErr = true
 		}
 	}
 
@@ -395,7 +403,7 @@ func cursorMessages(db *sql.DB, composerID string, withText bool) ([]cursorTurn,
 			turns = cursorCollectTurns(raw, withText)
 		}
 	}
-	return turns, updated
+	return turns, updated, parseErr && len(turns) == 0
 }
 
 // cursorBubbleBodies loads every bubbleId:<composerId>:* row in one query —
@@ -737,8 +745,11 @@ func cursorSessionTurns(turns []cursorTurn) []sessionTurn {
 // cursorSession folds one composer's turns into an AgentSession. Composers
 // with no usable user turns are skipped — drafts, archived shells, and
 // content blobs that don't carry text all land here.
-func cursorSession(db *sql.DB, path string, h cursorHeader) (AgentSession, bool) {
-	turns, _ := cursorMessages(db, h.id, true)
+func cursorSession(db *sql.DB, path string, h cursorHeader) (AgentSession, bool, bool) {
+	turns, _, parseErr := cursorMessages(db, h.id, true)
+	if parseErr {
+		return AgentSession{}, false, true
+	}
 	sess := AgentSession{
 		Source:    "cursor",
 		Title:     truncTitle(h.name),
@@ -754,7 +765,7 @@ func cursorSession(db *sql.DB, path string, h cursorHeader) (AgentSession, bool)
 	}
 	firstUser, userTurns := foldSession(&sess, cursorSessionTurns(turns))
 	if userTurns == 0 || sess.Start == 0 {
-		return AgentSession{}, false
+		return AgentSession{}, false, false
 	}
 	if sess.End < sess.Start {
 		sess.End = sess.Start
@@ -768,7 +779,7 @@ func cursorSession(db *sql.DB, path string, h cursorHeader) (AgentSession, bool)
 		}
 		sess.Project = filepath.Base(cwd)
 	}
-	return sess, true
+	return sess, true, false
 }
 
 // workspaceIDRe bounds what a composerHeaders workspaceId may look like
@@ -837,7 +848,7 @@ func (c *cursorSource) turns(sess AgentSession, withText bool) ([]cursorTurn, in
 	if !sqliteTableExists(st.db, "cursorDiskKV") {
 		return nil, 0, false
 	}
-	turns, updated := cursorMessages(st.db, id, withText)
+	turns, updated, _ := cursorMessages(st.db, id, withText)
 	return turns, updated, len(turns) > 0
 }
 

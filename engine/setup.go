@@ -298,8 +298,12 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 			cliProvider = true
 		}
 	}
-	check("api reachable", cfg.OpenRouterAPIKey != "" || cfg.APIBaseURL != "" || cliProvider,
-		"no api key, endpoint, or cli provider — run: dayflow setup or dayflow provider add <id> cli")
+	// A cli provider without allow_hot_path can't serve the vision task, so
+	// an api-key-less cli-only config still fails to summarize — check the
+	// real route, not just provider presence.
+	_, visErr := providerForTask(cfg, "vision")
+	check("api reachable", (cfg.OpenRouterAPIKey != "" || cfg.APIBaseURL != "" || cliProvider) && visErr == nil,
+		"no usable vision provider — run: dayflow setup, or set allow_hot_path on a cli provider")
 	// Each enabled cli provider's command must be on PATH — an absent binary
 	// fails at call time, which is a doctor's job to catch early.
 	for _, p := range effectiveProviders(cfg) {
