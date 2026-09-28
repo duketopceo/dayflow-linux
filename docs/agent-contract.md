@@ -137,11 +137,15 @@ Notes:
   quality score; consumers should treat a missing `recap` as "no recap",
   which includes sessions judged unworthy for that transcript version. `--no-recaps` skips all model calls; `dayflow mcp` never
   generates recaps (judges disabled) but would serve cached ones.
-  `agent_recaps: false` in config is the durable opt-out — cached rows are
-  still served, nothing new is generated. Generation egress is a bounded
+  `agent_recaps` defaults to `false` — recap generation is opt-in
+  (`dayflow config set agent_recaps true`); cached rows are still served
+  either way, and with the flag off nothing new is generated and no
+  transcript excerpt leaves the machine. Generation egress is a bounded
   excerpt (≤2 KB, first/last user message + last assistant reply) scrubbed
   of home paths and common token shapes; generation calls log as
   `task='agent_recap'` in `llm_calls`.
+  The payload carries `recaps_enabled` (bool) so UIs can show the opt-in
+  hint instead of an unexplained absence of recaps.
   The payload also carries `sources` — one entry per store:
   `{source, sessions, status: "ok"|"empty"|"unavailable", note?, drift?}`.
   `drift` means a previously-productive store now scans unavailable;

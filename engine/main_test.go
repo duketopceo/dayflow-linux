@@ -23,6 +23,9 @@ func testEnv(t *testing.T) Config {
 	t.Setenv("OPENROUTER_API_KEY", "")
 	cfg := defaultConfig()
 	cfg.OpenRouterAPIKey = "test-key"
+	// Recap tests exercise generation, so the suite opts in explicitly —
+	// agent_recaps defaults off for real configs (no-egress default).
+	cfg.AgentRecaps = true
 	// Jev calls must never egress from tests — point at a dead endpoint so
 	// decide() fails fast and every judge path degrades.
 	// Tests that exercise decide() point decisionsURL at their own server.

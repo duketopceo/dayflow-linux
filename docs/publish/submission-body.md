@@ -24,8 +24,9 @@ decisions API) provides calibrated category/judgment calls; all egress is
 config-gated and documented. Sampled frames go to the configured vision provider, TypeSafe Jev judge
 calls carry small block/session descriptors to the decisions endpoint,
 and agent-session recap generation sends a bounded, scrubbed transcript
-excerpt to the chat provider — all config-gated (`jev_classification`,
-`agent_recaps`). External
+excerpt to the chat provider — config-gated (`jev_classification`,
+`agent_recaps`), and `agent_recaps` is off by default so transcript
+excerpts only egress after explicit opt-in. External
 dependency: an OpenRouter API key (or any compatible chat-completions
 endpoint, including local providers).
 

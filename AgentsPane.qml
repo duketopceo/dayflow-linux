@@ -63,6 +63,19 @@ Column {
     return lines.join("\n")
   }
 
+  // Opt-in hint: recaps send a bounded, scrubbed transcript excerpt to the
+  // configured provider, so generation stays off until the user enables it.
+  Text {
+    visible: host !== null && host.agentRecapsEnabled === false && !host.agentsLoading
+    text: "Recaps are off — transcripts stay local.\nEnable with: dayflow config set agent_recaps true"
+    textFormat: Text.PlainText
+    wrapMode: Text.WordWrap
+    width: parent.width
+    color: pane.dayflow ? pane.dayflow.dim : "gray"
+    font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+    font.pixelSize: Style.font.caption
+  }
+
   Text {
     visible: host !== null && !host.agentsLoading && pane.agentSourceNote !== ""
     text: pane.agentSourceNote

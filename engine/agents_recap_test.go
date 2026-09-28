@@ -503,6 +503,71 @@ func TestRecapFailureNotCached(t *testing.T) {
 	}
 }
 
+// agent_recaps is opt-in (marketplace consent): a config that never sets it
+// must produce zero recap egress — no decisions call, no chat-provider call —
+// even though sessions exist and providers are reachable.
+func TestRecapsDefaultOffNoEgress(t *testing.T) {
+	if defaultConfig().AgentRecaps {
+		t.Fatal("agent_recaps must default to false")
+	}
+	// Absent key stays off; explicit true opts in.
+	dir := t.TempDir()
+	t.Setenv("DAYFLOW_DATA_DIR", filepath.Join(dir, "data"))
+	cfgPath := filepath.Join(dir, "config.json")
+	t.Setenv("DAYFLOW_CONFIG", cfgPath)
+	os.WriteFile(cfgPath, []byte(`{}`), 0o600)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentRecaps {
+		t.Fatal("absent agent_recaps key must decode to false")
+	}
+	os.WriteFile(cfgPath, []byte(`{"agent_recaps":true}`), 0o600)
+	cfg, err = loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AgentRecaps {
+		t.Fatal("explicit agent_recaps:true must be honored")
+	}
+
+	// With the flag off, attachRecaps must not call either egress endpoint.
+	// testEnv must run first — it repoints decisionsURL at its dead-end
+	// default, which would clobber the counting server.
+	cfg = testEnv(t)
+	cfg.AgentRecaps = false
+	var hits int
+	count := func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(500)
+	}
+	decSrv := httptest.NewServer(http.HandlerFunc(count))
+	defer decSrv.Close()
+	old := decisionsURL
+	decisionsURL = decSrv.URL
+	defer func() { decisionsURL = old }()
+	orSrv := httptest.NewServer(http.HandlerFunc(count))
+	defer orSrv.Close()
+	oldOR := openRouterURL
+	openRouterURL = orSrv.URL
+	defer func() { openRouterURL = oldOR }()
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	path := writeClaudeTranscript(t, t.TempDir(), 4)
+	sessions := []AgentSession{recapSess(path)}
+	attachRecaps(db, cfg, sessions)
+	if sessions[0].Recap != "" {
+		t.Fatal("recap generated with agent_recaps=false")
+	}
+	if hits != 0 {
+		t.Fatalf("agent_recaps=false made %d provider requests", hits)
+	}
+}
+
 func TestRecapMissingFile(t *testing.T) {
 	cfg := testEnv(t)
 	db, err := openDB()
