@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,7 +25,7 @@ type PromptOverrides struct {
 }
 
 // Provider is one LLM endpoint dayflow can route tasks to.
-// Kind is one of: openrouter, local, custom, gemini, chatgpt, claude, mcp.
+// Kind is one of: openrouter, local, custom, gemini, chatgpt, claude, mcp, cli.
 type Provider struct {
 	ID              string          `json:"id"`
 	Name            string          `json:"name,omitempty"`
@@ -35,6 +37,15 @@ type Provider struct {
 	Chat            bool            `json:"chat,omitempty"`   // can do text/chat tasks
 	Enabled         bool            `json:"enabled"`
 	PromptOverrides PromptOverrides `json:"prompt_overrides,omitempty"`
+
+	// The fields below configure kind=="cli" providers — a subscription-
+	// auth'd agent CLI run as a hardened subprocess (see provider_cli.go).
+	Command        string   `json:"command,omitempty"`         // executable name/path, e.g. cursor-agent
+	Args           []string `json:"args,omitempty"`            // argv template; {prompt} (only after --) and {file} placeholders
+	EnvPassthrough []string `json:"env_passthrough,omitempty"` // extra env var names the child may inherit
+	CLITimeoutSec  int      `json:"cli_timeout_sec,omitempty"` // per-invocation timeout; 0 = 180s
+	AllowHotPath   bool     `json:"allow_hot_path,omitempty"`  // opt in to vision/summary routing (minutes-scale latency)
+	ScratchHome    bool     `json:"scratch_home,omitempty"`    // run with a scratch HOME instead of the real one
 }
 
 // Routing decides which provider serves which task.
@@ -45,7 +56,7 @@ type Routing struct {
 	TaskProvider map[string]string `json:"task_provider,omitempty"`
 }
 
-var providerKinds = []string{"openrouter", "local", "custom", "gemini", "chatgpt", "claude", "mcp"}
+var providerKinds = []string{"openrouter", "local", "custom", "gemini", "chatgpt", "claude", "mcp", "cli"}
 
 func validProviderKind(k string) bool {
 	for _, v := range providerKinds {
@@ -94,11 +105,26 @@ func effectiveProviders(cfg Config) []Provider {
 
 // providerForTask resolves the provider for a task: TaskProvider override,
 // then Primary, then Secondary, then the first enabled provider.
+//
+// Hot-path guard: a cli provider cannot serve "vision" or "summary" unless
+// its config sets allow_hot_path — a minutes-scale subprocess would stall
+// the per-block summarize loop. Ineligible cli providers are skipped at every
+// resolution step, so a task_provider override pointing at one falls back to
+// primary/secondary rather than routing to it.
 func providerForTask(cfg Config, task string) (Provider, error) {
 	provs := effectiveProviders(cfg)
+	eligible := func(p *Provider) bool {
+		if p == nil || !p.Enabled {
+			return false
+		}
+		if p.Kind == "cli" && !p.AllowHotPath && (task == "vision" || task == "summary") {
+			return false
+		}
+		return true
+	}
 	find := func(id string) *Provider {
 		for i := range provs {
-			if provs[i].ID == id && provs[i].Enabled {
+			if provs[i].ID == id && eligible(&provs[i]) {
 				return &provs[i]
 			}
 		}
@@ -108,6 +134,27 @@ func providerForTask(cfg Config, task string) (Provider, error) {
 		if p := find(id); p != nil {
 			return *p, nil
 		}
+		// The configured route names a provider that exists but is ineligible
+		// (disabled, or a cli provider without allow_hot_path on the
+		// vision/summary hot path) — warn rather than silently rerouting.
+		for i := range provs {
+			if provs[i].ID != id {
+				continue
+			}
+			reason := "disabled"
+			if provs[i].Enabled {
+				reason = "cli provider without allow_hot_path"
+			}
+			target := "first enabled provider"
+			if p := find(cfg.Routing.Primary); p != nil {
+				target = "primary " + p.ID
+			} else if p := find(cfg.Routing.Secondary); p != nil {
+				target = "secondary " + p.ID
+			}
+			debugf(cfg, "routing: task %q provider %q skipped (%s) — falling back to %s",
+				task, id, reason, target)
+			break
+		}
 	}
 	if p := find(cfg.Routing.Primary); p != nil {
 		return *p, nil
@@ -115,18 +162,27 @@ func providerForTask(cfg Config, task string) (Provider, error) {
 	if p := find(cfg.Routing.Secondary); p != nil {
 		return *p, nil
 	}
-	for _, p := range provs {
-		if p.Enabled {
-			return p, nil
+	for i := range provs {
+		if eligible(&provs[i]) {
+			return provs[i], nil
 		}
 	}
-	return Provider{}, fmt.Errorf("no enabled provider configured for task %q", task)
+	err := fmt.Errorf("no enabled provider configured for task %q", task)
+	for i := range provs {
+		if provs[i].Enabled && provs[i].Kind == "cli" && !provs[i].AllowHotPath {
+			err = fmt.Errorf("%w (cli provider %q is ineligible: set allow_hot_path on it to opt in)", err, provs[i].ID)
+			break
+		}
+	}
+	return Provider{}, err
 }
 
 // providerNeedsAuth reports whether the provider should receive an
-// Authorization header. Local and MCP endpoints never get keys.
+// Authorization header. Local and MCP endpoints never get keys; cli
+// providers carry no dayflow-held key at all (the subprocess uses its own
+// subscription auth).
 func providerNeedsAuth(p Provider) bool {
-	return p.Kind != "local" && p.Kind != "mcp"
+	return p.Kind != "local" && p.Kind != "mcp" && p.Kind != "cli"
 }
 
 func providerChatURL(p Provider) string {
@@ -184,7 +240,13 @@ var providerBackoff = func(attempt int) time.Duration {
 // retrying transient failures. A single attempt used to be the whole story:
 // on 2026-09-22 that turned 45% of the day's calls into dead blocks, and a
 // DNS blip cost a 15-minute capture window permanently.
+//
+// kind=="cli" dispatches to the hardened subprocess path instead — no HTTP,
+// no retries (each attempt is minutes-scale).
 func callProviderChat(cfg Config, p Provider, messages []orMessage) (string, int, int, error) {
+	if p.Kind == "cli" {
+		return callProviderCLIText(cfg, p, messages)
+	}
 	var lastErr error
 	for attempt := 1; attempt <= providerMaxAttempts; attempt++ {
 		content, pt, ct, err := providerChatOnce(cfg, p, messages)
@@ -341,7 +403,12 @@ func runProvider(cfg Config, args []string, jsonOut bool) error {
 				key = "  key=***"
 			}
 			base := p.APIBaseURL
-			if base == "" {
+			if p.Kind == "cli" {
+				base = "cmd=" + p.Command
+				if p.AllowHotPath {
+					base += " hot-path"
+				}
+			} else if base == "" {
 				base = "openrouter"
 			}
 			fmt.Printf("  %-12s %-10s %-8s model=%s base=%s%s\n", p.ID, p.Kind, state, p.Model, base, key)
@@ -382,6 +449,10 @@ func runProvider(cfg Config, args []string, jsonOut bool) error {
 			return err
 		}
 		fmt.Println("added provider", id)
+		if kind == "cli" {
+			fmt.Printf("cli provider: set its command next, e.g. `dayflow provider set %s command cursor-agent`\n", id)
+			fmt.Println("note: the CLI forwards prompts (and any frames it reads) to its own model backend — a local subprocess does not keep data local")
+		}
 		return nil
 
 	case "set":
@@ -432,8 +503,50 @@ func runProvider(cfg Config, args []string, jsonOut bool) error {
 			p.PromptOverrides.DetailedPrompt = val
 		case "chat_prompt":
 			p.PromptOverrides.ChatPrompt = val
+		case "command":
+			p.Command = val
+			if len(p.Args) == 0 {
+				p.Args = cliPresetArgs(val)
+			}
+		case "args":
+			var parsed []string
+			if json.Unmarshal([]byte(val), &parsed) != nil {
+				// not JSON — accept a comma-separated shorthand
+				for _, s := range strings.Split(val, ",") {
+					if s = strings.TrimSpace(s); s != "" {
+						parsed = append(parsed, s)
+					}
+				}
+			}
+			p.Args = parsed
+		case "cli_timeout_sec":
+			n, err := strconv.Atoi(val)
+			if err != nil || n < 0 {
+				return fmt.Errorf("cli_timeout_sec must be a non-negative integer (0 = 180s default)")
+			}
+			p.CLITimeoutSec = n
+		case "allow_hot_path":
+			p.AllowHotPath = val == "true" || val == "1" || val == "yes"
+		case "scratch_home":
+			p.ScratchHome = val == "true" || val == "1" || val == "yes"
+		case "env_passthrough":
+			var names []string
+			for _, s := range strings.Split(val, ",") {
+				if s = strings.TrimSpace(s); s != "" {
+					names = append(names, s)
+				}
+			}
+			p.EnvPassthrough = names
 		default:
-			return fmt.Errorf("unknown provider key %q (name, kind, api_base_url, api_key, model, enabled, vision, chat, *_prompt)", args[2])
+			return fmt.Errorf("unknown provider key %q (name, kind, api_base_url, api_key, model, enabled, vision, chat, command, args, cli_timeout_sec, allow_hot_path, scratch_home, env_passthrough, *_prompt)", args[2])
+		}
+		if p.Kind == "cli" {
+			if cliCommandDenied(p.Command) {
+				return fmt.Errorf("provider %s: command %q is an interpreter (sh/python/node/...) that would run the prompt as code — pick an agent CLI like cursor-agent or opencode", p.ID, filepath.Base(p.Command))
+			}
+			if err := validateCLIArgs(p.Args); err != nil {
+				return fmt.Errorf("provider %s: %w", p.ID, err)
+			}
 		}
 		if err := writeConfig(cfg); err != nil {
 			return err

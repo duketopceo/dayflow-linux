@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"regexp"
@@ -12,10 +13,13 @@ import (
 	"time"
 )
 
-// Agent-session recaps: a generated one-sentence summary of what a Claude
-// Code / Codex session accomplished, cached per transcript file and gated by
-// Jev worthiness + quality judgments. All failures degrade to the plain
-// session listing — recaps are an enhancement, never a dependency.
+// Agent-session recaps: a generated one-sentence summary of what a coding-
+// agent session accomplished, cached per session and gated by Jev
+// worthiness + quality judgments. Per-source adapters (agentSource) supply
+// the cache fingerprint and bounded excerpt, so this file never knows a
+// store's shape — File is a stat-able transcript path only for JSONL
+// sources. All failures degrade to the plain session listing — recaps are
+// an enhancement, never a dependency.
 
 // recapFingerprint invalidates a cached recap when the transcript changes.
 type recapFingerprint struct {
@@ -31,23 +35,69 @@ func fingerprint(path string) (recapFingerprint, bool) {
 	return recapFingerprint{Mtime: st.ModTime().Unix(), Size: st.Size()}, true
 }
 
+// hashFingerprint folds a sha256 message-content hash into the
+// recapFingerprint pair every DB-backed source uses (first 16 bytes split
+// into Mtime/Size).
+func hashFingerprint(sum []byte) recapFingerprint {
+	return recapFingerprint{
+		Mtime: int64(binary.BigEndian.Uint64(sum[:8])),
+		Size:  int64(binary.BigEndian.Uint64(sum[8:16])),
+	}
+}
+
+// recapRow is one cached agent_recaps row's lookup-relevant fields.
+type recapRow struct {
+	recap   string
+	quality *float64
+	mtime   int64
+	size    int64
+}
+
+// cachedRecaps batch-loads all stored recaps for the given session keys —
+// one query per pass instead of one per session.
+func cachedRecaps(db *sql.DB, paths []string) map[string]recapRow {
+	out := map[string]recapRow{}
+	if len(paths) == 0 {
+		return out
+	}
+	var sb strings.Builder
+	args := make([]any, 0, len(paths))
+	for _, p := range paths {
+		if len(args) > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteByte('?')
+		args = append(args, p)
+	}
+	rows, err := db.Query(`SELECT path, recap, quality_confidence, file_mtime, file_size
+	  FROM agent_recaps WHERE path IN (`+sb.String()+`)`, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		var r recapRow
+		if rows.Scan(&p, &r.recap, &r.quality, &r.mtime, &r.size) == nil {
+			out[p] = r
+		}
+	}
+	return out
+}
+
+// fresh reports whether a cached recap row still describes the session —
+// the stored fingerprint must equal the adapter's current one.
+func fresh(r recapRow, fp recapFingerprint) bool {
+	return r.mtime == fp.Mtime && r.size == fp.Size
+}
+
 // cachedRecap returns the stored recap when its fingerprint still matches the
-// file on disk. A stored row with recap=” means "judged unworthy" — fresh so
+// file on disk. A stored row with recap="" means "judged unworthy" — fresh so
 // the session is never re-judged. Transient generation failures are NOT
 // persisted, so they retry on the next view.
-func cachedRecap(db *sql.DB, path string, fp recapFingerprint) (recap string, quality *float64, fresh bool) {
-	var r struct {
-		recap   string
-		quality *float64
-		mtime   int64
-		size    int64
-	}
-	err := db.QueryRow(`SELECT recap, quality_confidence, file_mtime, file_size
-	  FROM agent_recaps WHERE path = ?`, path).Scan(&r.recap, &r.quality, &r.mtime, &r.size)
-	if err != nil {
-		return "", nil, false
-	}
-	if r.mtime != fp.Mtime || r.size != fp.Size {
+func cachedRecap(db *sql.DB, path string, fp recapFingerprint) (string, *float64, bool) {
+	r, ok := cachedRecaps(db, []string{path})[path]
+	if !ok || !fresh(r, fp) {
 		return "", nil, false
 	}
 	return r.recap, r.quality, true
@@ -67,11 +117,16 @@ func putRecap(db *sql.DB, sess AgentSession, fp recapFingerprint, recap, model s
 	return err
 }
 
-// sessionExcerpt pulls a bounded text sample from a transcript: first user
-// message, last user message, and last assistant text. Everything is
-// rune-truncated and the user's home path is scrubbed to ~ before it can
-// leave the machine.
-func sessionExcerpt(path, source string) string {
+// sessionExcerpt pulls a bounded text sample from a JSONL transcript: first
+// user message, last user message, and last assistant text. The decoder is
+// the source's registered lineRoleText — the seam counterpart to its parse
+// func — so a source's excerpt can't silently be empty because its name was
+// missing from a switch. Everything is rune-truncated and the user's home
+// path is scrubbed to ~ before it can leave the machine.
+func sessionExcerpt(path string, lineRoleText func([]byte) (role, text string)) string {
+	if lineRoleText == nil {
+		return ""
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -82,10 +137,9 @@ func sessionExcerpt(path, source string) string {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
-		role, text := lineRoleText(sc.Bytes(), source)
-		if text == "" || strings.HasPrefix(text, "<environment_context>") ||
-			strings.HasPrefix(text, "<user_instructions>") {
-			continue // codex-injected envelopes, not user intent
+		role, text := lineRoleText(sc.Bytes())
+		if text == "" || isEnvelopeText(text) {
+			continue // injected envelopes, not user intent
 		}
 		switch role {
 		case "user":
@@ -100,7 +154,45 @@ func sessionExcerpt(path, source string) string {
 	if sc.Err() != nil {
 		return "" // scan error (e.g. >1MB line) — parity with scanJSONL
 	}
+	return buildExcerpt(firstUser, lastUser, lastAssistant)
+}
 
+// excerptFromTurns accumulates the excerpt inputs shared by every DB-backed
+// adapter — first/last usable user text and last assistant text — and
+// renders them through buildExcerpt. usableUser folds in each source's own
+// predicate (real typed input for Devin, non-empty text for Cursor).
+func excerptFromTurns(turns []sessionTurn) string {
+	var firstUser, lastUser, lastAssistant string
+	for _, t := range turns {
+		text := strings.TrimSpace(t.text)
+		switch t.role {
+		case "user":
+			if !t.usableUser || text == "" || isEnvelopeText(text) {
+				continue
+			}
+			if firstUser == "" {
+				firstUser = text
+			}
+			lastUser = text
+		case "assistant":
+			if text != "" {
+				lastAssistant = text
+			}
+		}
+	}
+	return buildExcerpt(firstUser, lastUser, lastAssistant)
+}
+
+// isEnvelopeText filters tool-injected envelopes out of excerpt text.
+func isEnvelopeText(text string) bool {
+	return strings.HasPrefix(text, "<environment_context>") ||
+		strings.HasPrefix(text, "<user_instructions>")
+}
+
+// buildExcerpt renders the bounded excerpt layout shared by file-backed and
+// DB-backed sources: each field is rune-truncated and scrubbed before it can
+// reach a model endpoint.
+func buildExcerpt(firstUser, lastUser, lastAssistant string) string {
 	var b strings.Builder
 	write := func(label, s string) {
 		if s == "" {
@@ -143,37 +235,37 @@ func scrubText(s string) string {
 	return s
 }
 
-// lineRoleText decodes one JSONL line into (role, text) for a known source.
-func lineRoleText(raw []byte, source string) (string, string) {
-	switch source {
-	case "claude":
-		var line claudeLine
-		if json.Unmarshal(raw, &line) != nil {
-			return "", ""
-		}
-		if line.Type != "user" && line.Type != "assistant" {
-			return "", ""
-		}
-		var msg claudeMessage
-		if json.Unmarshal(line.Message, &msg) != nil {
-			return "", ""
-		}
-		return line.Type, strings.TrimSpace(contentText(msg.Content))
-	case "codex":
-		var line codexLine
-		if json.Unmarshal(raw, &line) != nil {
-			return "", ""
-		}
-		var p codexPayload
-		if json.Unmarshal(line.Payload, &p) != nil || p.Type != "message" {
-			return "", ""
-		}
-		if p.Role != "user" && p.Role != "assistant" {
-			return "", ""
-		}
-		return p.Role, strings.TrimSpace(contentText(p.Content))
+// claudeLineRoleText / codexLineRoleText are the per-source line decoders
+// registered on each jsonlSource — they decode one transcript line into
+// (role, text) for the excerpt, returning "" for non-message lines.
+func claudeLineRoleText(raw []byte) (string, string) {
+	var line claudeLine
+	if json.Unmarshal(raw, &line) != nil {
+		return "", ""
 	}
-	return "", ""
+	if line.Type != "user" && line.Type != "assistant" {
+		return "", ""
+	}
+	var msg claudeMessage
+	if json.Unmarshal(line.Message, &msg) != nil {
+		return "", ""
+	}
+	return line.Type, strings.TrimSpace(contentText(msg.Content))
+}
+
+func codexLineRoleText(raw []byte) (string, string) {
+	var line codexLine
+	if json.Unmarshal(raw, &line) != nil {
+		return "", ""
+	}
+	var p codexPayload
+	if json.Unmarshal(line.Payload, &p) != nil || p.Type != "message" {
+		return "", ""
+	}
+	if p.Role != "user" && p.Role != "assistant" {
+		return "", ""
+	}
+	return p.Role, strings.TrimSpace(contentText(p.Content))
 }
 
 const recapPrompt = `You are summarizing one coding-agent session for a personal work journal.
@@ -196,15 +288,14 @@ type recapResult struct {
 
 // generateRecap produces a recap for one session: Jev worthiness gate, chat
 // generation, Jev quality gate with one regeneration. Errors degrade to an
-// empty, non-cacheable result.
-func generateRecap(db *sql.DB, cfg Config, sess AgentSession, excerpt string) recapResult {
+// empty, non-cacheable result. chatModel is the chat provider's model id,
+// resolved once per pass by attachRecaps.
+func generateRecap(db *sql.DB, cfg Config, sess AgentSession, excerpt, chatModel string) recapResult {
 	var res recapResult
 	if cfg.DisableJudges {
 		return res // defense-in-depth — attachRecaps gates before calling
 	}
-	if p, err := providerForTask(cfg, "chat"); err == nil {
-		res.Model = p.Model
-	}
+	res.Model = chatModel
 	// Title/Project carry the same transcript text as the excerpt — scrub
 	// them before they reach the judge endpoint too.
 	state := boundState("project: "+scrubText(sess.Project)+"\ntitle: "+scrubText(sess.Title)+
@@ -292,27 +383,64 @@ const maxNewRecaps = 8
 // caching where needed. Cached rows are always served; new generation is
 // suppressed when cfg.DisableJudges is set (read-only/no-egress contexts) or
 // the excerpt is empty. Individual failures never fail the listing.
-func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
+//
+// srcs should be the adapter set the scan pass used (scanAgentSources'
+// optional share): DB-backed sources keep one lazily-opened store handle —
+// and at most one WAL temp copy — across the whole pass. With no adapters
+// passed, attachRecaps builds its own set and releases it before returning.
+func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession, srcs ...agentSource) {
 	if db == nil {
 		return
 	}
+	if len(srcs) == 0 {
+		srcs = agentSources()
+		defer closeAgentSources(srcs)
+	}
+	srcFor := func(name string) agentSource {
+		for _, s := range srcs {
+			if s != nil && s.Name() == name {
+				return s
+			}
+		}
+		return nil
+	}
 	// Cache hits first (any order), then generate for the largest uncached
-	// sessions within the cap.
+	// sessions within the cap. Fingerprint/excerpt come from the session's
+	// source adapter — File is a stat-able path only for JSONL sources, so
+	// attachRecaps never stats it directly (KTD2).
+	paths := make([]string, 0, len(sessions))
+	for i := range sessions {
+		paths = append(paths, sessions[i].File)
+	}
+	cached := cachedRecaps(db, paths)
 	order := make([]int, 0, len(sessions))
 	for i := range sessions {
-		fp, ok := fingerprint(sessions[i].File)
+		src := srcFor(sessions[i].Source)
+		if src == nil {
+			continue
+		}
+		fp, ok := src.Fingerprint(sessions[i])
 		if !ok {
 			continue
 		}
-		if recap, quality, fresh := cachedRecap(db, sessions[i].File, fp); fresh {
-			sessions[i].Recap = recap
-			sessions[i].RecapConfidence = quality
+		if r, ok := cached[sessions[i].File]; ok && fresh(r, fp) {
+			sessions[i].Recap = r.recap
+			sessions[i].RecapConfidence = r.quality
 			continue
 		}
 		order = append(order, i)
 	}
 	if cfg.DisableJudges || !cfg.AgentRecaps {
 		return // no-egress contexts and the durable opt-out serve cache only
+	}
+	// Resolve the chat route once per pass. A cli provider runs at
+	// minutes-scale while the 45s deadline is only checked between
+	// sessions — one exec could stall the whole view and starve every
+	// recap, so the pass degrades to cache-only like DisableJudges.
+	chatP, _ := providerForTask(cfg, "chat")
+	if chatP.Kind == "cli" {
+		debugf(cfg, "agent recaps: chat provider %q is cli (minutes-scale); serving cached only", chatP.ID)
+		return
 	}
 	sort.Slice(order, func(a, b int) bool {
 		return sessions[order[a]].Messages > sessions[order[b]].Messages
@@ -326,15 +454,19 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 		if generated >= maxNewRecaps || time.Now().After(deadline) {
 			break
 		}
+		src := srcFor(sessions[i].Source)
+		if src == nil {
+			continue
+		}
 		// Fingerprint before extraction AND after generation — an active
 		// transcript can grow mid-pass, and a cached row must describe the
 		// excerpt it was generated from.
-		beforeFP, beforeOK := fingerprint(sessions[i].File)
-		excerpt := sessionExcerpt(sessions[i].File, sessions[i].Source)
+		beforeFP, beforeOK := src.Fingerprint(sessions[i])
+		excerpt := src.Excerpt(sessions[i])
 		if excerpt == "" {
 			// Settle it: nothing to summarize now. Fingerprint still
 			// invalidates the row if the transcript grows.
-			afterFP, afterOK := fingerprint(sessions[i].File)
+			afterFP, afterOK := src.Fingerprint(sessions[i])
 			if beforeOK && afterOK && beforeFP == afterFP {
 				if err := putRecap(db, sessions[i], afterFP, "", "", nil, nil); err != nil {
 					debugf(cfg, "recap cache write %s: %v", sessions[i].File, err)
@@ -343,8 +475,8 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession) {
 			continue
 		}
 		generated++
-		res := generateRecap(db, cfg, sessions[i], excerpt)
-		afterFP, afterOK := fingerprint(sessions[i].File)
+		res := generateRecap(db, cfg, sessions[i], excerpt, chatP.Model)
+		afterFP, afterOK := src.Fingerprint(sessions[i])
 		if res.Cacheable && beforeOK && afterOK && beforeFP == afterFP {
 			if err := putRecap(db, sessions[i], afterFP, res.Text, res.Model, res.Worthy, res.Quality); err != nil {
 				debugf(cfg, "recap cache write %s: %v", sessions[i].File, err)

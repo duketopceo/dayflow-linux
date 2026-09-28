@@ -13,9 +13,11 @@ It captures a lightweight screenshot every 10 seconds, deduplicates unchanged fr
 - **Light**: single static Go binary, ~25MB RAM, sub-1% CPU.
 - **Private controls**: pause toggle, per-app ignore list, automatic frame deletion, retention pruning.
 - **Activity chunking**: each block is split into per-app segments (`activities[]`) and consecutive same-app blocks merge into cards. Failed summaries retry automatically (max 3 attempts, then `dead`; `dayflow retry` resets).
-- **Multi-provider routing**: configure multiple OpenRouter / custom / local / MCP providers and route vision, summary, review, standup, chat, and classification tasks to different endpoints.
+- **Multi-provider routing**: configure multiple OpenRouter / custom / local / MCP / CLI providers and route vision, summary, review, standup, chat, and classification tasks to different endpoints. `kind: "cli"` shells out to subscription-authenticated agent CLIs (`cursor-agent`, `opencode`) — no dayflow-held API key, but note the CLI still sends prompts (and any referenced frames) to its own model backend.
+- **Semantic activity cards**: contiguous same-activity blocks merge into single cards everywhere — `day`/`timeline`/`week`/`month`/`insights --json`, MCP `get_timeline`/`get_insights`, and the QML panel all consume the same engine-emitted `cards` array.
+- **Frame normalization**: stored frames are downscaled to a configurable long edge (`frame_max_dim`, default 1920, `0` = off) — smaller storage, cheaper vision egress. Dedup hashing is unchanged (it runs on the decoded frame before resize).
 - **Jev classification**: after the vision model writes title/summary, [TypeSafe Jev](https://openrouter.ai/typesafe/jev-1.13) (`typesafe/jev-1.13` via OpenRouter's decisions API) picks category and productive flag — fast, typed, and calibrated instead of asking the vision model to guess both.
-- **Agent-session recaps**: Claude Code and Codex sessions get a generated one-line recap of what was accomplished — Jev judges which sessions are worth summarizing and scores the result. Cached per transcript; `dayflow agents --no-recaps` for the raw list.
+- **Agent-session recaps**: five sources — Claude Code, Codex, OpenCode, Devin, and Cursor — get a generated one-line recap of what was accomplished — Jev judges which sessions are worth summarizing and scores the result. Cached per transcript; `dayflow agents --no-recaps` for the raw list. Per-source status is reported so a store that silently drifted is visible rather than empty. Store paths are overridable via `DAYFLOW_*_DIR`/`DAYFLOW_*_DB` env vars (see docs/agent-contract.md).
 - **Daily goals + streaks**: set a goal for the day, check it off, and track your consecutive-day completion streak (current, best, and all-time totals).
 - **Week-over-week trends**: the weekly view diffs this week against last — tracked/focus/distraction/shift deltas plus per-category movement in minutes and share points.
 - **Chat with your journal**: ask natural-language questions about your timeline, standup, weekly analytics, or search your journal.
@@ -102,7 +104,7 @@ omarchy plugin enable io.github.duketopceo.dayflow
 
 Bar widget: recording indicator; left-click opens the timeline panel, right-click pauses/resumes. The panel shows today's blocks, engine stats, the ignore list, and pause / ignore-focused-app / summarize-now / standup / insights controls.
 
-The panel's **Full view** button opens a standalone window with Today/Week timelines, a timelapse frame scrubber (requires `dayflow playback on`), a context-shift flow diagram, Claude Code/Codex session recaps, and a next-day forecast.
+The panel's **Full view** button opens a standalone window with Today/Week timelines, a timelapse frame scrubber (requires `dayflow playback on`), a context-shift flow diagram, agent-session recaps (Claude Code, Codex, OpenCode, Devin, Cursor), and a next-day forecast.
 
 ## Uninstall
 
@@ -143,7 +145,7 @@ dayflow usage                  # token totals across all API calls
 dayflow blocks                 # failed summaries (auto-retried)
 dayflow frames [YYYY-MM-DD]    # list captured frames for a day
 dayflow playback on|off|status # opt-in frame retention for timelapse (10GB cap)
-dayflow agents [YYYY-MM-DD]    # Claude Code / Codex sessions + generated recaps
+dayflow agents [YYYY-MM-DD]    # Claude Code / Codex / OpenCode / Devin / Cursor sessions + recaps
 dayflow agents --no-recaps     # fast session list, no model calls
 dayflow forecast [YYYY-MM-DD]  # predict a day's category mix from history (default: tomorrow)
 dayflow goal [set <text>|done|clear] [--date D]  # daily goal + completion streak
@@ -179,6 +181,7 @@ All query commands accept `--json`.
 | `block_minutes` | 15 | summary granularity |
 | `frames_per_block` | 30 | frames sampled per API call |
 | `jpeg_quality` | 55 | grim JPEG quality |
+| `frame_max_dim` | 1920 | downscale stored frames so the long edge is ≤ N px; 0 = store native res. Frames are an all-outputs composite — when docked, per-display fidelity is lower |
 | `keep_frames` | false | keep raw frames after summarizing |
 | `retention_days` | 0 | prunes frames, events, and api logs older than N days; 0 = keep until the storage caps below |
 | `max_frames_mb` | 20480 | cap on frames + quarantine dirs; 0 = unlimited |

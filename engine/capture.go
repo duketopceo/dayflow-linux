@@ -2,17 +2,21 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"image"
-	_ "image/jpeg"
+	"image/jpeg"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	xdraw "golang.org/x/image/draw"
 )
 
 func configMtime() time.Time {
@@ -201,14 +205,25 @@ func resolveCaptureCommand(cfg Config) ([]string, error) {
 	return append(args, "-"), nil
 }
 
+// grabFrameTimeout bounds one capture_command run — a hung screenshot tool
+// must not stall the capture loop forever. A var so tests can shrink it.
+var grabFrameTimeout = 30 * time.Second
+
 func grabFrame(cmdArgs []string) ([]byte, error) {
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	ctx, cancel := context.WithTimeout(context.Background(), grabFrameTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+	// grim output is bounded by screen size, but a custom capture_command
+	// can stream arbitrarily — cap before an infinite stream OOMs us.
+	out := &cappedBuffer{limit: 64 << 20}
+	cmd.Stdout = out
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("capture command timed out after %s: %w", grabFrameTimeout, err)
+		}
 		return nil, err
 	}
-	return out.Bytes(), nil
+	return out.buf.Bytes(), nil
 }
 
 const dedupThreshold = 5 // hamming distance out of 256 bits
@@ -281,22 +296,62 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) 
 		return lastHash, true, nil // screen unchanged
 	}
 
+	stored := storedFrame(img, raw, cfg)
 	now := time.Now()
 	dayDir := filepath.Join(framesDir(), now.Format("2006-01-02"))
 	if err := os.MkdirAll(dayDir, 0o700); err != nil {
 		return lastHash, true, err
 	}
 	path := filepath.Join(dayDir, now.Format("150405")+".jpg")
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
+	if err := os.WriteFile(path, stored, 0o600); err != nil {
 		return lastHash, true, err
 	}
-	if err := insertFrameApp(db, now, path, cls, int64(len(raw))); err != nil {
+	if err := insertFrameApp(db, now, path, cls, int64(len(stored))); err != nil {
 		os.Remove(path)
 		return lastHash, true, err
 	}
 	logEvent(db, "capture_saved", path)
-	debugf(cfg, "capture: saved %s (%d bytes, app %s)", filepath.Base(path), len(raw), cls)
+	debugf(cfg, "capture: saved %s (%d bytes, app %s)", filepath.Base(path), len(stored), cls)
 	return &h, true, nil
+}
+
+// storedFrame returns the bytes to persist for a frame that survived dedup.
+// When frame_max_dim is set and the frame's longer edge exceeds it, the
+// decoded image is downscaled with its aspect ratio preserved and
+// re-encoded at jpeg_quality; anything already under the cap — or the cap
+// disabled with 0 — keeps the capture command's original bytes, so
+// normalization costs nothing on frames that don't need it. grim emits an
+// all-outputs composite, so the cap bounds the composite's long edge, not
+// any single display.
+func storedFrame(img image.Image, raw []byte, cfg Config) []byte {
+	if cfg.FrameMaxDim <= 0 {
+		return raw
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	long := w
+	if h > w {
+		long = h
+	}
+	if long <= cfg.FrameMaxDim {
+		return raw
+	}
+	scale := float64(cfg.FrameMaxDim) / float64(long)
+	dw := int(math.Round(float64(w) * scale))
+	dh := int(math.Round(float64(h) * scale))
+	if dw < 1 {
+		dw = 1
+	}
+	if dh < 1 {
+		dh = 1
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, b, xdraw.Over, nil)
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: cfg.JPEGQuality}); err != nil {
+		return raw
+	}
+	return buf.Bytes()
 }
 
 // runRetention reconciles the frames dir with the frames table, then deletes
@@ -774,12 +829,13 @@ func runDaemon(cfg Config) error {
 			if !cfg.AutoPauseLocked {
 				continue
 			}
-			if screenLocked() && !paused() && !locked {
+			isLocked := screenLocked() // one loginctl spawn per tick, not two
+			if isLocked && !paused() && !locked {
 				locked = true
 				lastHash = nil
 				logEvent(db, "auto_paused", "screen locked")
 				debugf(cfg, "auto-paused: screen locked")
-			} else if !screenLocked() && locked {
+			} else if !isLocked && locked {
 				locked = false
 				logEvent(db, "auto_resumed", "screen unlocked")
 				debugf(cfg, "auto-resumed: screen unlocked")

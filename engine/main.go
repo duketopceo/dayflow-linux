@@ -68,7 +68,8 @@ Query:
   day <YYYY-MM-DD> [--json] [--grid]   Timeline, or the daily workflow grid
   status [--json]     Show recording state and counts
   frames [YYYY-MM-DD] [--json]   List captured frames for a day
-  agents [YYYY-MM-DD] [--json] [--no-recaps]   Coding-agent sessions + recaps (Claude Code, Codex)
+  agents [YYYY-MM-DD] [--json] [--no-recaps]   Coding-agent sessions + recaps
+                          (Claude Code, Codex, OpenCode, Devin, Cursor)
   forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
                           (default: tomorrow)
   playback [on|off|status] [--json]   Opt-in frame retention for timelapse
@@ -87,9 +88,9 @@ Control:
   config                  Print config path and current config
   config set <key> <val>  Update config (model, api_base_url, capture_interval_sec,
                           block_minutes, frames_per_block, jpeg_quality, keep_frames,
-                          retention_days, max_storage_mb, auto_pause_locked, ignore_apps,
-                          output, capture_command, openrouter_api_key, provider,
-                          filter_inappropriate, panel_expanded, debug)
+                          frame_max_dim, retention_days, max_storage_mb, auto_pause_locked,
+                          ignore_apps, output, capture_command, openrouter_api_key,
+                          provider, filter_inappropriate, panel_expanded, debug)
                           Use "-" as the value to read it from stdin (keeps
                           secrets out of argv and shell history)
   config patch <json|-> Merge a JSON object into the config
@@ -98,11 +99,14 @@ Control:
   log [--limit N] [--json]   Tail debug.log (default last 50 lines)
   provider [list]       List configured providers and routing
   provider add <id> <kind>          Add a provider (openrouter, local, custom,
-                                    gemini, chatgpt, claude, mcp)
+                                    gemini, chatgpt, claude, mcp, cli)
   provider set <id> <key> <value>   Update a provider (name, kind, api_base_url,
                                     api_key, model, enabled, vision, chat,
                                     title_prompt, summary_prompt,
-                                    detailed_prompt, chat_prompt)
+                                    detailed_prompt, chat_prompt;
+                                    cli: command, args, cli_timeout_sec,
+                                    env_passthrough, scratch_home,
+                                    allow_hot_path)
   provider remove <id>              Remove a provider
   provider test <id|task>           Test a provider or a routed task (vision,
                                     summary, detailed, chat, review, standup)
@@ -273,16 +277,15 @@ func main() {
 		// with generated recaps (cached; --no-recaps for a fast local list)
 		d, err := dateArg(args, time.Now())
 		fatal(err)
+		// Drift bookkeeping reads/writes meta+events even under --no-recaps
+		// — open the db whenever we can; degrade to metadata-only rather
+		// than failing the command.
 		var db *sql.DB
-		if !hasFlag(args, "--no-recaps") {
-			// The listing itself doesn't need the db — degrade to
-			// metadata-only rather than failing the command.
-			if db, err = openDB(); err != nil {
-				fmt.Fprintf(os.Stderr, "agents: recaps unavailable: %v\n", err)
-				db = nil
-			} else {
-				defer db.Close()
-			}
+		if db, err = openDB(); err != nil {
+			fmt.Fprintf(os.Stderr, "agents: database unavailable: %v\n", err)
+			db = nil
+		} else {
+			defer db.Close()
 		}
 		printAgentSessions(db, cfg, d, jsonOut, !hasFlag(args, "--no-recaps"))
 
@@ -449,8 +452,10 @@ func main() {
 		blocks, err := blocksBetween(db, start, end)
 		fatal(err)
 		if jsonOut {
-			json.NewEncoder(os.Stdout).Encode(map[string]any{
-				"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02"), "blocks": blocks})
+			payload := timelineJSON(blocks)
+			payload["start"] = start.Format("2006-01-02")
+			payload["end"] = end.Format("2006-01-02")
+			json.NewEncoder(os.Stdout).Encode(payload)
 		} else {
 			fmt.Print(markdownTimeline(blocks, "dayflow "+cmd))
 		}
@@ -1128,11 +1133,9 @@ func printTimeline(cfg Config, day time.Time, asJSON bool) {
 	blocks, err := blocksForDay(db, day, true)
 	fatal(err)
 	if asJSON {
-		json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"date":   day.Format("2006-01-02"),
-			"blocks": blocks,
-			"cards":  mergeCards(blocks),
-		})
+		payload := timelineJSON(blocks)
+		payload["date"] = day.Format("2006-01-02")
+		json.NewEncoder(os.Stdout).Encode(payload)
 		return
 	}
 	fmt.Printf("== %s ==\n", day.Format("Monday, 2 January 2006"))

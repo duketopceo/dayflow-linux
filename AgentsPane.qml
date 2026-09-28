@@ -2,9 +2,9 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// FullView "Agents" pane — Claude Code / Codex session recaps for the
-// viewed day. `host` is the FullView window, which owns the session list
-// and the loader process.
+// FullView "Agents" pane — coding-agent session recaps (Claude Code,
+// Codex, OpenCode, Devin, Cursor) for the viewed day. `host` is the
+// FullView window, which owns the session list and the loader process.
 Column {
   id: pane
 
@@ -41,11 +41,37 @@ Column {
   Text {
     visible: host !== null && !host.agentsLoading &&
       host.agentSessions.length === 0 && host.agentsError === ""
-    text: "No Claude Code or Codex sessions on this day."
+    text: "No Claude Code, Codex, OpenCode, Devin, or Cursor sessions on this day."
     textFormat: Text.PlainText
     color: pane.dayflow ? pane.dayflow.dim : "gray"
     font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
     font.pixelSize: Style.font.body
+  }
+
+  // One dim line per store that scanned unavailable or drifted — an empty
+  // session list caused by a broken/moved store must not read as a quiet day.
+  readonly property string agentSourceNote: {
+    var srcs = host && host.agentSources ? host.agentSources : []
+    var lines = []
+    for (var i = 0; i < srcs.length; i++) {
+      var s = srcs[i]
+      if (s.status === "unavailable" || s.drift === true) {
+        var note = (s.note && s.note !== "") ? s.note : "store unavailable"
+        lines.push(s.source + ": " + note + (s.drift === true ? " — may have drifted" : ""))
+      }
+    }
+    return lines.join("\n")
+  }
+
+  Text {
+    visible: host !== null && !host.agentsLoading && pane.agentSourceNote !== ""
+    text: pane.agentSourceNote
+    textFormat: Text.PlainText
+    wrapMode: Text.WordWrap
+    width: parent.width
+    color: pane.dayflow ? pane.dayflow.dim : "gray"
+    font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+    font.pixelSize: Style.font.caption
   }
 
   Flickable {

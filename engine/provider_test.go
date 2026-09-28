@@ -318,6 +318,563 @@ func TestProviderChatRequiresKeyEvenWithCustomBaseURL(t *testing.T) {
 	}
 }
 
+// writeFakeCLI drops an executable shell script in a temp dir and returns
+// its path — the stand-in for cursor-agent/opencode in cli provider tests.
+func writeFakeCLI(t *testing.T, script string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "fakecli")
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func cliProvider(command string, args ...string) Provider {
+	return Provider{
+		ID: "cli1", Kind: "cli", Command: command, Args: args,
+		Enabled: true,
+	}
+}
+
+// A cli provider serves the routed chat task: the flattened prompt arrives
+// on stdin and the child's stdout is the response.
+func TestCLIProviderTextRoundTrip(t *testing.T) {
+	testEnv(t)
+	fake := writeFakeCLI(t, "#!/bin/sh\ncat\n")
+	cfg := defaultConfig()
+	cfg.Providers = []Provider{
+		{ID: "or1", Kind: "openrouter", APIKey: "k", Model: "m", Enabled: true},
+		cliProvider(fake, "--print"),
+	}
+	cfg.Routing = Routing{Primary: "or1", TaskProvider: map[string]string{"chat": "cli1"}}
+
+	text, pt, ct, err := callProviderText(cfg, "chat", "SYSTEM PROMPT", "hello cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "SYSTEM PROMPT") || !strings.Contains(text, "hello cli") {
+		t.Fatalf("echoed prompt missing parts: %q", text)
+	}
+	if pt != 0 || ct != 0 {
+		t.Fatalf("cli calls report no tokens, got %d/%d", pt, ct)
+	}
+}
+
+// cli needs no API key at all — resolveProviderKey is never consulted.
+func TestCLIProviderNeedsNoAPIKey(t *testing.T) {
+	if providerNeedsAuth(Provider{Kind: "cli"}) {
+		t.Fatal("cli provider must not require an API key")
+	}
+	testEnv(t)
+	fake := writeFakeCLI(t, "#!/bin/sh\necho ok\n")
+	p := cliProvider(fake) // no APIKey, no keyring — must not hit the auth gate
+	text, _, _, err := callProviderChat(defaultConfig(), p, []orMessage{{Role: "user", Content: []orContent{{Type: "text", Text: "hi"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "ok" {
+		t.Fatalf("text=%q", text)
+	}
+}
+
+// Vision calls on a cli provider pass staged frame paths — via {file} args
+// and referenced inside the prompt — instead of base64 payloads.
+func TestCLIProviderVisionPassesFramePaths(t *testing.T) {
+	testEnv(t)
+	rec := t.TempDir()
+	fake := writeFakeCLI(t, `#!/bin/sh
+printf '%s\n' "$@" > "$REC/args.txt"
+cat > "$REC/stdin.txt"
+for a in "$@"; do
+  case "$a" in
+    --file=*) f="${a#--file=}"; [ -f "$f" ] && echo "$f" >> "$REC/readable.txt" ;;
+  esac
+done
+printf '{"title":"CLI vision","summary":"did cli things","category":"coding"}\n'
+`)
+	t.Setenv("REC", rec)
+	f1 := writeFrame(t, t.TempDir(), "a.jpg", time.Now())
+	f2 := writeFrame(t, t.TempDir(), "b.jpg", time.Now())
+
+	p := cliProvider(fake, "run", "--file={file}")
+	p.AllowHotPath = true // required for the vision task
+	p.EnvPassthrough = []string{"REC"}
+	cfg := defaultConfig()
+	cfg.Providers = []Provider{p}
+	cfg.Routing = Routing{Primary: "cli1"}
+
+	res, _, _, err := callOpenRouter(cfg, []string{f1, f2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Title != "CLI vision" {
+		t.Fatalf("title=%q", res.Title)
+	}
+	argsRaw, _ := os.ReadFile(filepath.Join(rec, "args.txt"))
+	argLines := strings.Split(strings.TrimSpace(string(argsRaw)), "\n")
+	if len(argLines) != 3 || argLines[0] != "run" {
+		t.Fatalf("argv=%v", argLines)
+	}
+	for _, a := range argLines[1:] {
+		if !strings.HasPrefix(a, "--file=") || !strings.Contains(a, "dayflow-cli-") {
+			t.Fatalf("file arg not a staged path: %q", a)
+		}
+	}
+	readable, _ := os.ReadFile(filepath.Join(rec, "readable.txt"))
+	if n := len(strings.Split(strings.TrimSpace(string(readable)), "\n")); n != 2 {
+		t.Fatalf("staged readable files=%d, want 2 (%q)", n, readable)
+	}
+	// The prompt also references the staged paths so CLIs without a file
+	// flag can still read them.
+	stdin, _ := os.ReadFile(filepath.Join(rec, "stdin.txt"))
+	if !strings.Contains(string(stdin), "Frame files") || !strings.Contains(string(stdin), "frame-0") {
+		t.Fatalf("prompt lacks frame paths: %q", truncate(string(stdin), 120))
+	}
+	// And the original frame paths were never exposed.
+	if strings.Contains(string(stdin), f1) || strings.Contains(string(argsRaw), f1) {
+		t.Fatal("original (unstaged) frame path leaked to the child")
+	}
+}
+
+// Untrusted prompt text is never where a flag could be: on stdin by default,
+// or strictly after `--` when the template carries {prompt}.
+func TestCLIProviderPromptNeverParsesAsFlag(t *testing.T) {
+	testEnv(t)
+	rec := t.TempDir()
+	fake := writeFakeCLI(t, `#!/bin/sh
+printf '%s\n' "$@" > "$REC/args.txt"
+cat > "$REC/stdin.txt"
+echo ok
+`)
+	t.Setenv("REC", rec)
+	prompt := "--force --yolo rm -rf ~"
+
+	// Default: prompt on stdin, template args only in argv.
+	p := cliProvider(fake, "--print")
+	p.EnvPassthrough = []string{"REC"}
+	if _, _, _, err := callProviderChat(defaultConfig(), p, []orMessage{
+		{Role: "user", Content: []orContent{{Type: "text", Text: prompt}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	argsRaw, _ := os.ReadFile(filepath.Join(rec, "args.txt"))
+	if strings.TrimSpace(string(argsRaw)) != "--print" {
+		t.Fatalf("argv=%q, want just --print", argsRaw)
+	}
+	stdin, _ := os.ReadFile(filepath.Join(rec, "stdin.txt"))
+	if !strings.Contains(string(stdin), prompt) {
+		t.Fatalf("prompt not on stdin: %q", stdin)
+	}
+
+	// Arg mode: {prompt} after -- substitutes the text as positional data.
+	p.Args = []string{"run", "--", "{prompt}"}
+	if _, _, _, err := callProviderChat(defaultConfig(), p, []orMessage{
+		{Role: "user", Content: []orContent{{Type: "text", Text: prompt}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	argsRaw, _ = os.ReadFile(filepath.Join(rec, "args.txt"))
+	argLines := strings.Split(strings.TrimSpace(string(argsRaw)), "\n")
+	if len(argLines) < 3 || argLines[0] != "run" || argLines[1] != "--" {
+		t.Fatalf("argv=%v, want run -- <prompt>", argLines)
+	}
+	// The prompt is one argv element after -- (it contains newlines from the
+	// role label, which is why it spans several recorded lines).
+	if got := strings.Join(argLines[2:], "\n"); !strings.Contains(got, prompt) {
+		t.Fatalf("prompt arg = %q", got)
+	}
+}
+
+// The child gets a minimal env allowlist — daemon env (API keys, sentinel
+// vars) is not inherited.
+func TestCLIProviderChildEnvIsAllowlisted(t *testing.T) {
+	testEnv(t)
+	rec := t.TempDir()
+	fake := writeFakeCLI(t, "#!/bin/sh\nenv > \"$REC/env.txt\"\necho ok\n")
+	t.Setenv("REC", rec)
+	t.Setenv("DAYFLOW_SENTINEL", "sekret-value")
+
+	p := cliProvider(fake)
+	p.EnvPassthrough = []string{"REC"}
+	if _, _, _, err := callProviderChat(defaultConfig(), p, []orMessage{
+		{Role: "user", Content: []orContent{{Type: "text", Text: "hi"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := os.ReadFile(filepath.Join(rec, "env.txt"))
+	s := string(env)
+	if !strings.Contains(s, "PATH=") || !strings.Contains(s, "HOME=") || !strings.Contains(s, "REC=") {
+		t.Fatalf("allowlist vars missing from child env:\n%s", s)
+	}
+	if strings.Contains(s, "DAYFLOW_SENTINEL") {
+		t.Fatal("daemon env leaked into the cli child")
+	}
+}
+
+func TestCLIProviderFailures(t *testing.T) {
+	testEnv(t)
+	msgs := []orMessage{{Role: "user", Content: []orContent{{Type: "text", Text: "hi"}}}}
+
+	t.Run("nonzero exit", func(t *testing.T) {
+		fake := writeFakeCLI(t, "#!/bin/sh\necho something broke >&2\nexit 3\n")
+		_, _, _, err := callProviderChat(defaultConfig(), cliProvider(fake), msgs)
+		if err == nil || !strings.Contains(err.Error(), "something broke") {
+			t.Fatalf("err=%v", err)
+		}
+		if isTransientProviderErr(err) {
+			t.Fatal("cli failures are not retried at minutes-scale cost")
+		}
+	})
+
+	t.Run("timeout kills", func(t *testing.T) {
+		fake := writeFakeCLI(t, "#!/bin/sh\nsleep 60\n")
+		p := cliProvider(fake)
+		p.CLITimeoutSec = 1
+		start := time.Now()
+		_, _, _, err := callProviderChat(defaultConfig(), p, msgs)
+		if err == nil || !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("err=%v", err)
+		}
+		if time.Since(start) > 30*time.Second {
+			t.Fatal("timeout was not enforced")
+		}
+	})
+
+	t.Run("missing binary", func(t *testing.T) {
+		p := cliProvider("/nonexistent/dayflow-cli-nope")
+		_, _, _, err := callProviderChat(defaultConfig(), p, msgs)
+		if err == nil {
+			t.Fatal("expected an error for a missing command")
+		}
+	})
+
+	t.Run("empty command", func(t *testing.T) {
+		_, _, _, err := callProviderChat(defaultConfig(), cliProvider(""), msgs)
+		if err == nil || !strings.Contains(err.Error(), "no command configured") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+}
+
+// Control characters are stripped so stored CLI output stays plain text.
+func TestCLIProviderStripsControlChars(t *testing.T) {
+	testEnv(t)
+	fake := writeFakeCLI(t, "#!/bin/sh\nprintf 'hello\\033[31m world\\007\\n'\n")
+	text, _, _, err := callProviderChat(defaultConfig(), cliProvider(fake), []orMessage{
+		{Role: "user", Content: []orContent{{Type: "text", Text: "hi"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "hello[31m world" {
+		t.Fatalf("text=%q", text)
+	}
+}
+
+// cli providers are ineligible for the per-block vision/summary loop unless
+// the config opts in with allow_hot_path.
+func TestCLIProviderHotPathRoutingGuard(t *testing.T) {
+	mk := func(hot bool) Config {
+		cfg := defaultConfig()
+		cfg.Providers = []Provider{
+			{ID: "or1", Kind: "openrouter", APIKey: "k", Model: "m", Enabled: true},
+			{ID: "cli1", Kind: "cli", Command: "/bin/cat", Enabled: true, AllowHotPath: hot},
+		}
+		cfg.Routing = Routing{
+			Primary:      "or1",
+			TaskProvider: map[string]string{"vision": "cli1", "summary": "cli1", "chat": "cli1"},
+		}
+		return cfg
+	}
+
+	// Without opt-in, task overrides pointing at a cli provider are skipped.
+	cfg := mk(false)
+	for _, task := range []string{"vision", "summary"} {
+		p, err := providerForTask(cfg, task)
+		if err != nil {
+			t.Fatalf("%s: %v", task, err)
+		}
+		if p.ID != "or1" {
+			t.Fatalf("%s routed to %q — cli provider should be skipped without allow_hot_path", task, p.ID)
+		}
+	}
+	// Text tasks route fine.
+	p, err := providerForTask(cfg, "chat")
+	if err != nil || p.ID != "cli1" {
+		t.Fatalf("chat = %+v, err=%v", p, err)
+	}
+
+	// Cli-only config: vision errors with an actionable hint.
+	cfg2 := defaultConfig()
+	cfg2.Providers = []Provider{{ID: "cli1", Kind: "cli", Command: "/bin/cat", Enabled: true}}
+	cfg2.Routing = Routing{Primary: "cli1"}
+	if _, err := providerForTask(cfg2, "vision"); err == nil || !strings.Contains(err.Error(), "allow_hot_path") {
+		t.Fatalf("err=%v, want an allow_hot_path hint", err)
+	}
+
+	// Opt-in makes the cli provider eligible.
+	p, err = providerForTask(mk(true), "vision")
+	if err != nil || p.ID != "cli1" {
+		t.Fatalf("vision with allow_hot_path = %+v, err=%v", p, err)
+	}
+}
+
+// provider set validates the args template: deny-listed flags are rejected
+// at config-write time, and {prompt} must stand alone after --.
+func TestCLIProviderSetValidation(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DAYFLOW_CONFIG", filepath.Join(dir, "config.json"))
+	t.Setenv("DAYFLOW_DATA_DIR", dir)
+	t.Setenv("OPENROUTER_API_KEY", "")
+
+	cfg := defaultConfig()
+	cfg.Providers = []Provider{{ID: "c1", Kind: "cli", Command: "/bin/cat", Enabled: true}}
+	cfg.Routing = Routing{Primary: "c1"}
+
+	for _, bad := range []string{`["--force"]`, `["--yolo"]`, `["run","-f","x"]`, `["-p","{prompt}"]`, `["--prompt={prompt}"]`} {
+		if err := runProvider(cfg, []string{"set", "c1", "args", bad}, false); err == nil {
+			t.Fatalf("args %s accepted, want rejection", bad)
+		}
+	}
+	for _, ok := range []string{`["--print"]`, `["run","--","{prompt}"]`, `["run","--file={file}"]`} {
+		if err := runProvider(cfg, []string{"set", "c1", "args", ok}, false); err != nil {
+			t.Fatalf("args %s rejected: %v", ok, err)
+		}
+	}
+	// a known command gets preset args when none are configured
+	cfg.Providers[0].Args = nil
+	if err := runProvider(cfg, []string{"set", "c1", "command", "cursor-agent"}, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findProvider(loaded, "c1")
+	want := []string{"--print", "--output-format", "text"}
+	if got == nil || strings.Join(got.Args, " ") != strings.Join(want, " ") {
+		t.Fatalf("preset args=%v", got)
+	}
+}
+
+// End-to-end UX: provider add cli + provider test exercises the exec path.
+func TestCLIProviderAddAndTest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DAYFLOW_CONFIG", filepath.Join(dir, "config.json"))
+	t.Setenv("DAYFLOW_DATA_DIR", dir)
+	t.Setenv("OPENROUTER_API_KEY", "")
+	fake := writeFakeCLI(t, "#!/bin/sh\ncat\n")
+
+	cfg := defaultConfig()
+	if err := runProvider(cfg, []string{"add", "cur", "cli"}, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := findProvider(loaded, "cur")
+	if p == nil || p.Kind != "cli" {
+		t.Fatalf("provider=%+v", p)
+	}
+	if err := runProvider(loaded, []string{"set", "cur", "command", fake}, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ = loadConfig()
+	if err := runProvider(loaded, []string{"test", "cur"}, false); err != nil {
+		t.Fatalf("provider test via cli exec failed: %v", err)
+	}
+}
+
+// Deny-listed argv is rejected on the computed argv at exec time — a
+// hand-edited config (or config patch) can't sneak escalation flags past
+// `provider set`'s config-write validation.
+func TestCLIProviderDenyFlags(t *testing.T) {
+	testEnv(t)
+	rec := t.TempDir()
+	marker := filepath.Join(rec, "ran")
+	fake := writeFakeCLI(t, "#!/bin/sh\ntouch \"$REC/ran\"\necho ok\n")
+	t.Setenv("REC", rec)
+
+	denied := [][]string{
+		{"--yolo"},
+		{"--force=true"},
+		{"-yf"},    // bundled shorts
+		{"-vvvvf"}, // longer bundle smuggling a denied -f
+		{"-model"}, // ambiguous single-dash long flag — use --model
+		{"-c", "print(1)"},
+		{"--eval", "x"},
+		{"-i"},
+		{"-file", "x.tcl"},
+		{"--command", "x"},
+		{"--permission-mode", "bypassPermissions"},
+		{"--permission-mode=bypassPermissions"},
+		{"--approval-mode", "never"},
+		{"--ask-for-approval", "untrusted"},
+		{"--sandbox", "none"},
+		{"--dangerously-bypass-approvals-and-sandbox"},
+	}
+	for _, args := range denied {
+		os.Remove(marker)
+		p := cliProvider(fake, args...)
+		p.EnvPassthrough = []string{"REC"}
+		_, _, _, err := callProviderChat(defaultConfig(), p, []orMessage{
+			{Role: "user", Content: []orContent{{Type: "text", Text: "hi"}}},
+		})
+		if err == nil {
+			t.Fatalf("args %v: expected a deny-list error", args)
+		}
+		if _, serr := os.Stat(marker); serr == nil {
+			t.Fatalf("args %v: the cli was executed despite the denied flag", args)
+		}
+	}
+}
+
+// Interpreter commands (sh, python*, ...) would execute the prompt — or a
+// `-c`-style arg — as code. Denied both at config-write and at exec.
+func TestCLIProviderInterpreterCommandDenied(t *testing.T) {
+	testEnv(t)
+	msgs := []orMessage{{Role: "user", Content: []orContent{{Type: "text", Text: "hi"}}}}
+
+	// Exec time: the deny fires before the process is ever spawned, so even
+	// a patched-in config is safe.
+	for _, cmd := range []string{"/bin/sh", "bash", "python3", "/usr/bin/python3.11", "Python3.12", "node", "/usr/bin/env", "xargs"} {
+		_, _, _, err := callProviderChat(defaultConfig(), cliProvider(cmd), msgs)
+		if err == nil || !strings.Contains(err.Error(), "interpreter") {
+			t.Fatalf("command %q: err=%v, want interpreter denial", cmd, err)
+		}
+	}
+
+	// Config write: `provider set` refuses the same commands.
+	dir := t.TempDir()
+	t.Setenv("DAYFLOW_CONFIG", filepath.Join(dir, "config.json"))
+	cfg := defaultConfig()
+	cfg.Providers = []Provider{{ID: "c1", Kind: "cli", Enabled: true}}
+	for _, cmd := range []string{"/bin/sh", "python3"} {
+		if err := runProvider(cfg, []string{"set", "c1", "command", cmd}, false); err == nil {
+			t.Fatalf("provider set command %q accepted an interpreter", cmd)
+		}
+	}
+	loaded, _ := loadConfig()
+	if got := findProvider(loaded, "c1"); got != nil && got.Command != "" {
+		t.Fatalf("denied command %q was persisted", got.Command)
+	}
+	// A real agent-CLI-shaped command still passes.
+	if err := runProvider(cfg, []string{"set", "c1", "command", "/bin/cat"}, false); err != nil {
+		t.Fatalf("legit command rejected: %v", err)
+	}
+}
+
+// env_passthrough is a deny-filtered allowlist: loader hooks, managed
+// names, and malformed names never reach the child.
+func TestCLIProviderEnvPassthroughFiltered(t *testing.T) {
+	testEnv(t)
+	rec := t.TempDir()
+	fake := writeFakeCLI(t, "#!/bin/sh\nenv > \"$REC/env.txt\"\necho ok\n")
+	t.Setenv("REC", rec)
+	t.Setenv("LEGIT_VAR", "legit-val")
+	t.Setenv("LD_PRELOAD", "/tmp/evil.so")
+	t.Setenv("BASH_ENV", "/tmp/evil.sh")
+	t.Setenv("HTTP_PROXY", "http://evil:3128")
+
+	run := func(t *testing.T, scratchHome bool) map[string]string {
+		t.Helper()
+		os.Remove(filepath.Join(rec, "env.txt"))
+		p := cliProvider(fake)
+		p.ScratchHome = scratchHome
+		p.EnvPassthrough = []string{
+			"REC", "LEGIT_VAR",
+			"LD_PRELOAD", "PATH", "BAD-NAME", "BASH_ENV", "HTTP_PROXY", "http_proxy",
+		}
+		if _, _, _, err := callProviderChat(defaultConfig(), p, []orMessage{
+			{Role: "user", Content: []orContent{{Type: "text", Text: "hi"}}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(filepath.Join(rec, "env.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]string{}
+		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			if i := strings.Index(line, "="); i >= 0 {
+				m[line[:i]] = line[i+1:]
+			}
+		}
+		return m
+	}
+
+	env := run(t, false)
+	if env["LEGIT_VAR"] != "legit-val" {
+		t.Fatalf("legit passthrough var missing; child env=%v", env)
+	}
+	for _, name := range []string{"LD_PRELOAD", "BAD-NAME", "BASH_ENV", "HTTP_PROXY", "http_proxy"} {
+		if _, ok := env[name]; ok {
+			t.Fatalf("denied/malformed env var %s reached the child: %v", name, env)
+		}
+	}
+	if env["HOME"] != os.Getenv("HOME") {
+		t.Fatalf("default run must see the real HOME, got %q", env["HOME"])
+	}
+
+	env = run(t, true)
+	if env["HOME"] == os.Getenv("HOME") || !strings.Contains(env["HOME"], "dayflow-cli-") {
+		t.Fatalf("scratch_home should point HOME at the scratch dir, got %q", env["HOME"])
+	}
+	if env["TMPDIR"] != env["HOME"] {
+		t.Fatalf("TMPDIR=%q should be the same scratch dir as HOME=%q", env["TMPDIR"], env["HOME"])
+	}
+}
+
+// A cli vision call gets the same fence-stripping the HTTP path applies —
+// stripFences lives inside blockResultFromText so both normalize identically.
+func TestCLIProviderVisionFencedJSON(t *testing.T) {
+	testEnv(t)
+	fake := writeFakeCLI(t, "#!/bin/sh\nprintf '%s\\n' '```json\n{\"title\":\"Fenced\",\"summary\":\"did fenced things\",\"category\":\"coding\"}\n```'\n")
+	p := cliProvider(fake)
+	p.AllowHotPath = true
+	cfg := defaultConfig()
+	cfg.Providers = []Provider{p}
+	cfg.Routing = Routing{Primary: "cli1"}
+
+	f := writeFrame(t, t.TempDir(), "a.jpg", time.Now())
+	res, _, _, err := callOpenRouter(cfg, []string{f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Title != "Fenced" {
+		t.Fatalf("title=%q — fenced JSON not normalized", res.Title)
+	}
+}
+
+// A JSON escape inside a string field (\u001b) decodes to a live control
+// char — blockResultFromText strips it from every stored field so ANSI
+// escapes can't ride into blocks via the cli output's JSON.
+func TestCLIProviderVisionStripsJSONControlChars(t *testing.T) {
+	testEnv(t)
+	fake := writeFakeCLI(t, "#!/bin/sh\nprintf '%s' '{\"title\":\"cl\\u001bean title\",\"summary\":\"done\\u0007\",\"category\":\"coding\",\"activities\":[{\"app\":\"vi\\u009fm\",\"title\":\"t\",\"summary\":\"s\",\"category\":\"coding\"}]}'\n")
+	p := cliProvider(fake)
+	p.AllowHotPath = true
+	cfg := defaultConfig()
+	cfg.Providers = []Provider{p}
+	cfg.Routing = Routing{Primary: "cli1"}
+
+	f := writeFrame(t, t.TempDir(), "a.jpg", time.Now())
+	res, _, _, err := callOpenRouter(cfg, []string{f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Title != "clean title" {
+		t.Fatalf("title=%q — ESC not stripped from decoded JSON", res.Title)
+	}
+	if strings.ContainsRune(res.Summary, 0x07) || strings.ContainsRune(res.Category, 0x1b) {
+		t.Fatalf("control chars survived: summary=%q category=%q", res.Summary, res.Category)
+	}
+	if len(res.Activities) != 1 || res.Activities[0].App != "vim" {
+		t.Fatalf("activity app=%+v — C1 control not stripped", res.Activities)
+	}
+}
+
 // RequestTimeoutSec replaces the old hard-coded 120s ceiling.
 func TestCallProviderChatHonoursConfiguredTimeout(t *testing.T) {
 	stubBackoff(t)

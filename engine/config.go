@@ -29,6 +29,7 @@ type Config struct {
 	BlockMinutes         int        `json:"block_minutes"`
 	FramesPerBlock       int        `json:"frames_per_block"`
 	JPEGQuality          int        `json:"jpeg_quality"`
+	FrameMaxDim          int        `json:"frame_max_dim"` // bound stored frames' longer edge (px); 0 = keep native size; min nonzero = minFrameMaxDim
 	KeepFrames           bool       `json:"keep_frames"`
 	RetentionDays        int        `json:"retention_days"`
 	IgnoreApps           []string   `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
@@ -70,6 +71,10 @@ func normalizeAPIBaseURL(u string) string {
 	return parsed.String()
 }
 
+// minFrameMaxDim floors frame_max_dim when normalization is enabled — a
+// sub-320px long edge destroys the journal's evidentiary value.
+const minFrameMaxDim = 320
+
 func configDir() string {
 	d, err := os.UserConfigDir()
 	if err != nil {
@@ -108,6 +113,7 @@ func defaultConfig() Config {
 		BlockMinutes:         15,
 		FramesPerBlock:       30,
 		JPEGQuality:          55,
+		FrameMaxDim:          1920,
 		KeepFrames:           false,
 		RetentionDays:        0, // storage caps own eviction; days only prune when set explicitly
 		IgnoreApps:           []string{"swaylock", "hyprlock", "waylock", "gtklock", "i3lock", "xscreensaver", "screensaver"},
@@ -183,6 +189,14 @@ func loadConfig() (Config, error) {
 	}
 	if cfg.JPEGQuality <= 0 || cfg.JPEGQuality > 100 {
 		cfg.JPEGQuality = 55
+	}
+	// frame_max_dim: 0 disables normalization; a tiny positive cap (patches
+	// bypass setConfigValue's floor) would destroy journal evidence, so
+	// sub-minimum values clamp up and negatives reset to the default.
+	if cfg.FrameMaxDim < 0 {
+		cfg.FrameMaxDim = defaultConfig().FrameMaxDim
+	} else if cfg.FrameMaxDim > 0 && cfg.FrameMaxDim < minFrameMaxDim {
+		cfg.FrameMaxDim = minFrameMaxDim
 	}
 	if cfg.Model == "" {
 		cfg.Model = "google/gemma-4-31b-it"
@@ -348,7 +362,7 @@ func writeDefaultConfig() error {
 
 // setConfigValue updates one key in config.json. Supported keys:
 // provider, model, api_base_url, capture_interval_sec, block_minutes, frames_per_block,
-// jpeg_quality, keep_frames, retention_days, ignore_apps (comma list),
+// jpeg_quality, frame_max_dim, keep_frames, retention_days, ignore_apps (comma list),
 // openrouter_api_key, output, capture_command, max_storage_mb, max_frames_mb,
 // max_db_mb, auto_pause_locked, filter_inappropriate, debug.
 func setConfigValue(key, value string) error {
@@ -374,7 +388,7 @@ func setConfigValue(key, value string) error {
 		cfg.APIBaseURL = normalizeAPIBaseURL(value)
 	case "openrouter_api_key":
 		cfg.OpenRouterAPIKey = value
-	case "capture_interval_sec", "block_minutes", "frames_per_block", "jpeg_quality", "retention_days":
+	case "capture_interval_sec", "block_minutes", "frames_per_block", "jpeg_quality", "frame_max_dim", "retention_days":
 		n, err := strconv.Atoi(value)
 		if err != nil {
 			return fmt.Errorf("%s must be an integer", key)
@@ -388,6 +402,15 @@ func setConfigValue(key, value string) error {
 			cfg.FramesPerBlock = n
 		case "jpeg_quality":
 			cfg.JPEGQuality = n
+		case "frame_max_dim":
+			if n < 0 {
+				return fmt.Errorf("frame_max_dim must be >= 0 (0 disables normalization)")
+			}
+			if n > 0 && n < minFrameMaxDim {
+				fmt.Printf("warning: frame_max_dim %d is too small to be useful — clamped to %d\n", n, minFrameMaxDim)
+				n = minFrameMaxDim
+			}
+			cfg.FrameMaxDim = n
 		case "retention_days":
 			cfg.RetentionDays = n
 		}
