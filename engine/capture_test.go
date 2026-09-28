@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +50,83 @@ func TestAHashCoversWholeImage(t *testing.T) {
 	d := hamming(ahash(mk(false)), ahash(mk(true)))
 	if d <= dedupThreshold {
 		t.Fatalf("bottom-half change undetected: hamming=%d", d)
+	}
+}
+
+func TestWaylandReachable(t *testing.T) {
+	rt := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", rt)
+
+	t.Setenv("WAYLAND_DISPLAY", "wayland-1")
+	if waylandReachable() {
+		t.Fatal("socket absent — should be unreachable")
+	}
+	// a regular file is not a wayland socket
+	if err := os.WriteFile(filepath.Join(rt, "wayland-1"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if waylandReachable() {
+		t.Fatal("regular file is not a socket — should be unreachable")
+	}
+	// a real unix socket makes it reachable
+	if err := os.Remove(filepath.Join(rt, "wayland-1")); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", filepath.Join(rt, "wayland-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if !waylandReachable() {
+		t.Fatal("socket present — should be reachable")
+	}
+	// no display configured: can't check — let the capture command decide
+	t.Setenv("WAYLAND_DISPLAY", "")
+	if !waylandReachable() {
+		t.Fatal("empty WAYLAND_DISPLAY should defer to the command")
+	}
+}
+
+func TestWaylandReachableAbsolutePath(t *testing.T) {
+	// An absolute WAYLAND_DISPLAY is used as-is, without XDG_RUNTIME_DIR.
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	sock := filepath.Join(t.TempDir(), "abs-display")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	t.Setenv("WAYLAND_DISPLAY", sock)
+	if !waylandReachable() {
+		t.Fatal("absolute socket path should be reachable")
+	}
+	ln.Close()
+	os.Remove(sock)
+	if waylandReachable() {
+		t.Fatal("removed absolute socket should be unreachable")
+	}
+	// Unset runtime dir can't resolve a relative display — defer to command.
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("WAYLAND_DISPLAY", "wayland-9")
+	if !waylandReachable() {
+		t.Fatal("relative display with no XDG_RUNTIME_DIR should defer to the command")
+	}
+}
+
+func TestCaptureFailVisible(t *testing.T) {
+	// First failure always logs; the streak then reports every ~5 min
+	// (30 ticks at the default 10s interval) so a dead-session window
+	// can't spam the debug log, events table, and journald.
+	if !captureFailVisible(1) {
+		t.Fatal("first failure must be visible")
+	}
+	for s := 2; s < 30; s++ {
+		if captureFailVisible(s) {
+			t.Fatalf("streak %d should be quiet", s)
+		}
+	}
+	if !captureFailVisible(30) || !captureFailVisible(60) {
+		t.Fatal("streak multiples of 30 must be visible")
 	}
 }
 
