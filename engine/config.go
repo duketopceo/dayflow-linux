@@ -45,7 +45,7 @@ type Config struct {
 	Categories           []Category `json:"categories"`
 	ClassificationPrompt string     `json:"classification_prompt"` // extra instructions for the vision model
 	JevClassification    bool       `json:"jev_classification"`    // use Jev for category/productive (default true)
-	AgentRecaps          bool       `json:"agent_recaps"`          // generate agent-session recaps (default true; false = durable no-egress opt-out)
+	AgentRecaps          bool       `json:"agent_recaps"`          // generate agent-session recaps (default false — opt-in; recaps send bounded scrubbed transcript excerpts to the chat provider + decisions endpoint)
 	ClassificationModel  string     `json:"classification_model"`  // Jev model slug; default typesafe/jev-1.13
 	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
@@ -126,7 +126,7 @@ func defaultConfig() Config {
 		ClassificationPrompt: defaultClassificationPrompt,
 		JevClassification:    true,
 		ClassificationModel:  defaultJevModel,
-		AgentRecaps:          true,
+		AgentRecaps:          false,
 	}
 }
 
@@ -225,9 +225,8 @@ func loadConfig() (Config, error) {
 	if !strings.Contains(string(b), "jev_classification") {
 		cfg.JevClassification = true
 	}
-	if !strings.Contains(string(b), "agent_recaps") {
-		cfg.AgentRecaps = true
-	}
+	// agent_recaps has no absent-key backfill: it is opt-in, so a missing
+	// key must decode to false like any other default-off bool.
 	if cfg.ClassificationModel == "" {
 		cfg.ClassificationModel = defaultJevModel
 	}

@@ -579,10 +579,11 @@ func printAgentSessions(db *sql.DB, cfg Config, d time.Time, jsonOut, recaps boo
 	}
 	if jsonOut {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"date":     d.Local().Format("2006-01-02"),
-			"sessions": sessions,
-			"count":    len(sessions),
-			"sources":  statuses,
+			"date":           d.Local().Format("2006-01-02"),
+			"sessions":       sessions,
+			"count":          len(sessions),
+			"sources":        statuses,
+			"recaps_enabled": cfg.AgentRecaps,
 		})
 		return
 	}
@@ -598,6 +599,10 @@ func printAgentSessions(db *sql.DB, cfg Config, d time.Time, jsonOut, recaps boo
 				fmt.Printf("         └─ %s\n", s.Recap)
 			}
 		}
+	}
+	if !cfg.AgentRecaps && len(sessions) > 0 {
+		fmt.Println("note: agent_recaps is off — `dayflow config set agent_recaps true` enables recap generation" +
+			" (sends a bounded, scrubbed excerpt to your chat provider)")
 	}
 	for _, st := range statuses {
 		if st.Drift {

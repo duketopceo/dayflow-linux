@@ -43,6 +43,9 @@ FloatingWindow {
   // note?, drift?}) — lets the pane surface an unavailable or drifted store
   // instead of looking like a session-free day.
   property var agentSources: []
+  // recaps_enabled from agents --json. Defaults true so a pre-field binary
+  // doesn't flash the opt-in hint; false only when the engine says so.
+  property bool agentRecapsEnabled: true
   property bool agentsLoading: false
   property string agentsError: ""
 
@@ -79,6 +82,7 @@ FloatingWindow {
           var d = JSON.parse(text)
           root.agentSessions = d.sessions || []
           root.agentSources = d.sources || []
+          root.agentRecapsEnabled = d.recaps_enabled !== false
           root.agentsError = ""
         } catch (e) {
           root.agentSessions = []
