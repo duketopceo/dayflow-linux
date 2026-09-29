@@ -596,6 +596,8 @@ func trimLogTables(db *sql.DB) bool {
 		SELECT rowid FROM events ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
 	db.Exec(`DELETE FROM api_calls WHERE rowid <= (
 		SELECT rowid FROM api_calls ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
+	db.Exec(`DELETE FROM llm_calls WHERE rowid <= (
+		SELECT rowid FROM llm_calls ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
 	checkpointWAL(db)
 	if _, err := db.Exec(`VACUUM`); err != nil {
 		logEvent(db, "storage_cap_error", "vacuum: "+err.Error())
@@ -882,6 +884,8 @@ func runDaemon(cfg Config) error {
 	defer retentionTick.Stop()
 	lockTick := time.NewTicker(time.Minute)
 	defer lockTick.Stop()
+	notifyTick := time.NewTicker(time.Minute)
+	defer notifyTick.Stop()
 	log.Printf("dayflow daemon: capturing every %ds -> %s", cfg.CaptureIntervalSec, framesDir())
 	debugf(cfg, "daemon start: provider=%s model=%s endpoint=%s interval=%ds block=%dm quality=%d retention=%dd keep_frames=%v debug=%v",
 		cfg.Provider, cfg.Model, chatURL(cfg), cfg.CaptureIntervalSec, cfg.BlockMinutes,
@@ -899,6 +903,7 @@ func runDaemon(cfg Config) error {
 				lastHash = nil
 				logEvent(db, "capture_paused", "no wayland session")
 				debugf(cfg, "capture: paused — wayland socket absent")
+				notifyAsync(db, cfg, notifyClassPaused, "dayflow", "capture paused")
 			}
 			return
 		}
@@ -906,6 +911,7 @@ func runDaemon(cfg Config) error {
 			noSession = false
 			logEvent(db, "capture_resumed", "wayland session")
 			debugf(cfg, "capture: resumed — wayland session present")
+			notifyAsync(db, cfg, notifyClassRecovered, "dayflow", "capture resumed")
 		}
 		h, attempted, err := captureOnce(db, cfg, cmdArgs, lastHash)
 		if err != nil {
@@ -915,6 +921,13 @@ func runDaemon(cfg Config) error {
 				debugf(cfg, "capture: %v (streak %d)", err, grabFails)
 				log.Printf("capture: %v (streak %d)", err, grabFails)
 			}
+			// A streak worth ~5 minutes of wall-clock failures (with a
+			// session present) is a stall, not a transient — alert off-tick;
+			// the quiet period + daily cap bound repeats. The summarize
+			// oneshot covers a fully wedged loop that can't reach this line.
+			if grabFails*cfg.CaptureIntervalSec >= stallNotifySecs {
+				notifyAsync(db, cfg, notifyClassStall, "dayflow", "capture stalled")
+			}
 			return
 		}
 		if !attempted {
@@ -923,6 +936,9 @@ func runDaemon(cfg Config) error {
 		if grabFails > 0 {
 			logEvent(db, "capture_recovered", fmt.Sprintf("after %d failures", grabFails))
 			debugf(cfg, "capture: recovered after %d failures", grabFails)
+			if grabFails*cfg.CaptureIntervalSec >= stallNotifySecs {
+				notifyAsync(db, cfg, notifyClassRecovered, "dayflow", "capture resumed")
+			}
 			grabFails = 0
 		}
 		lastHash = h
@@ -951,11 +967,18 @@ func runDaemon(cfg Config) error {
 				lastHash = nil
 				logEvent(db, "auto_paused", "screen locked")
 				debugf(cfg, "auto-paused: screen locked")
+				notifyAsync(db, cfg, notifyClassPaused, "dayflow", "capture paused")
 			} else if !isLocked && locked {
 				locked = false
 				logEvent(db, "auto_resumed", "screen unlocked")
 				debugf(cfg, "auto-resumed: screen unlocked")
+				notifyAsync(db, cfg, notifyClassRecovered, "dayflow", "capture resumed")
 			}
+		case <-notifyTick.C:
+			// Once-a-day operator nudges (standup ready, goal pending).
+			// The checks are cheap indexed queries; emission is async and
+			// meta-capped, so the tick never blocks on dbus.
+			checkNudges(db, cfg)
 		}
 	}
 }
