@@ -123,6 +123,7 @@ Control:
                           --read-only hides and blocks the chat tool
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
   search <query>          Search block titles, summaries, and apps
+                          (--reindex rebuilds the search index)
   chat [message] [--conversation-id N] [--json]  Ask a question about the journal
   conversations [--json]  List saved chat conversations
   conversation <id> [--json]  Print one conversation's messages
@@ -674,10 +675,15 @@ func main() {
 		}
 
 	case "search":
-		if len(args) == 0 || args[0][0] == '-' {
+		query, reindex := parseSearchArgs(args)
+		if reindex {
+			printReindex(jsonOut)
+			break
+		}
+		if query == "" {
 			usage()
 		}
-		printSearch(args[0], jsonOut)
+		printSearch(query, jsonOut)
 
 	case "chat":
 		db, err := openDB()
@@ -1301,24 +1307,21 @@ func printSearch(query string, asJSON bool) {
 	db, err := openDB()
 	fatal(err)
 	defer db.Close()
-	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,app FROM blocks
-	  WHERE status='done' AND (title LIKE ? OR summary LIKE ? OR app LIKE ?) ORDER BY start_ts DESC LIMIT 50`,
-		"%"+query+"%", "%"+query+"%", "%"+query+"%")
+	blocks, err := searchBlocks(db, query)
 	fatal(err)
-	defer rows.Close()
 	type M struct {
 		Start, End, Title, Summary, Category, App string
 	}
-	var out []M
-	for rows.Next() {
-		var s, e int64
-		var m M
-		if err := rows.Scan(&s, &e, &m.Title, &m.Summary, &m.Category, &m.App); err != nil {
-			continue
-		}
-		m.Start = time.Unix(s, 0).Local().Format("2006-01-02 3:04 PM")
-		m.End = time.Unix(e, 0).Local().Format("3:04 PM")
-		out = append(out, m)
+	out := []M{}
+	for _, b := range blocks {
+		out = append(out, M{
+			Start:    b.Start.Format("2006-01-02 3:04 PM"),
+			End:      b.End.Format("3:04 PM"),
+			Title:    b.Title,
+			Summary:  b.Summary,
+			Category: b.Category,
+			App:      b.App,
+		})
 	}
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(out)
@@ -1330,6 +1333,20 @@ func printSearch(query string, asJSON bool) {
 	if len(out) == 0 {
 		fmt.Println("no matches")
 	}
+}
+
+// printReindex rebuilds the derived FTS search indexes from scratch
+// (`dayflow search --reindex`) — the repair path for a stale or missing index.
+func printReindex(asJSON bool) {
+	db, err := openDB()
+	fatal(err)
+	defer db.Close()
+	fatal(rebuildSearchIndex(db))
+	if asJSON {
+		json.NewEncoder(os.Stdout).Encode(map[string]string{"status": "rebuilt"})
+		return
+	}
+	fmt.Println("search index rebuilt")
 }
 
 func printUsage(asJSON bool) {
