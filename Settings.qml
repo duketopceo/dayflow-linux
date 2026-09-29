@@ -440,7 +440,7 @@ Flickable {
 
       Text {
         width: parent.width
-        text: "Off by default. When on, a bounded, scrubbed transcript excerpt is sent to your chat provider and to the decisions endpoint used for judging. Claude Code, Codex, OpenCode, Devin, and Cursor transcripts are read locally for the session list either way."
+        text: "Off by default. When on, a bounded, scrubbed transcript excerpt is sent to your chat provider and to OpenRouter's decisions endpoint, which judges which sessions are worth summarizing. Claude Code, Codex, OpenCode, Devin, and Cursor transcripts are read locally for the session list either way."
         color: dayflow.dim
         font.family: dayflow.fontFamily
         font.pixelSize: Style.font.caption

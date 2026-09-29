@@ -30,6 +30,11 @@ Environment="WAYLAND_DISPLAY=wayland-1"
 WantedBy=default.target
 `
 
+// PassEnvironment carries the session bus address into the oneshot so
+// notify-send can reach it — but note GLib also falls back to
+// $XDG_RUNTIME_DIR/bus when the address is unset, so a missing
+// DBUS_SESSION_BUS_ADDRESS does not necessarily mean the bus is
+// unreachable.
 const summarizeService = `[Unit]
 Description=dayflow block summarizer (OpenRouter)
 

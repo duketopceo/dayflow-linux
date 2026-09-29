@@ -480,6 +480,14 @@ func probeAgentStore(name string, paths []string) error {
 	return nil
 }
 
+// probeTailRows bounds every agent-store probe to a table's newest rows.
+// The adapters' windowed extraction is a full-table scan on the big
+// stores — Devin's message_nodes is multi-GB with no created_at index,
+// Cursor's cursorDiskKV can't use its key index for a LIKE prefix, and
+// composerHeaders' value is a per-row blob — so doctor runs the same
+// tables/columns over a bounded tail instead of calling them.
+const probeTailRows = 500
+
 func probeAgentStoreExtraction(name string, db *sql.DB) error {
 	e := time.Now()
 	s := e.AddDate(0, 0, -90)
@@ -489,25 +497,209 @@ func probeAgentStoreExtraction(name string, db *sql.DB) error {
 		if layout == "" {
 			return fmt.Errorf("schema drift: no known opencode layout")
 		}
-		_, err := opencodeCandidates(db, layout, s.UnixMilli(), e.UnixMilli())
-		return err
+		return probeOpencodeStore(db, layout, s.UnixMilli(), e.UnixMilli())
 	case "devin":
-		_, err := devinCandidates(db, s.Unix(), e.Unix())
-		return err
+		return probeDevinStore(db, s.Unix(), e.Unix())
 	case "cursor":
 		hasKV := sqliteTableExists(db, "cursorDiskKV")
 		switch {
 		case sqliteTableExists(db, "composerHeaders"):
-			_, err := cursorHeaderRows(db, s.UnixMilli(), e.UnixMilli())
-			return err
+			return probeCursorHeaders(db)
 		case hasKV:
-			_, err := cursorHeaderFallback(db, s.UnixMilli(), e.UnixMilli())
-			return err
+			return probeCursorKVFallback(db)
 		default:
 			return fmt.Errorf("schema drift: no composer tables")
 		}
 	}
 	return fmt.Errorf("unknown agent source %q", name)
+}
+
+// probeOpencodeStore exercises both opencode extraction reads over a
+// rowid tail: the session join (opencodeCandidates' shape) and the
+// message-table columns ocMessages reads (LENGTH(data) instead of the
+// blob itself). time_created has no guaranteed index, so the unbounded
+// window filter could full-scan a large store.
+func probeOpencodeStore(db *sql.DB, layout string, sMs, eMs int64) error {
+	msgTable := "session_message"
+	if layout == "old" {
+		msgTable = "message"
+	}
+	rows, err := db.Query(`SELECT s.id, s.title, s.directory FROM session s
+	  WHERE s.id IN (SELECT session_id FROM `+msgTable+`
+	    WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM `+msgTable+`) - ?
+	      AND time_created >= ? AND time_created < ?)
+	  ORDER BY s.time_created`, probeTailRows, sMs, eMs)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var title, dir sql.NullString
+		if err := rows.Scan(&id, &title, &dir); err != nil {
+			rows.Close()
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	if layout == "old" {
+		mq := `SELECT id, session_id, time_created, time_updated,
+		  COALESCE(LENGTH(data),0) FROM message
+		  WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM message) - ?`
+		if err := probeScan(db, mq, probeTailRows); err != nil {
+			return err
+		}
+		return probeScan(db, `SELECT message_id, COALESCE(LENGTH(data),0)
+		  FROM part
+		  WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM part) - ?`,
+			probeTailRows)
+	}
+	return probeScan(db, `SELECT id, session_id, type, seq, time_created,
+	  time_updated, COALESCE(LENGTH(data),0) FROM session_message
+	  WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM session_message) - ?`,
+		probeTailRows)
+}
+
+// probeDevinStore runs devinCandidates' join shape and devinDBMessages'
+// column set over the row_id tail — message_nodes has no created_at
+// index, so the adapter's windowed IN subquery would full-scan a
+// multi-GB table on every doctor run.
+func probeDevinStore(db *sql.DB, sSec, eSec int64) error {
+	if !sqliteTableExists(db, "sessions") || !sqliteTableExists(db, "message_nodes") {
+		return fmt.Errorf("schema drift: devin store missing sessions/message_nodes")
+	}
+	rows, err := db.Query(`SELECT s.id, s.title, s.working_directory FROM sessions s
+	  WHERE s.id IN (SELECT session_id FROM message_nodes
+	    WHERE row_id > (SELECT COALESCE(MAX(row_id),0) FROM message_nodes) - ?
+	      AND created_at >= ? AND created_at < ?)
+	  ORDER BY s.created_at`, probeTailRows, sSec, eSec)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var title, dir sql.NullString
+		if err := rows.Scan(&id, &title, &dir); err != nil {
+			rows.Close()
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	// LENGTH() reads the record header, never the chat_message payload —
+	// the column is exercised without paying for the blob.
+	return probeScan(db, `SELECT node_id, created_at,
+	  COALESCE(LENGTH(chat_message),0) FROM message_nodes
+	  WHERE row_id > (SELECT COALESCE(MAX(row_id),0) FROM message_nodes) - ?`,
+		probeTailRows)
+}
+
+// probeCursorHeaders exercises composerHeaders over the rowid tail:
+// cheap columns for the tail rows, then the value blob for a few of
+// them — the adapter's SELECT includes value for every row, which reads
+// every blob in the table.
+func probeCursorHeaders(db *sql.DB) error {
+	rows, err := db.Query(`SELECT composerId, workspaceId, createdAt, lastUpdatedAt
+	  FROM composerHeaders
+	  WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM composerHeaders) - ?`,
+		probeTailRows)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var h cursorHeader
+		var ws, created, updated any
+		if err := rows.Scan(&h.id, &ws, &created, &updated); err != nil {
+			rows.Close()
+			return err
+		}
+		h.workspace = cursorStr(ws)
+		h.created = cursorMs(created)
+		h.updated = cursorMs(updated)
+		if len(ids) < 3 {
+			ids = append(ids, h.id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, id := range ids {
+		var v any
+		if err := db.QueryRow(`SELECT value FROM composerHeaders
+		  WHERE composerId = ?`, id).Scan(&v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// probeCursorKVFallback is cursorHeaderFallback's read bounded and made
+// index-usable: 'composerData;' is the byte after ':' so the range covers
+// exactly the composerData:* keys the LIKE 'composerData:%' pattern
+// matched, and the key index keeps it off a full cursorDiskKV scan.
+func probeCursorKVFallback(db *sql.DB) error {
+	rows, err := db.Query(`SELECT key, value FROM cursorDiskKV
+	  WHERE key >= 'composerData:' AND key < 'composerData;'
+	  ORDER BY key LIMIT ?`, probeTailRows)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var value any
+		if err := rows.Scan(&key, &value); err != nil {
+			return err
+		}
+		// Undecodable blobs are skipped by the adapter's fallback too —
+		// the probe's contract is that the read succeeds, not that every
+		// payload parses.
+		var d struct {
+			ComposerID string `json:"composerId"`
+			CreatedAt  any    `json:"createdAt"`
+			UpdatedAt  any    `json:"lastUpdatedAt"`
+			IsDraft    bool   `json:"isDraft"`
+			Name       string `json:"name"`
+		}
+		if json.Unmarshal(cursorBytes(value), &d) != nil {
+			continue
+		}
+	}
+	return rows.Err()
+}
+
+// probeScan drains a tail-bounded query's rows into loosely-typed values —
+// the probe asserts the read succeeds, so per-column types don't matter.
+func probeScan(db *sql.DB, query string, args ...any) error {
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		dest := make([]any, len(cols))
+		for i := range dest {
+			dest[i] = new(any)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func runDoctor(cfg Config, jsonOut bool, deep bool) {

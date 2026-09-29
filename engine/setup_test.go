@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -289,6 +290,96 @@ func TestDetectResultAgentsField(t *testing.T) {
 	}
 	if agents["claude"] != true {
 		t.Fatalf("agents map lost its values: %v", agents)
+	}
+}
+
+// The doctor probes must read every committed fixture store shape cleanly —
+// this is also where a bounded-probe mistake (wrong column, rowid on a
+// WITHOUT ROWID table) surfaces, since the fixtures pin the real shapes.
+func TestProbeAgentStoreExtractionOnFixtures(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		source, fixture string
+	}{
+		{"opencode", "opencode"},
+		{"devin", "devin"},
+		{"cursor", "cursor"},
+		// The second legal shapes probe their own paths.
+		{"opencode", "opencode-old"},
+		{"cursor", "cursor-fallback"},
+	} {
+		dbPath := filepath.Join(dir, tc.fixture+".db")
+		applySQLFixture(t, fixtureStore(tc.fixture), dbPath)
+		db, err := openStoreProbe(dbPath)
+		if err != nil {
+			t.Fatalf("%s (%s): probe open failed: %v", tc.source, tc.fixture, err)
+		}
+		if err := probeAgentStoreExtraction(tc.source, db); err != nil {
+			t.Fatalf("%s (%s): probe failed on pinned store shape: %v", tc.source, tc.fixture, err)
+		}
+		db.Close()
+	}
+}
+
+// FTS shadow tables must be excluded from capture: replaying a fixture
+// that carried their DDL/INSERTs fails on the names a CREATE VIRTUAL
+// TABLE reserves. The emitted fixture must replay clean.
+func TestCaptureStoreSchemaSkipsFTSShadows(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "fts.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE docs (id INTEGER PRIMARY KEY, body TEXT);
+	  CREATE VIRTUAL TABLE docs_fts USING fts5(body);
+	  INSERT INTO docs_fts(body) VALUES('real secret payload row')`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	tables, err := captureStoreSchema(db)
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := emitFixtureText("testsrc", "fts.db", tables, nil)
+	for _, shadow := range []string{
+		"docs_fts_data", "docs_fts_idx", "docs_fts_content",
+		"docs_fts_docsize", "docs_fts_config",
+	} {
+		if strings.Contains(text, "CREATE TABLE "+shadow) ||
+			strings.Contains(text, `INSERT INTO "`+shadow+`"`) {
+			t.Fatalf("fixture emitted shadow-table DDL/inserts for %s:\n%s", shadow, text)
+		}
+	}
+	if !strings.Contains(text, "CREATE VIRTUAL TABLE docs_fts") {
+		t.Fatalf("virtual table DDL missing from fixture:\n%s", text)
+	}
+	if strings.Contains(text, "real secret payload row") {
+		t.Fatalf("fixture leaked a payload row:\n%s", text)
+	}
+	// Replay: before the fix this died on the reserved shadow names.
+	fixPath := filepath.Join(dir, "captured.sql")
+	if err := os.WriteFile(fixPath, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applySQLFixture(t, fixPath, filepath.Join(dir, "replay.db"))
+}
+
+// A dropped adapter column must surface as a probe error (a doctor warn),
+// never silently pass — the tail bound must not weaken drift detection.
+func TestProbeAgentStoreExtractionDrift(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "devin.db")
+	applySQLFixture(t, fixtureStore("devin"), dbPath)
+	alterStore(t, dbPath, `ALTER TABLE message_nodes RENAME COLUMN chat_message TO body`)
+	db, err := openStoreProbe(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := probeAgentStoreExtraction("devin", db); err == nil {
+		t.Fatal("dropped chat_message column must fail the probe")
 	}
 }
 

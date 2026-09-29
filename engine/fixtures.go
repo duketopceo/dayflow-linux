@@ -152,16 +152,32 @@ type fixtureColumn struct {
 	pk             int
 }
 
-// fixtureTable is one user table's captured DDL + columns.
+// fixtureTable is one user table's captured DDL + columns. shadowOf is
+// set when the table is an FTS/RTREE shadow of a captured virtual table —
+// the shadow is recorded as a comment, never as DDL/INSERTs.
 type fixtureTable struct {
-	name string
-	ddl  string
-	cols []fixtureColumn
+	name     string
+	ddl      string
+	cols     []fixtureColumn
+	shadowOf string
+}
+
+// ftsShadowSuffixes are the shadow-table suffixes sqlite's bundled virtual
+// table modules create: fts5 (_data/_idx/_content/_docsize/_config),
+// fts3/4 (_content/_segments/_segdir/_docsize/_stat), rtree
+// (_node/_rowid/_parent).
+var ftsShadowSuffixes = []string{
+	"_data", "_idx", "_content", "_docsize", "_config",
+	"_segments", "_segdir", "_stat",
+	"_node", "_rowid", "_parent",
 }
 
 // captureStoreSchema extracts the full table schema: sqlite_master DDL
 // plus pragma_table_info per table. Deterministic order so fixtures diff
-// cleanly.
+// cleanly. Shadow tables of CREATE VIRTUAL TABLE parents are flagged
+// instead of captured — once the virtual table is replayed its shadow
+// names are reserved, so emitting shadow DDL/INSERTs would break
+// fixture replay.
 func captureStoreSchema(db *sql.DB) ([]fixtureTable, error) {
 	rows, err := db.Query(`SELECT name, COALESCE(sql,'') FROM sqlite_master
 	  WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
@@ -180,7 +196,28 @@ func captureStoreSchema(db *sql.DB) ([]fixtureTable, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	virtuals := map[string]bool{}
+	for _, t := range tables {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(t.ddl)), "CREATE VIRTUAL") {
+			virtuals[t.name] = true
+		}
+	}
 	for i := range tables {
+		if virtuals[tables[i].name] {
+			continue
+		}
+		for parent := range virtuals {
+			for _, suf := range ftsShadowSuffixes {
+				if tables[i].name == parent+suf {
+					tables[i].shadowOf = parent
+				}
+			}
+		}
+	}
+	for i := range tables {
+		if tables[i].shadowOf != "" {
+			continue
+		}
 		ci, err := db.Query(`SELECT name, COALESCE(type,''), "notnull",
 		  dflt_value IS NOT NULL, pk FROM pragma_table_info(?)`, tables[i].name)
 		if err != nil {
@@ -279,7 +316,7 @@ type sentinelRow struct {
 	row   map[string]any
 }
 
-func fixtureMs(off time.Duration) int64 { return fixtureTime(off).UnixMilli() }
+func fixtureMs(off time.Duration) int64  { return fixtureTime(off).UnixMilli() }
 func fixtureSec(off time.Duration) int64 { return fixtureTime(off).Unix() }
 
 // fixtureSentinels returns the sentinel rows a captured fixture inserts,
@@ -321,7 +358,7 @@ func fixtureSentinels(source string, db *sql.DB) []sentinelRow {
 						"time_created": fixtureMs(m.off), "time_updated": fixtureMs(m.off),
 						"data": `{"role":"` + m.typ + `"}`}},
 					sentinelRow{"part", map[string]any{
-						"id": "__fixture_part_" + strconv.Itoa(i+1) + "__",
+						"id":         "__fixture_part_" + strconv.Itoa(i+1) + "__",
 						"message_id": mid, "session_id": fixtureSessionID,
 						"time_created": fixtureMs(m.off), "time_updated": fixtureMs(m.off),
 						"data": `{"type":"text","text":"` + m.text + `"}`}})
@@ -427,6 +464,11 @@ func emitFixtureText(source, storeBase string, tables []fixtureTable, sents []se
 	for _, t := range tables {
 		emitted[t.name] = true
 		b.WriteString("\n")
+		if t.shadowOf != "" {
+			fmt.Fprintf(&b, "-- %s: shadow table of virtual table %s — omitted; replaying the parent's\n", t.name, t.shadowOf)
+			b.WriteString("-- CREATE VIRTUAL TABLE recreates it (the shadow names are reserved).\n")
+			continue
+		}
 		if t.ddl != "" {
 			b.WriteString(strings.TrimSpace(t.ddl))
 			b.WriteString(";\n")

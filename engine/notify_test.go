@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -357,6 +358,7 @@ func TestCaptureStallFromSummarize(t *testing.T) {
 	bin := t.TempDir()
 	marker := fakeNotifySend(t, bin)
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("WAYLAND_DISPLAY", "") // can't check → session counts as present
 	db, err := openDB()
 	if err != nil {
 		t.Fatal(err)
@@ -369,6 +371,8 @@ func TestCaptureStallFromSummarize(t *testing.T) {
 		t.Fatalf("no daemon history should not alert: %v", lines)
 	}
 
+	logEvent(db, "daemon_start", "grim -t jpeg -")
+
 	// A fresh heartbeat → daemon alive, no alert.
 	logEvent(db, "capture_saved", "x")
 	checkCaptureStall(db, cfg)
@@ -376,52 +380,203 @@ func TestCaptureStallFromSummarize(t *testing.T) {
 		t.Fatalf("fresh heartbeat should not alert: %v", lines)
 	}
 
-	// Heartbeat goes stale (wedged or dead daemon) → stall alert.
-	old := time.Now().Add(-10 * time.Minute).Unix()
-	db.Exec(`UPDATE events SET ts=?`, old)
+	// A heartbeat inside the staleness floor is not a stall — the floor
+	// absorbs the post-suspend race between the Persistent summarize timer
+	// and the daemon's first wake tick.
+	db.Exec(`UPDATE events SET ts=?`, time.Now().Add(-10*time.Minute).Unix())
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 0 {
+		t.Fatalf("inside-floor heartbeat should not alert: %v", lines)
+	}
+
+	// Heartbeat well past the floor (wedged or dead daemon) → stall alert.
+	db.Exec(`UPDATE events SET ts=?`, time.Now().Add(-2*time.Hour).Unix())
 	checkCaptureStall(db, cfg)
 	lines := notifyMarkerLines(t, marker)
 	if len(lines) != 1 || !strings.Contains(lines[0], "capture stalled") {
 		t.Fatalf("stale heartbeat should alert once: %v", lines)
 	}
+
+	// An intentional stop is terminal — daemon_stop is never a stall.
+	db.Exec(`DELETE FROM events`)
+	logEvent(db, "daemon_start", "grim -t jpeg -")
+	logEvent(db, "daemon_stop", "terminated")
+	db.Exec(`UPDATE events SET ts=?`, time.Now().Add(-2*time.Hour).Unix())
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 1 {
+		t.Fatalf("daemon_stop should not alert: %v", lines)
+	}
 }
 
-// TestCaptureStallQuietStates: a daemon sitting in a known-quiet transition
-// (wayland absent, locked, manually paused) is silent by design — the stall
-// check must distinguish it from a wedge.
+// daemon_start is a boot marker, not a heartbeat: under Restart=always a
+// crash loop keeps the newest start row fresh forever while zero ticks
+// complete — the run's age is measured from its first unbroken start.
+func TestCaptureStallDaemonStartIsNotFreshness(t *testing.T) {
+	cfg := notifyTestCfg(t, notifyClassStall)
+	cfg.CaptureIntervalSec = 10
+	bin := t.TempDir()
+	marker := fakeNotifySend(t, bin)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("WAYLAND_DISPLAY", "")
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// A single fresh start with no heartbeat yet — just booted, not a stall.
+	logEvent(db, "daemon_start", "grim -t jpeg -")
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 0 {
+		t.Fatalf("fresh daemon_start should not alert: %v", lines)
+	}
+
+	// A completed tick after the start → alive.
+	logEvent(db, "capture_saved", "x")
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 0 {
+		t.Fatalf("post-start heartbeat should not alert: %v", lines)
+	}
+
+	// Crash loop: only daemon_start rows — the newest is seconds old but
+	// the unbroken run began long ago → stall.
+	db.Exec(`DELETE FROM events`)
+	db.Exec(`INSERT INTO events(ts, type, detail) VALUES(?, 'daemon_start', 'grim')`,
+		time.Now().Add(-2*time.Hour).Unix())
+	db.Exec(`INSERT INTO events(ts, type, detail) VALUES(?, 'daemon_start', 'grim')`,
+		time.Now().Add(-time.Hour).Unix())
+	logEvent(db, "daemon_start", "grim -t jpeg -")
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 1 {
+		t.Fatalf("crash-looping daemon (starts only) must alert: %v", lines)
+	}
+}
+
+// The meta heartbeat survives events-table trimming: a dead daemon whose
+// heartbeat rows were evicted still goes stale via the meta key, and a
+// fresh meta key rescues a live daemon whose events were trimmed.
+func TestCaptureStallMetaHeartbeat(t *testing.T) {
+	cfg := notifyTestCfg(t, notifyClassStall)
+	cfg.CaptureIntervalSec = 10
+	bin := t.TempDir()
+	marker := fakeNotifySend(t, bin)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("WAYLAND_DISPLAY", "")
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// No events at all; meta fresh → alive.
+	metaSet(db, metaCaptureHeartbeat, strconv.FormatInt(time.Now().Unix(), 10))
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 0 {
+		t.Fatalf("fresh meta heartbeat should not alert: %v", lines)
+	}
+
+	// Meta stale, still no events → stall.
+	metaSet(db, metaCaptureHeartbeat,
+		strconv.FormatInt(time.Now().Add(-2*time.Hour).Unix(), 10))
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 1 {
+		t.Fatalf("stale meta heartbeat should alert: %v", lines)
+	}
+
+	// A fresh heartbeat event under a stale meta key → alive (either
+	// source counts).
+	logEvent(db, "daemon_start", "grim -t jpeg -")
+	logEvent(db, "capture_saved", "x")
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 1 {
+		t.Fatalf("fresh event under stale meta should not alert: %v", lines)
+	}
+
+	// And the reverse: fresh meta under a stale last event — the 2000-row
+	// cap can't manufacture a stall by evicting heartbeats.
+	db.Exec(`UPDATE events SET ts=?`, time.Now().Add(-2*time.Hour).Unix())
+	metaSet(db, metaCaptureHeartbeat, strconv.FormatInt(time.Now().Unix(), 10))
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 1 {
+		t.Fatalf("fresh meta under stale event should not alert: %v", lines)
+	}
+}
+
+// A quiet-type last event suppresses the alert only while the quiet
+// condition still holds — a daemon that died mid-pause/lock is a stall.
 func TestCaptureStallQuietStates(t *testing.T) {
 	cfg := notifyTestCfg(t, notifyClassStall)
 	cfg.CaptureIntervalSec = 10
 	bin := t.TempDir()
 	marker := fakeNotifySend(t, bin)
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("WAYLAND_DISPLAY", "") // unset → session counts as present
 	db, err := openDB()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	old := time.Now().Add(-10 * time.Minute).Unix()
+	old := notifyQuietPeriod
+	notifyQuietPeriod = 0 // isolate assertions from the quiet period
+	t.Cleanup(func() { notifyQuietPeriod = old })
+	resetBudget := func() {
+		db.Exec(`DELETE FROM meta WHERE k LIKE 'notify_%'`)
+	}
+	stale := time.Now().Add(-2 * time.Hour).Unix()
 
+	sent := func() int { return len(notifyMarkerLines(t, marker)) }
+
+	// Stale quiet claims with nothing currently quiet → the stall fires.
 	for _, quietType := range []string{"capture_paused", "auto_paused", "paused"} {
 		db.Exec(`DELETE FROM events`)
+		logEvent(db, "daemon_start", "grim -t jpeg -")
 		logEvent(db, quietType, "test")
-		db.Exec(`UPDATE events SET ts=?`, old)
+		db.Exec(`UPDATE events SET ts=?`, stale)
+		resetBudget()
+		before := sent()
 		checkCaptureStall(db, cfg)
-		if lines := notifyMarkerLines(t, marker); len(lines) != 0 {
-			t.Fatalf("%s is a known-quiet state, not a stall: %v", quietType, lines)
+		if sent() == before {
+			t.Fatalf("stale %s with no current quiet state should alert", quietType)
 		}
 	}
 
 	// Manual pause via the PAUSED file suppresses the alert even when the
-	// last heartbeat is a stale capture event.
+	// last event is a stale quiet claim — the state is genuinely current.
 	db.Exec(`DELETE FROM events`)
-	logEvent(db, "capture_saved", "x")
-	db.Exec(`UPDATE events SET ts=?`, old)
+	logEvent(db, "daemon_start", "grim -t jpeg -")
+	logEvent(db, "paused", "")
+	db.Exec(`UPDATE events SET ts=?`, stale)
 	setPaused(true)
 	t.Cleanup(func() { setPaused(false) })
+	resetBudget()
+	before := sent()
 	checkCaptureStall(db, cfg)
-	if lines := notifyMarkerLines(t, marker); len(lines) != 0 {
-		t.Fatalf("paused capture should not alert: %v", lines)
+	if sent() != before {
+		t.Fatalf("currently-paused capture should not alert: %v", notifyMarkerLines(t, marker))
+	}
+	setPaused(false)
+
+	// An absent wayland session is quiet-by-design for the grim backend:
+	// capture_paused suppresses while the socket is still missing.
+	db.Exec(`DELETE FROM events`)
+	logEvent(db, "daemon_start", "grim -t jpeg -")
+	logEvent(db, "capture_paused", "no wayland session")
+	db.Exec(`UPDATE events SET ts=?`, stale)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("WAYLAND_DISPLAY", "wayland-missing")
+	resetBudget()
+	before = sent()
+	checkCaptureStall(db, cfg)
+	if sent() != before {
+		t.Fatalf("absent wayland session should not alert: %v", notifyMarkerLines(t, marker))
+	}
+
+	// ... but a custom capture_command is ungated — its silence counts.
+	cfg.CaptureCommand = "/bin/cat /nonexistent"
+	resetBudget()
+	checkCaptureStall(db, cfg)
+	if sent() == before {
+		t.Fatal("capture_command + stale capture_paused should alert — the command is ungated")
 	}
 }
 
@@ -584,5 +739,85 @@ func TestConfigPatchNotifications(t *testing.T) {
 	}
 	if !cfg.Notifications.Classes[notifyClassStall] {
 		t.Fatal("omitted classes should backfill stall on")
+	}
+}
+
+// The daily cap and quiet period are claimed by single-statement atomic
+// upserts — the daemon goroutine and the summarize oneshot share one
+// budget, so concurrent senders must never slip under the cap together.
+func TestNotifyConcurrentSendersStayUnderCap(t *testing.T) {
+	cfg := notifyTestCfg(t, notifyClassStall)
+	bin := t.TempDir()
+	marker := fakeNotifySend(t, bin)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	old := notifyQuietPeriod
+	notifyQuietPeriod = 0 // isolate the cap from the quiet period
+	t.Cleanup(func() { notifyQuietPeriod = old })
+
+	const senders = 16
+	var wg sync.WaitGroup
+	for i := 0; i < senders; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			notify(db, cfg, notifyClassStall, "dayflow", "capture stalled")
+		}()
+	}
+	wg.Wait()
+	if lines := notifyMarkerLines(t, marker); len(lines) != notifyDailyCap {
+		t.Fatalf("concurrent sends = %d, want hard cap of %d/day", len(lines), notifyDailyCap)
+	}
+	day := time.Now().Format("2006-01-02")
+	if got := metaGet(db, "notify_count:"+notifyClassStall+":"+day); got != strconv.Itoa(notifyDailyCap) {
+		t.Fatalf("notify_count = %q, want %d — the cap counter must never overshoot", got, notifyDailyCap)
+	}
+}
+
+// A failing notify-send still spends the budget (no retry-storm) but the
+// failure is traced as a notify_failed event carrying the class name only —
+// the label-only rule for bodies applies to the events table too.
+func TestNotifyExecFailureLogged(t *testing.T) {
+	cfg := notifyTestCfg(t, notifyClassStall)
+	bin := t.TempDir()
+	writeBin(t, bin, "notify-send", "exit 1\n")
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	notify(db, cfg, notifyClassStall, "dayflow", "capture stalled")
+	var n int
+	db.QueryRow(`SELECT COUNT(1) FROM events WHERE type='notify_failed' AND detail=?`,
+		notifyClassStall).Scan(&n)
+	if n != 1 {
+		t.Fatalf("notify_failed events=%d, want 1", n)
+	}
+	day := time.Now().Format("2006-01-02")
+	if got := metaGet(db, "notify_count:"+notifyClassStall+":"+day); got != "1" {
+		t.Fatalf("failed send should still spend budget: notify_count=%q", got)
+	}
+}
+
+func TestStallAlertable(t *testing.T) {
+	// Failure #1 must never alert — the old fails*interval product fired on
+	// the first tick whenever the interval alone met the threshold.
+	if stallAlertable(1, time.Now().Add(-stallNotifyDur-time.Minute)) {
+		t.Fatal("a single failure must never alert, however long the interval")
+	}
+	if stallAlertable(2, time.Now().Add(-time.Minute)) {
+		t.Fatal("a young streak should not alert")
+	}
+	if !stallAlertable(2, time.Now().Add(-stallNotifyDur-time.Second)) {
+		t.Fatal("a streak spanning the threshold should alert")
+	}
+	if stallAlertable(10, time.Time{}) {
+		t.Fatal("a streak with no recorded start must not alert")
 	}
 }

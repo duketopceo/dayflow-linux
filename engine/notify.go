@@ -52,9 +52,27 @@ var notifyQuietPeriod = 20 * time.Minute
 var notifyExecTimeout = 5 * time.Second
 
 // stallNotifySecs is how long the capture error streak must run before the
-// stall class fires — scaled against the tick interval at the call site so
-// slow-interval configs don't alert sooner in wall-clock terms.
+// stall class fires — measured in wall-clock elapsed since the first
+// failure, not in ticks, so a large capture interval can't turn failure #1
+// into an alert.
 const stallNotifySecs = 300
+
+const stallNotifyDur = stallNotifySecs * time.Second
+
+// stallAlertable reports whether a consecutive-failure streak qualifies as
+// a stall: at least two failures spanning ~stallNotifySecs of wall-clock.
+// The streak floor plus the monotonic elapsed check replace the old
+// fails*interval product, which fired on failure #1 whenever the interval
+// alone met the threshold (any interval >= 300s).
+func stallAlertable(streak int, since time.Time) bool {
+	return streak >= 2 && !since.IsZero() && time.Since(since) >= stallNotifyDur
+}
+
+// metaCaptureHeartbeat is the daemon's per-tick liveness key. Unlike the
+// events table (capped at 2000 rows by trimLogTables), a meta row is never
+// evicted, so a dead daemon's last sign of life can't be trimmed out from
+// under the stall detector.
+const metaCaptureHeartbeat = "capture_heartbeat_ts"
 
 // notifyOnceDaily lowers the cap for nudge classes to one send per day —
 // "standup ready" on every slow tick would be noise even under the cap.
@@ -80,13 +98,46 @@ func metaSet(db *sql.DB, k, v string) {
 	  ON CONFLICT(k) DO UPDATE SET v=excluded.v`, k, v)
 }
 
+// claimNotifyQuiet asserts the per-class quiet period atomically: the
+// conditional upsert only lands when the stored last-send ts is older than
+// now-quietPeriod (or the key is new), so the daemon and the summarize
+// oneshot can't both pass a check-then-set and double-send.
+func claimNotifyQuiet(db *sql.DB, lastKey string, now time.Time) bool {
+	var v string
+	err := db.QueryRow(`INSERT INTO meta(k,v) VALUES(?, ?)
+	  ON CONFLICT(k) DO UPDATE SET v=excluded.v
+	  WHERE CAST(meta.v AS INTEGER) <= ? RETURNING v`,
+		lastKey, strconv.FormatInt(now.Unix(), 10),
+		now.Add(-notifyQuietPeriod).Unix()).Scan(&v)
+	return err == nil
+}
+
+// claimNotifyBudget spends one unit of the per-class daily cap atomically:
+// the conditional upsert increments the counter only while it is under
+// limit, so concurrent senders can never both slip under the cap — and the
+// stored count never exceeds it.
+func claimNotifyBudget(db *sql.DB, countKey string, limit int) bool {
+	var v string
+	err := db.QueryRow(`INSERT INTO meta(k,v) VALUES(?, '1')
+	  ON CONFLICT(k) DO UPDATE SET v=CAST(meta.v AS INTEGER)+1
+	  WHERE CAST(meta.v AS INTEGER) < ? RETURNING v`,
+		countKey, limit).Scan(&v)
+	return err == nil
+}
+
 // notify emits one desktop notification via notify-send, gated by the
 // notifications config and bounded by the meta-keyed daily cap plus a quiet
-// period. The budget is consumed before exec so a failing or hung
-// notify-send can't retry-storm from a streaking emission site; a missing
-// binary stays silent and leaves the budget intact. Errors never propagate
-// — notifications are best-effort. Callers on the capture tick must use
-// notifyAsync instead.
+// period. Both gates are claimed by single-statement atomic upserts — the
+// daemon and the summarize oneshot share one budget — and the claims land
+// before exec so a failing or hung notify-send can't retry-storm from a
+// streaking emission site; a missing binary stays silent and leaves the
+// budget intact. An exec failure is still traced as a notify_failed event
+// (class name only — the label-only rule for bodies applies to the events
+// table too). Note GLib falls back to $XDG_RUNTIME_DIR/bus when
+// DBUS_SESSION_BUS_ADDRESS is unset, so notify-send can still reach the
+// bus from the stripped environment of the summarize oneshot. Errors never
+// propagate — notifications are best-effort. Callers on the capture tick
+// must use notifyAsync instead.
 func notify(db *sql.DB, cfg Config, class, title, body string) {
 	if db == nil || !notifyEnabled(cfg, class) {
 		return
@@ -98,21 +149,20 @@ func notify(db *sql.DB, cfg Config, class, title, body string) {
 	if notifyOnceDaily[class] {
 		limit = 1
 	}
-	countKey := "notify_count:" + class + ":" + time.Now().Format("2006-01-02")
-	count, _ := strconv.Atoi(metaGet(db, countKey))
-	if count >= limit {
+	now := time.Now()
+	// Quiet claimed before budget so a suppressed send doesn't spend count.
+	if !claimNotifyQuiet(db, "notify_last:"+class, now) {
 		return
 	}
-	lastKey := "notify_last:" + class
-	if ts, err := strconv.ParseInt(metaGet(db, lastKey), 10, 64); err == nil &&
-		time.Since(time.Unix(ts, 0)) < notifyQuietPeriod {
+	if !claimNotifyBudget(db, "notify_count:"+class+":"+now.Format("2006-01-02"), limit) {
 		return
 	}
-	metaSet(db, countKey, strconv.Itoa(count+1))
-	metaSet(db, lastKey, strconv.FormatInt(time.Now().Unix(), 10))
 	ctx, cancel := context.WithTimeout(context.Background(), notifyExecTimeout)
 	defer cancel()
-	_ = exec.CommandContext(ctx, "notify-send", "-a", "dayflow", title, body).Run()
+	if err := exec.CommandContext(ctx, "notify-send", "-a", "dayflow", title, body).Run(); err != nil {
+		logEvent(db, "notify_failed", class)
+		debugf(cfg, "notify %s: %v", class, err)
+	}
 }
 
 // notifyAsync emits off the caller's goroutine — the daemon's select loop
@@ -125,38 +175,117 @@ func notifyAsync(db *sql.DB, cfg Config, class, title, body string) {
 	go notify(db, cfg, class, title, body)
 }
 
+// stallEventTypes is the full capture-lifecycle set — tick heartbeats plus
+// the start/stop/pause/resume transitions that explain silence.
+const stallEventTypes = `'daemon_start','daemon_stop','capture_saved','capture_deduped',
+  'capture_ignored','capture_error','capture_recovered','capture_output',
+  'capture_output_disabled','capture_paused','capture_resumed',
+  'auto_paused','auto_resumed','paused','resumed'`
+
+// stallHeartbeatTypes is the subset that proves a capture tick actually ran
+// — daemon_start is a boot marker, not a heartbeat: under Restart=always a
+// crash loop writes a fresh one every few seconds while zero frames flow.
+const stallHeartbeatTypes = `'daemon_stop','capture_saved','capture_deduped',
+  'capture_ignored','capture_error','capture_recovered','capture_output',
+  'capture_output_disabled','capture_paused','capture_resumed',
+  'auto_paused','auto_resumed','paused','resumed'`
+
+// stallStaleFloorSec is the oneshot's staleness floor. Persistent=true on
+// the summarize timer fires it the instant the machine wakes, racing the
+// daemon's first post-suspend heartbeat — a low floor manufactures a false
+// stall after every sleep. Thirty minutes is still a real stall, and a true
+// stall persists across the 15-minute runs anyway. A var so tests can
+// shrink it.
+var stallStaleFloorSec int64 = 30 * 60
+
+// captureQuietNow reports whether capture is *currently* in a legitimate
+// quiet state: manual pause, lock-screen auto-pause, or — grim backend
+// only — no wayland session (grim exits instantly without a socket, so the
+// daemon parks in capture_paused by design; a custom capture_command is
+// ungated, so its silence always counts). A stale quiet-type event only
+// suppresses the stall alert while its condition still holds — a daemon
+// that died mid-pause must alert.
+func captureQuietNow(cfg Config) bool {
+	if paused() {
+		return true
+	}
+	if cfg.AutoPauseLocked && screenLocked() {
+		return true
+	}
+	return cfg.CaptureCommand == "" && !waylandReachable()
+}
+
 // checkCaptureStall reports a wedged or dead capture daemon from a live
 // process — the 15-minute summarize oneshot calls it because a daemon stuck
-// in an unbounded call cannot notify about itself. It watches the capture
-// loop's heartbeat in events: the most recent lifecycle event distinguishes
-// wedged/dead silence from an intentional quiet state (manual pause, lock,
-// absent wayland session), which is never reported as a stall.
+// in an unbounded call cannot notify about itself. Freshness comes from two
+// sources: the meta heartbeat (one row per capture tick, immune to the
+// events table's 2000-row cap) and the newest lifecycle event, which also
+// disambiguates wedged/dead silence from an intentional quiet state
+// (stopped daemon, current pause, lock, absent wayland session).
 func checkCaptureStall(db *sql.DB, cfg Config) {
 	if db == nil || !notifyEnabled(cfg, notifyClassStall) {
 		return
 	}
+	var metaTS int64
+	if ts, err := strconv.ParseInt(metaGet(db, metaCaptureHeartbeat), 10, 64); err == nil {
+		metaTS = ts
+	}
 	var lastType string
-	var last int64
-	err := db.QueryRow(`SELECT type, ts FROM events WHERE type IN (
-	  'daemon_start','capture_saved','capture_deduped','capture_ignored',
-	  'capture_error','capture_recovered','capture_output','capture_output_disabled',
-	  'capture_paused','capture_resumed','auto_paused','auto_resumed','paused','resumed')
-	  ORDER BY ts DESC, id DESC LIMIT 1`).Scan(&lastType, &last)
-	if err != nil || last == 0 {
-		return // daemon never ran on this install — nothing to call a stall
+	var lastTS int64
+	err := db.QueryRow(`SELECT type, ts FROM events WHERE type IN (`+stallEventTypes+`)
+	  ORDER BY ts DESC, id DESC LIMIT 1`).Scan(&lastType, &lastTS)
+	if err != nil || lastTS == 0 {
+		if metaTS == 0 {
+			return // daemon never ran on this install — nothing to call a stall
+		}
+		lastType = "" // events trimmed away; the meta heartbeat is all that remains
 	}
-	switch lastType {
-	case "capture_paused", "auto_paused", "paused":
-		return // known-quiet state: the silence is intentional
+	if metaTS == 0 {
+		// pause/resume events come from the CLI too — without any daemon
+		// start on record they are user noise, not a stall.
+		var starts int
+		db.QueryRow(`SELECT COUNT(1) FROM events WHERE type='daemon_start'`).Scan(&starts)
+		if starts == 0 {
+			return
+		}
 	}
-	stale := int64(60)
+	stale := stallStaleFloorSec
 	if s := int64(3 * cfg.CaptureIntervalSec); s > stale {
 		stale = s
 	}
-	if time.Now().Unix()-last <= stale {
+	var fresh int64
+	switch lastType {
+	case "daemon_stop":
+		return // intentional stop — the daemon announced its own silence
+	case "capture_paused", "auto_paused", "paused":
+		// A quiet claim suppresses only while the quiet condition still
+		// holds — a daemon that died while paused or locked is a stall.
+		if captureQuietNow(cfg) {
+			return
+		}
+		fresh = lastTS
+	case "daemon_start":
+		// A start with no later heartbeat is a crash loop (or a daemon on
+		// its first tick). Restarts keep the newest start row fresh, so
+		// measure the run from its FIRST unbroken start — and the meta
+		// heartbeat can't vouch here because a crash mid-tick refreshes it
+		// on every restart.
+		db.QueryRow(`SELECT COALESCE(MIN(ts),0) FROM events WHERE type='daemon_start'
+		  AND id > COALESCE((
+		    SELECT MAX(id) FROM events WHERE type IN (` + stallHeartbeatTypes + `)),0)`).Scan(&fresh)
+		if fresh == 0 {
+			fresh = lastTS
+		}
+	default:
+		fresh = lastTS
+	}
+	if lastType != "daemon_start" && metaTS > fresh {
+		fresh = metaTS
+	}
+	if fresh == 0 || time.Now().Unix()-fresh <= stale {
 		return
 	}
-	if paused() || (cfg.AutoPauseLocked && screenLocked()) {
+	if captureQuietNow(cfg) {
 		return
 	}
 	notify(db, cfg, notifyClassStall, "dayflow", "capture stalled")
