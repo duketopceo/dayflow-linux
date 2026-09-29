@@ -411,6 +411,31 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 		check("config permissions", fi.Mode().Perm()&0o077 == 0,
 			fmt.Sprintf("%s is %04o, want 0600", configPath(), fi.Mode().Perm()))
 	}
+	// Agent transcript stores: probe each DB-backed store read-only via
+	// openStoreProbe (no temp-dir copy — Devin's sessions.db is multi-GB)
+	// and run the adapter's own candidate extraction over a recent window,
+	// so upstream schema drift lands in doctor with the same vocabulary
+	// `agents --json` reports. Absent stores are info — an uninstalled tool
+	// is not drift.
+	for _, name := range []string{"opencode", "devin", "cursor"} {
+		var present []string
+		for _, p := range agentStoreDBs()[name] {
+			if _, err := os.Stat(p); err == nil {
+				present = append(present, p)
+			}
+		}
+		if len(present) == 0 {
+			checks = append(checks, doctorCheck{Name: "agent store " + name, Status: "info",
+				Detail: "store absent — source not installed"})
+			continue
+		}
+		if err := probeAgentStore(name, present); err != nil {
+			warn("agent store "+name, err.Error())
+		} else {
+			checks = append(checks, doctorCheck{Name: "agent store " + name, Status: "ok",
+				Detail: fmt.Sprintf("%d store(s) readable", len(present))})
+		}
+	}
 	// Binary vs installed plugin manifest: the two upgrade together, so a
 	// version gap means a half-applied upgrade. No manifest at all is an
 	// engine-only install — info, not a failure.
@@ -428,6 +453,61 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 		checks = append(checks, doctorCheck{Name: "plugin manifest", Status: "ok", Detail: "v" + mVer})
 	}
 	return checks, fail
+}
+
+// probeAgentStore opens each present store read-only and runs the
+// source's own candidate extraction over a recent window. Extraction —
+// not a {table→columns} assertion — is the contract: Cursor's two legal
+// layouts would false-positive a schema check, and a renamed payload
+// field wouldn't trip one.
+func probeAgentStore(name string, paths []string) error {
+	var errs []string
+	for _, p := range paths {
+		db, err := openStoreProbe(p)
+		if err != nil {
+			errs = append(errs, filepath.Base(p)+": "+err.Error())
+			continue
+		}
+		err = probeAgentStoreExtraction(name, db)
+		db.Close()
+		if err != nil {
+			errs = append(errs, filepath.Base(p)+": "+err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func probeAgentStoreExtraction(name string, db *sql.DB) error {
+	e := time.Now()
+	s := e.AddDate(0, 0, -90)
+	switch name {
+	case "opencode":
+		layout := opencodeLayout(db)
+		if layout == "" {
+			return fmt.Errorf("schema drift: no known opencode layout")
+		}
+		_, err := opencodeCandidates(db, layout, s.UnixMilli(), e.UnixMilli())
+		return err
+	case "devin":
+		_, err := devinCandidates(db, s.Unix(), e.Unix())
+		return err
+	case "cursor":
+		hasKV := sqliteTableExists(db, "cursorDiskKV")
+		switch {
+		case sqliteTableExists(db, "composerHeaders"):
+			_, err := cursorHeaderRows(db, s.UnixMilli(), e.UnixMilli())
+			return err
+		case hasKV:
+			_, err := cursorHeaderFallback(db, s.UnixMilli(), e.UnixMilli())
+			return err
+		default:
+			return fmt.Errorf("schema drift: no composer tables")
+		}
+	}
+	return fmt.Errorf("unknown agent source %q", name)
 }
 
 func runDoctor(cfg Config, jsonOut bool, deep bool) {
