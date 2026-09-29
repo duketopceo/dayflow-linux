@@ -7,6 +7,7 @@ import "time"
 // asked to see.
 
 // trimToWindow returns the slice of events whose timestamps fall inside the
+// rolling window. Boundary comparisons use After/Equal on the cutoff instant.
 // last `window` duration ending at `now`. Events are assumed sorted by time
 // ascending.
 func trimToWindow(events []time.Time, now time.Time, window time.Duration) []time.Time {
