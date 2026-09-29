@@ -113,7 +113,8 @@ Control:
   ignore [--active|class] Add an app to the ignore list (--active = focused window)
   unignore <class>        Remove an app from the ignore list
   events [--json] [-n N]  Recent event log (captures, skips, errors, summaries)
-  usage [--json]          Token usage totals from the api_calls log
+  usage [--days N] [--json]   Token/cost usage over the last N local days
+                          (default: all retained rows; shows coverage floor)
   stats [--json]          Storage, block counts, date range, and API usage
   week | month [--json]   Timeline rollups
   weekly [--json]        Weekly analytics payload (donut, treemap, context shifts, highlights)
@@ -435,7 +436,17 @@ func main() {
 		printEvents(cfg, args, jsonOut)
 
 	case "usage":
-		printUsage(jsonOut)
+		// usage [--days N] [--json] — N bounds the window to the last N
+		// local days; omitted = all retained rows.
+		days := 0
+		if v := flagValue(args, "--days"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 {
+				fatal(fmt.Errorf("--days must be a positive integer"))
+			}
+			days = n
+		}
+		printUsage(cfg, jsonOut, days)
 
 	case "stats":
 		printStats(cfg, jsonOut)
@@ -1349,28 +1360,43 @@ func printReindex(asJSON bool) {
 	fmt.Println("search index rebuilt")
 }
 
-func printUsage(asJSON bool) {
+func printUsage(cfg Config, asJSON bool, days int) {
 	db, err := openDB()
 	fatal(err)
 	defer db.Close()
-	sum, err := usageSummary(db)
+	sum, err := usageSummaryWindow(db, days, cfg)
 	fatal(err)
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(sum)
 		return
 	}
+	window := "all retained data"
+	if days > 0 {
+		window = fmt.Sprintf("last %d day(s)", days)
+	}
+	if since, _ := sum["data_since"].(string); since != "" {
+		fmt.Printf("usage: %s · data since %s\n", window, since)
+	} else {
+		fmt.Printf("usage: %s · no call rows recorded\n", window)
+	}
 	calls := sum["api_calls"].(int)
-	fmt.Printf("api calls: %d (%d ok, %d failed)\n", calls, sum["ok"], sum["failed"])
+	fmt.Printf("api calls: %d (%d ok, %d failed, %.1f%% fail) avg %.0f ms\n",
+		calls, sum["ok"], sum["failed"], sum["failure_rate"].(float64)*100, sum["avg_latency_ms"].(float64))
 	other := sum["other_llm_calls"].(int)
 	if other > 0 {
-		fmt.Printf("other llm calls: %d (%d ok, %d failed)\n", other, sum["other_ok"], sum["other_failed"])
+		fmt.Printf("other llm calls: %d (%d ok, %d failed, %.1f%% fail) avg %.0f ms\n",
+			other, sum["other_ok"], sum["other_failed"],
+			sum["other_failure_rate"].(float64)*100, sum["other_avg_latency_ms"].(float64))
 	}
 	fmt.Printf("prompt tokens: %d\ncompletion tokens: %d\n",
 		sum["total_prompt_tokens"], sum["total_completion_tokens"])
+	if cost, ok := sum["est_cost_usd"].(float64); ok {
+		fmt.Printf("estimated cost: $%.2f\n", cost)
+	}
 	breakdown, _ := sum["breakdown"].(map[string]any)
 	for _, dim := range []struct {
 		label, key string
-	}{{"by task", "by_task"}, {"by provider", "by_provider"}, {"by model", "by_model"}} {
+	}{{"by day", "by_day"}, {"by task", "by_task"}, {"by provider", "by_provider"}, {"by model", "by_model"}} {
 		rows, _ := breakdown[dim.key].(map[string]usageRow)
 		if len(rows) == 0 {
 			continue
@@ -1383,8 +1409,12 @@ func printUsage(asJSON bool) {
 		fmt.Printf("%s:\n", dim.label)
 		for _, name := range names {
 			r := rows[name]
-			fmt.Printf("  %-32s %d calls (%d ok, %d failed)\n",
-				name, r.Calls, r.OK, r.Failed)
+			fmt.Printf("  %-32s %d calls (%d ok, %d failed, %.1f%% fail) avg %.0f ms",
+				name, r.Calls, r.OK, r.Failed, r.FailureRate*100, r.AvgLatencyMs)
+			if r.EstCostUSD != nil {
+				fmt.Printf("  $%.2f", *r.EstCostUSD)
+			}
+			fmt.Println()
 		}
 	}
 }

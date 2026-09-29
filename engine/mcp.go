@@ -52,8 +52,9 @@ var mcpTools = []map[string]any{
 	{"name": "get_frames", "description": "Captured frame list for a date (YYYY-MM-DD, default today): timestamp, path, exists flag.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD; default today"}}}},
-	{"name": "get_usage", "description": "LLM usage totals across all call types and providers, with per-task/per-provider/per-model breakdown.",
-		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "get_usage", "description": "LLM usage totals across all call types and providers: per-task/per-provider/per-model/per-day breakdown, avg latency, failure rate, a coverage floor (data_since — the oldest row actually counted, so log trimming is visible), and dollar estimates when the pricing config is set.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"days": map[string]any{"type": "integer", "description": "limit to the last N local days; 0/omitted = all retained rows"}}}},
 	{"name": "get_stats", "description": "Storage usage (db, frames, total), journal block counts, date coverage, and API call/token totals.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "get_standup", "description": "Generate a standup update from yesterday and today's blocks.",
@@ -224,7 +225,11 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		return map[string]any{"date": t.Local().Format("2006-01-02"), "frames": frames, "count": len(frames)}, nil
 
 	case "get_usage":
-		return usageSummary(db)
+		days := 0
+		if v, ok := args["days"].(float64); ok && v > 0 {
+			days = int(v)
+		}
+		return usageSummaryWindow(db, days, cfg)
 
 	case "get_stats":
 		var blocksTotal, blocksDone, blocksFailed, blocksDead, framesPending, eventsTotal int
