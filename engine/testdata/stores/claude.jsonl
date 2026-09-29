@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-01-05T10:00:00Z","cwd":"/fixture/proj","message":{"role":"user","content":"__fixture_title_1__"}}
+{"type":"assistant","timestamp":"2026-01-05T10:05:00Z","cwd":"/fixture/proj","message":{"role":"assistant","content":[{"type":"text","text":"__fixture_assistant_1__"}]}}
