@@ -145,6 +145,10 @@ Setup & health:
   doctor [--json] [--deep]  Check session, grim, key, model, endpoint;
                           --deep runs a full sqlite integrity check
   detect [--json]         Probe for local model endpoints (Ollama, LM Studio)
+  fixtures capture <source> [--db P] [--out F]   Regenerate an agent-store
+                          contract fixture — schema + sentinel rows only,
+                          never real payloads (sources: claude codex
+                          opencode devin cursor; run from engine/)
 
 Config: %s
 Data:   %s
@@ -1114,6 +1118,10 @@ func main() {
 
 	case "doctor":
 		runDoctor(cfg, jsonOut, hasFlag(args, "--deep"))
+	case "fixtures":
+		// Drift-watch fixture regeneration (U6a): schema-only capture of an
+		// agent store plus synthesized sentinel rows — see docs/maintenance.md.
+		fatal(runFixtures(args))
 	case "detect":
 		runDetect(jsonOut)
 	case "models":
