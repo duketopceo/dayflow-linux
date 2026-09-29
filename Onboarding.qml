@@ -18,6 +18,10 @@ Flickable {
   property string baseUrl: ""
   property string modelSlug: "google/gemma-4-31b-it"
   property var catPicks: ({})
+  // Set only by the explicit "Enable recaps" click on the consent step —
+  // every skip/back path leaves this false so the patch never carries
+  // agent_recaps: true unless the user opted in.
+  property bool recapsOptIn: false
   property string testResult: ""
   property bool testing: false
 
@@ -141,6 +145,7 @@ Flickable {
   property bool keyInPatch: false
 
   function apply() {
+    if (dayflow) dayflow.uilog("onboarding apply " + root.mode)
     root.testing = true
     root.testResult = "Testing..."
     if (root.mode === "openrouter" && root.apiKey !== "") {
@@ -177,6 +182,9 @@ Flickable {
     if (cats.length > 0) {
       patch.categories = cats.map(function(n) { return { name: n, description: n } })
     }
+    // The consent step's Enable is the only path that sets this — a bare
+    // patch merge leaves agent_recaps absent, which decodes to off.
+    if (root.recapsOptIn) patch.agent_recaps = true
     applyProc.pendingPatch = JSON.stringify(patch)
     applyProc.command = ["dayflow", "config", "patch", "-"]
     applyProc.running = true
@@ -451,11 +459,11 @@ Flickable {
           radius: Style.cornerRadius
           color: root.dayflow ? root.dayflow.accentFill(0.16) : "transparent"
           border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
-          Text { id: finText; anchors.centerIn: parent; text: "Save & test"
+          Text { id: finText; anchors.centerIn: parent; text: "Continue"
             color: root.dayflow ? root.dayflow.foreground : Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
-          MouseArea { anchors.fill: parent; onClicked: { if (dayflow) dayflow.uilog("onboarding apply " + root.mode); root.apply(); root.step = 3 } }
+          MouseArea { anchors.fill: parent; onClicked: root.step = 3 }
         }
         Text {
           anchors.verticalCenter: parent.verticalCenter
@@ -469,9 +477,80 @@ Flickable {
       }
     }
 
-    // ---- step 3: result ----
+    // ---- step 3: agent-session recaps opt-in ----
+    // Consent gate before the config is written: Enable is the only control
+    // that sets recapsOptIn; "Not now", Back, and dismissing the wizard
+    // never write agent_recaps: true.
     Column {
       visible: root.step === 3
+      width: parent.width
+      spacing: Style.space(8)
+
+      Text {
+        width: parent.width
+        text: "Agent-session recaps (optional)"
+        color: root.dayflow ? root.dayflow.foreground : Color.foreground
+        font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body; font.bold: true
+      }
+      Text {
+        width: parent.width
+        text: "Dayflow can write a one-line recap of each coding-agent session it finds in Claude Code, Codex, OpenCode, Devin, and Cursor. Transcripts are always read locally to build the session list — that happens either way, on or off."
+        color: root.dayflow ? root.dayflow.dim : Color.muted
+        font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WordWrap
+      }
+      Text {
+        width: parent.width
+        text: "When recaps are on, a bounded, scrubbed transcript excerpt leaves your machine — to your configured chat provider, which writes the recap, and to the decisions endpoint used for judging which sessions are worth summarizing. Recaps are off by default; nothing extra is sent unless you enable them here or later in Settings."
+        color: root.dayflow ? root.dayflow.dim : Color.muted
+        font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WordWrap
+      }
+
+      Row {
+        spacing: Style.space(6)
+        Rectangle {
+          width: enText.implicitWidth + Style.space(16)
+          height: enText.implicitHeight + Style.space(8)
+          radius: Style.cornerRadius
+          color: root.dayflow ? root.dayflow.accentFill(0.16) : "transparent"
+          border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
+          Text { id: enText; anchors.centerIn: parent; text: "Enable recaps"
+            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body; font.bold: true }
+          MouseArea { anchors.fill: parent; onClicked: { root.recapsOptIn = true; root.apply(); root.step = 4 } }
+        }
+        Rectangle {
+          width: offText.implicitWidth + Style.space(16)
+          height: offText.implicitHeight + Style.space(8)
+          radius: Style.cornerRadius
+          color: root.dayflow ? root.dayflow.btnBg(offMa.containsMouse) : "transparent"
+          border.color: root.dayflow ? root.dayflow.fgFill(0.12) : "transparent"
+          Text { id: offText; anchors.centerIn: parent; text: "Not now"
+            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body }
+          MouseArea { id: offMa; anchors.fill: parent; hoverEnabled: true; onClicked: { root.apply(); root.step = 4 } }
+        }
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Back"
+          color: root.dayflow ? root.dayflow.dim : Color.muted
+          font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+          font.underline: true
+          MouseArea { anchors.fill: parent; onClicked: root.step = 2 }
+        }
+      }
+    }
+
+    // ---- step 4: result ----
+    Column {
+      visible: root.step === 4
       width: parent.width
       spacing: Style.space(8)
 
