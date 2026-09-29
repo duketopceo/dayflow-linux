@@ -431,6 +431,75 @@ Flickable {
 
       Text {
         width: parent.width
+        text: "Agent recaps"
+        color: dayflow.foreground
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+
+      Text {
+        width: parent.width
+        text: "Off by default. When on, a bounded, scrubbed transcript excerpt is sent to your chat provider and to OpenRouter's decisions endpoint, which judges which sessions are worth summarizing. Claude Code, Codex, OpenCode, Devin, and Cursor transcripts are read locally for the session list either way."
+        color: dayflow.dim
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+
+      Row {
+        width: parent.width
+        spacing: Style.space(8)
+
+        Text {
+          width: parent.width - recapsToggle.width - parent.spacing
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Agent-session recaps"
+          color: dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.body
+          wrapMode: Text.WordWrap
+        }
+
+        Rectangle {
+          id: recapsToggle
+          width: recapsToggleText.implicitWidth + Style.space(12)
+          height: recapsToggleText.implicitHeight + Style.space(6)
+          radius: Style.cornerRadius
+          color: dayflow.configDraft.agent_recaps === true
+            ? dayflow.accentFill(0.16)
+            : dayflow.btnBg(recapsToggleMa.containsMouse)
+          border.color: dayflow.configDraft.agent_recaps === true
+            ? dayflow.accentFill(0.5)
+            : dayflow.fgFill(0.12)
+
+          Text {
+            id: recapsToggleText
+            anchors.centerIn: parent
+            text: dayflow.configDraft.agent_recaps === true ? "On" : "Off"
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+          MouseArea {
+            id: recapsToggleMa
+            anchors.fill: parent
+            hoverEnabled: true
+            // configDraft is a plain JS object — member writes don't notify,
+            // so reassign a shallow copy to refresh the On/Off bindings
+            // (same pattern as catPicks in Onboarding).
+            onClicked: {
+              var d = Object.assign({}, dayflow.configDraft)
+              d.agent_recaps = !(d.agent_recaps === true)
+              dayflow.configDraft = d
+            }
+          }
+        }
+      }
+
+      Text {
+        width: parent.width
         text: "Category buckets"
         color: dayflow.foreground
         font.family: dayflow.fontFamily

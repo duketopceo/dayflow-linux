@@ -58,7 +58,7 @@ Panel {
   property bool fullViewOpen: false
   // Bump with manifest.json version — compared against the engine's
   // reported version to warn when the plugin and binary drift apart.
-  readonly property string pluginVersion: "1.3.1"
+  readonly property string pluginVersion: "1.4.0"
   property string engineVersion: ""
 
   readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
@@ -1327,7 +1327,7 @@ Panel {
           visible: dayflow.engineVersion !== "" && dayflow.engineVersion !== dayflow.pluginVersion
           width: parent.width - content.leftPadding - content.rightPadding
           text: "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
-                " — run `dayflow install` or rescan plugins"
+                " — align the engine binary and panel plugin versions (upgrade whichever is older)"
           textFormat: Text.PlainText
           color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
           font.family: dayflow.fontFamily

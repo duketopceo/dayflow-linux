@@ -206,7 +206,7 @@ Flickable {
     Text {
       visible: dayflow.spans.length === 0 && dayflow.errorText === "" && dayflow.configured
       width: parent.width
-      text: "Nothing summarized yet — blocks land every 15 minutes."
+      text: "Nothing summarized yet — blocks land once per block interval (15 min by default)."
       textFormat: Text.PlainText
       color: dayflow.dim
       font.family: dayflow.fontFamily

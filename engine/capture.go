@@ -12,8 +12,11 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	xdraw "golang.org/x/image/draw"
@@ -64,11 +67,18 @@ func setPaused(p bool) {
 	}
 }
 
+// tickExecTimeout bounds the short status probes spawned on the daemon's
+// tick path (hyprctl, loginctl). A hung helper must not wedge the
+// single-goroutine capture loop — a var so tests can shrink it.
+var tickExecTimeout = 3 * time.Second
+
 // activeWindowClass returns the class of the focused window on Hyprland.
 // It falls back to the window title when no class is reported, and returns
 // "" when there is no focused window / not running under Hyprland.
 func activeWindowClass() string {
-	out, err := exec.Command("hyprctl", "activewindow", "-j").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), tickExecTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "hyprctl", "activewindow", "-j").Output()
 	if err != nil || len(out) == 0 {
 		return ""
 	}
@@ -112,7 +122,9 @@ func screenLocked() bool {
 	sessions := []string{os.Getenv("XDG_SESSION_ID")}
 	if sessions[0] == "" {
 		// Fall back to the active graphical session for the current user.
-		out, err := exec.Command("loginctl", "list-sessions", "--no-legend").Output()
+		ctx, cancel := context.WithTimeout(context.Background(), tickExecTimeout)
+		out, err := exec.CommandContext(ctx, "loginctl", "list-sessions", "--no-legend").Output()
+		cancel()
 		if err != nil {
 			return false
 		}
@@ -136,7 +148,9 @@ func screenLocked() bool {
 		if sid == "" {
 			continue
 		}
-		out, err := exec.Command("loginctl", "show-session", sid, "--property=LockedHint").Output()
+		ctx, cancel := context.WithTimeout(context.Background(), tickExecTimeout)
+		out, err := exec.CommandContext(ctx, "loginctl", "show-session", sid, "--property=LockedHint").Output()
+		cancel()
 		if err != nil || len(out) == 0 {
 			continue
 		}
@@ -188,9 +202,22 @@ func hamming(a, b frameHash) int {
 	return n
 }
 
+// grimArgv returns the grim command line for one grab. output "" captures
+// all outputs composited; a name passes it through as `grim -o <name>`.
+func grimArgv(cfg Config, output string) []string {
+	args := []string{"grim", "-t", "jpeg", "-q", fmt.Sprint(cfg.JPEGQuality)}
+	if output != "" {
+		args = append(args, "-o", output)
+	}
+	return append(args, "-")
+}
+
 // resolveCaptureCommand picks the screenshot tool. grim (wlroots: Hyprland,
 // sway, river, ...) is the only built-in backend; capture_command in config can
-// point at anything that writes a JPEG/PNG to stdout.
+// point at anything that writes a JPEG/PNG to stdout. For the grim backend a
+// literal output name bakes -o into the returned argv; "auto" returns the
+// composite argv — captureOnce re-resolves the focused output per tick, so a
+// dock/focus change can't pin capture to the start-time monitor.
 func resolveCaptureCommand(cfg Config) ([]string, error) {
 	if cfg.CaptureCommand != "" {
 		return strings.Fields(cfg.CaptureCommand), nil
@@ -198,11 +225,109 @@ func resolveCaptureCommand(cfg Config) ([]string, error) {
 	if _, err := exec.LookPath("grim"); err != nil {
 		return nil, fmt.Errorf("grim not found — install it (wlroots compositors) or set capture_command in %s", configPath())
 	}
-	args := []string{"grim", "-t", "jpeg", "-q", fmt.Sprint(cfg.JPEGQuality)}
-	if cfg.Output != "" {
-		args = append(args, "-o", cfg.Output)
+	output := cfg.Output
+	if output == "auto" {
+		output = "" // resolved per tick by autoOutput
 	}
-	return append(args, "-"), nil
+	return grimArgv(cfg, output), nil
+}
+
+// focusFailCeiling negative-caches focus resolution: after this many
+// consecutive `hyprctl monitors` failures the daemon stops spawning hyprctl
+// until focusRetryBackoff elapses — on non-Hyprland systems output=auto
+// would otherwise pay a dead exec every tick forever, but a daemon started
+// during compositor init must not stay latched off for its whole lifetime.
+const focusFailCeiling = 5
+
+// focusRetryBackoff time-boxes the negative cache: once it elapses the
+// daemon spends a single probe on `hyprctl monitors` — success clears the
+// latch, failure re-arms it for another interval. A var so tests can
+// shrink it.
+var focusRetryBackoff = time.Hour
+
+var (
+	focusFails      int       // consecutive hyprctl monitors failures
+	focusDisabled   bool      // negative cache: focus resolution switched off
+	focusDisabledAt time.Time // when the latch last engaged
+	lastAutoOutput  string    // last recorded -o target ("composite" when none)
+)
+
+// focusedOutput asks Hyprland which output currently holds focus
+// (`hyprctl monitors -j`, focused:true). It returns "" — composite
+// capture — when no output is focused or the focused output is a
+// HEADLESS-* node (grim can't -o those). Errors count toward the
+// negative cache in autoOutput.
+func focusedOutput() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), tickExecTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "hyprctl", "monitors", "-j").Output()
+	if err != nil {
+		return "", err
+	}
+	var mons []struct {
+		Name    string `json:"name"`
+		Focused bool   `json:"focused"`
+	}
+	if err := json.Unmarshal(out, &mons); err != nil {
+		return "", fmt.Errorf("hyprctl monitors: %w", err)
+	}
+	for _, m := range mons {
+		if m.Focused && !strings.HasPrefix(m.Name, "HEADLESS-") {
+			return m.Name, nil
+		}
+	}
+	return "", nil
+}
+
+// autoOutput resolves the grim -o target for one tick under output=auto:
+// the focused output's name, or "" for a composite grab. Consecutive
+// hyprctl failures negative-cache the lookup for focusRetryBackoff (one
+// event, not per-tick spam), after which a single re-probe decides whether
+// to unlatch or re-arm — so a daemon that started while the compositor was
+// still coming up recovers instead of staying composite-only forever. The
+// resolved target is logged only when it changes so mixed-resolution frame
+// streams stay attributable.
+func autoOutput(db *sql.DB, cfg Config) string {
+	if focusDisabled && time.Since(focusDisabledAt) < focusRetryBackoff {
+		return ""
+	}
+	name, err := focusedOutput()
+	if err != nil {
+		if focusDisabled {
+			// Post-backoff probe still failing — re-arm the latch without
+			// paying a full fail streak every interval.
+			focusDisabledAt = time.Now()
+			debugf(cfg, "capture: output=auto re-probe failed, re-latching: %v", err)
+			return ""
+		}
+		focusFails++
+		if focusFails >= focusFailCeiling {
+			focusDisabled = true
+			focusDisabledAt = time.Now()
+			logEvent(db, "capture_output_disabled",
+				fmt.Sprintf("hyprctl monitors failing: %v", err))
+			debugf(cfg, "capture: output=auto disabled after %d consecutive hyprctl failures: %v",
+				focusFails, err)
+		}
+	} else {
+		if focusDisabled {
+			focusDisabled = false
+			focusDisabledAt = time.Time{}
+			logEvent(db, "capture_output_enabled", "hyprctl monitors reachable")
+			debugf(cfg, "capture: output=auto re-enabled after %s backoff", focusRetryBackoff)
+		}
+		focusFails = 0
+	}
+	resolved := name
+	if resolved == "" {
+		resolved = "composite"
+	}
+	if resolved != lastAutoOutput {
+		logEvent(db, "capture_output", resolved)
+		debugf(cfg, "capture: output %s", resolved)
+		lastAutoOutput = resolved
+	}
+	return name
 }
 
 // grabFrameTimeout bounds one capture_command run — a hung screenshot tool
@@ -279,7 +404,26 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) 
 		debugf(cfg, "capture: ignored app %s", cls)
 		return lastHash, false, nil
 	}
-	raw, err := grabFrame(cmdArgs)
+	// output=auto re-resolves the focused monitor every tick and injects
+	// -o into a freshly built grim argv. The injection is grim-path only —
+	// a custom capture_command is used verbatim and auto is ignored there.
+	args := cmdArgs
+	var composite []string
+	if cfg.CaptureCommand == "" && cfg.Output == "auto" &&
+		len(args) > 0 && filepath.Base(args[0]) == "grim" {
+		if name := autoOutput(db, cfg); name != "" {
+			composite = grimArgv(cfg, "")
+			args = grimArgv(cfg, name)
+		}
+	}
+	raw, err := grabFrame(args)
+	if err != nil && composite != nil {
+		// resolve→exec race (e.g. the output was unplugged between
+		// `hyprctl monitors` and `grim -o`, or a dock transition): one
+		// composite retry this tick before the failure counts.
+		debugf(cfg, "capture: grim -o failed (%v); retrying composite", err)
+		raw, err = grabFrame(composite)
+	}
 	if err != nil {
 		// Logging is the caller's job — it streak-throttles so a dead-session
 		// window doesn't flood every sink each interval.
@@ -480,6 +624,8 @@ func trimLogTables(db *sql.DB) bool {
 		SELECT rowid FROM events ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
 	db.Exec(`DELETE FROM api_calls WHERE rowid <= (
 		SELECT rowid FROM api_calls ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
+	db.Exec(`DELETE FROM llm_calls WHERE rowid <= (
+		SELECT rowid FROM llm_calls ORDER BY rowid DESC LIMIT 1 OFFSET 2000)`)
 	checkpointWAL(db)
 	if _, err := db.Exec(`VACUUM`); err != nil {
 		logEvent(db, "storage_cap_error", "vacuum: "+err.Error())
@@ -737,6 +883,14 @@ func runDaemon(cfg Config) error {
 	logEvent(db, "daemon_start", strings.Join(cmdArgs, " "))
 	cfgMtime := configMtime()
 
+	// SIGTERM/SIGINT (systemctl stop, Ctrl-C) is an intentional stop, not a
+	// wedge — write a terminal event so the stall detector reads the
+	// silence as known-quiet instead of a dead daemon. Registered before
+	// the first capture so a stop during it still lands in the channel.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
+
 	// hot-reload config when the file changes so `dayflow config set` and
 	// `ignore` apply without a restart
 	reloadIfChanged := func() {
@@ -747,6 +901,9 @@ func runDaemon(cfg Config) error {
 		if nc, err := loadConfig(); err == nil {
 			cfg = nc
 			cfgMtime = m
+			// A reload can mean a compositor change — drop the output=auto
+			// negative cache so the next tick re-probes hyprctl.
+			focusFails, focusDisabled, focusDisabledAt = 0, false, time.Time{}
 			if na, err := resolveCaptureCommand(cfg); err == nil {
 				cmdArgs = na
 			}
@@ -758,14 +915,17 @@ func runDaemon(cfg Config) error {
 
 	var lastHash *frameHash // nil = no prior sample; force first capture
 	locked := false
-	noSession := false // wayland socket absent — capture skipped, logged once
-	grabFails := 0     // consecutive capture errors with a session present
+	noSession := false          // wayland socket absent — capture skipped, logged once
+	grabFails := 0              // consecutive capture errors with a session present
+	var grabFailSince time.Time // first failure of the current streak
 	tick := time.NewTicker(time.Duration(cfg.CaptureIntervalSec) * time.Second)
 	defer tick.Stop()
 	retentionTick := time.NewTicker(time.Hour)
 	defer retentionTick.Stop()
 	lockTick := time.NewTicker(time.Minute)
 	defer lockTick.Stop()
+	notifyTick := time.NewTicker(time.Minute)
+	defer notifyTick.Stop()
 	log.Printf("dayflow daemon: capturing every %ds -> %s", cfg.CaptureIntervalSec, framesDir())
 	debugf(cfg, "daemon start: provider=%s model=%s endpoint=%s interval=%ds block=%dm quality=%d retention=%dd keep_frames=%v debug=%v",
 		cfg.Provider, cfg.Model, chatURL(cfg), cfg.CaptureIntervalSec, cfg.BlockMinutes,
@@ -773,6 +933,10 @@ func runDaemon(cfg Config) error {
 
 	capture := func() {
 		reloadIfChanged()
+		// Per-tick liveness for the stall detector — one meta row, immune
+		// to the events table's 2000-row cap. Written before any early
+		// return so paused/no-session ticks still prove the loop is alive.
+		metaSet(db, metaCaptureHeartbeat, strconv.FormatInt(time.Now().Unix(), 10))
 		// Built-in grim exits 1 instantly when no wayland session exists
 		// (greeter, compositor down/restarting) — pause quietly and log the
 		// transition, not an error per tick. Custom capture_command stays
@@ -783,6 +947,7 @@ func runDaemon(cfg Config) error {
 				lastHash = nil
 				logEvent(db, "capture_paused", "no wayland session")
 				debugf(cfg, "capture: paused — wayland socket absent")
+				notifyAsync(db, cfg, notifyClassPaused, "dayflow", "capture paused")
 			}
 			return
 		}
@@ -790,14 +955,27 @@ func runDaemon(cfg Config) error {
 			noSession = false
 			logEvent(db, "capture_resumed", "wayland session")
 			debugf(cfg, "capture: resumed — wayland session present")
+			notifyAsync(db, cfg, notifyClassRecovered, "dayflow", "capture resumed")
 		}
 		h, attempted, err := captureOnce(db, cfg, cmdArgs, lastHash)
 		if err != nil {
+			if grabFails == 0 {
+				grabFailSince = time.Now()
+			}
 			grabFails++
 			if captureFailVisible(grabFails) {
 				logEvent(db, "capture_error", err.Error())
 				debugf(cfg, "capture: %v (streak %d)", err, grabFails)
 				log.Printf("capture: %v (streak %d)", err, grabFails)
+			}
+			// A streak spanning ~5 minutes of wall-clock failures (with a
+			// session present) is a stall, not a transient — alert off-tick;
+			// the quiet period + daily cap bound repeats. The streak floor
+			// plus monotonic elapsed keep a lone first-tick failure at a
+			// large interval from alerting. The summarize oneshot covers a
+			// fully wedged loop that can't reach this line.
+			if stallAlertable(grabFails, grabFailSince) {
+				notifyAsync(db, cfg, notifyClassStall, "dayflow", "capture stalled")
 			}
 			return
 		}
@@ -807,7 +985,11 @@ func runDaemon(cfg Config) error {
 		if grabFails > 0 {
 			logEvent(db, "capture_recovered", fmt.Sprintf("after %d failures", grabFails))
 			debugf(cfg, "capture: recovered after %d failures", grabFails)
+			if stallAlertable(grabFails, grabFailSince) {
+				notifyAsync(db, cfg, notifyClassRecovered, "dayflow", "capture resumed")
+			}
 			grabFails = 0
+			grabFailSince = time.Time{}
 		}
 		lastHash = h
 	}
@@ -815,9 +997,21 @@ func runDaemon(cfg Config) error {
 	runRetention(db, cfg)
 	for {
 		select {
+		case sig := <-sigCh:
+			// Intentional stop — record a terminal event so the stall
+			// detector treats the silence as known-quiet.
+			logEvent(db, "daemon_stop", sig.String())
+			debugf(cfg, "daemon: stopping on %s", sig)
+			return nil
 		case <-tick.C:
 			if cfg.AutoPauseLocked && locked {
-				// locked: do not capture, reset hash so we don't leak last frame
+				// locked: do not capture, reset hash so we don't leak last frame.
+				// Keep the liveness heartbeat fresh too: the loop is alive and
+				// on purpose quiet, and the stall oneshot's captureQuietNow can
+				// miss a locked screen (loginctl failure, missing XDG_SESSION_ID
+				// in the oneshot env) — without a heartbeat it would then report
+				// a false "capture stalled" after 30 minutes of locked screen.
+				metaSet(db, metaCaptureHeartbeat, strconv.FormatInt(time.Now().Unix(), 10))
 				lastHash = nil
 				continue
 			}
@@ -835,11 +1029,18 @@ func runDaemon(cfg Config) error {
 				lastHash = nil
 				logEvent(db, "auto_paused", "screen locked")
 				debugf(cfg, "auto-paused: screen locked")
+				notifyAsync(db, cfg, notifyClassPaused, "dayflow", "capture paused")
 			} else if !isLocked && locked {
 				locked = false
 				logEvent(db, "auto_resumed", "screen unlocked")
 				debugf(cfg, "auto-resumed: screen unlocked")
+				notifyAsync(db, cfg, notifyClassRecovered, "dayflow", "capture resumed")
 			}
+		case <-notifyTick.C:
+			// Once-a-day operator nudges (standup ready, goal pending).
+			// The checks are cheap indexed queries; emission is async and
+			// meta-capped, so the tick never blocks on dbus.
+			checkNudges(db, cfg)
 		}
 	}
 }

@@ -74,6 +74,9 @@ func saveBlockEdit(db *sql.DB, cfg Config, startTs int64, field, newValue string
 		}
 	}
 
+	// The blocks_fts_*/block_edits_fts_* triggers (schemaV4, search.go)
+	// re-index this block's effective text from this row — the raw blocks
+	// row stays untouched.
 	_, err = db.Exec(`INSERT INTO block_edits(start_ts, field, old_value, new_value, edited_at)
 	  VALUES(?,?,?,?,?)`, startTs, field, old, newValue, time.Now().Unix())
 	return err

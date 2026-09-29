@@ -1,169 +1,109 @@
-# Dayflow for Omarchy / Wayland
+# Dayflow for Linux
 
 <p align="center">
   <img src="docs/assets/social.png" alt="Dayflow for Linux" width="640" />
 </p>
 
-A private, automatic work journal for Linux — a port of [Dayflow](https://www.dayflow.so/) (macOS) built for [Omarchy](https://omarchy.org)/Hyprland and other wlroots compositors.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT" /></a>
+  <a href="https://github.com/duketopceo/dayflow-linux/releases"><img src="https://img.shields.io/github/v/release/duketopceo/dayflow-linux" alt="release" /></a>
+  <a href="https://github.com/duketopceo/dayflow-linux/actions/workflows/ci.yml"><img src="https://github.com/duketopceo/dayflow-linux/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+</p>
 
-It captures a lightweight screenshot every 10 seconds, deduplicates unchanged frames, and every 15 minutes asks a vision model (Gemma 4 via [OpenRouter](https://openrouter.ai) by default — $0.09/M tokens) to write a plain-language summary of what you were actually doing. The result is a readable timeline of your day — shown in a bar panel or from the CLI.
+**A private, automatic work journal for Linux.** A port of [Dayflow](https://www.dayflow.so/) (macOS) — records your screen, summarizes what you were actually doing, and shows a readable timeline of your day.
 
-- **Local-first**: frames and the SQLite database live in `~/.local/share/dayflow/`. Nothing leaves your machine except the sampled frames sent for summarization.
-- **Cheap**: — ~30 JPEG frames per 15-min block → `google/gemma-4-31b-it` by default. Any OpenRouter vision model works; non-vision models are rejected at config time.
-- **Light**: single static Go binary, ~25MB RAM, sub-1% CPU.
-- **Private controls**: pause toggle, per-app ignore list, automatic frame deletion, retention pruning.
-- **Activity chunking**: each block is split into per-app segments (`activities[]`) and consecutive same-app blocks merge into cards. Failed summaries retry automatically (max 3 attempts, then `dead`; `dayflow retry` resets).
-- **Multi-provider routing**: configure multiple OpenRouter / custom / local / MCP / CLI providers and route vision, summary, review, standup, chat, and classification tasks to different endpoints. `kind: "cli"` shells out to subscription-authenticated agent CLIs (`cursor-agent`, `opencode`) — no dayflow-held API key, but note the CLI still sends prompts (and any referenced frames) to its own model backend.
-- **Semantic activity cards**: contiguous same-activity blocks merge into single cards everywhere — `day`/`timeline`/`week`/`month`/`insights --json`, MCP `get_timeline`/`get_insights`, and the QML panel all consume the same engine-emitted `cards` array.
-- **Frame normalization**: stored frames are downscaled to a configurable long edge (`frame_max_dim`, default 1920, `0` = off) — smaller storage, cheaper vision egress. Dedup hashing is unchanged (it runs on the decoded frame before resize).
-- **Jev classification**: after the vision model writes title/summary, [TypeSafe Jev](https://openrouter.ai/typesafe/jev-1.13) (`typesafe/jev-1.13` via OpenRouter's decisions API) picks category and productive flag — fast, typed, and calibrated instead of asking the vision model to guess both.
-- **Agent-session recaps** (opt-in): five sources — Claude Code, Codex, OpenCode, Devin, and Cursor — get a generated one-line recap of what was accomplished — Jev judges which sessions are worth summarizing and scores the result. **Off by default** — `dayflow config set agent_recaps true` enables it (generation sends a bounded, scrubbed excerpt to your chat provider); transcripts are always read locally for the session list either way. Cached per transcript; `dayflow agents --no-recaps` for the raw list. Per-source status is reported so a store that silently drifted is visible rather than empty. Store paths are overridable via `DAYFLOW_*_DIR`/`DAYFLOW_*_DB` env vars (see docs/agent-contract.md).
-- **Daily goals + streaks**: set a goal for the day, check it off, and track your consecutive-day completion streak (current, best, and all-time totals).
-- **Week-over-week trends**: the weekly view diffs this week against last — tracked/focus/distraction/shift deltas plus per-category movement in minutes and share points.
-- **Chat with your journal**: ask natural-language questions about your timeline, standup, weekly analytics, or search your journal.
-- **Inline editing**: correct a block's title, category, summary, or productive flag; edits overlay the raw row and flow into analytics.
-- **Standup drafts**: save highlights, tasks, blockers, and priorities; they appear in generated standup updates.
-- **Daily workflow grid**: a macOS-style 15-minute slot view of the day by category.
-- **Weekly analytics**: category donut, app treemap, context-shift Sankey, focus blocks, highlights, and suggestions.
+Dayflow captures a lightweight screenshot every 10 seconds, deduplicates unchanged frames, and every 15 minutes asks a vision model to write a plain-language summary. The result: a timeline you can skim, search, chat with, and export — plus standup drafts, agent-session recaps, and a next-day forecast.
 
-## Repository layout
+- **Local-first** — frames and the SQLite journal live in `~/.local/share/dayflow/`. Nothing leaves your machine except what you enable: sampled frames sent for summarization (or a fully local model — Ollama/LM Studio supported), small per-block descriptors for Jev classification, and — only if you opt in — scrubbed agent-transcript excerpts for session recaps (see the privacy model below).
+- **Cheap** — ~30 JPEG frames per block, `google/gemma-4-31b-it` by default (~$0.09/M tokens). Any OpenRouter vision model, OpenAI-compatible endpoint, MCP tool, or agent CLI (`cursor-agent`, `opencode`) works.
+- **Light** — one static Go binary, ~25 MB RAM, sub-1% CPU. No Electron.
+- **Controllable** — pause toggle, per-app ignore list, automatic frame deletion, retention pruning, `dayflow scrub`.
 
-This repo is both the Omarchy plugin and the engine:
+## Install
 
-```
-manifest.json      # Omarchy plugin manifest (repo root, per marketplace rules)
-BarWidget.qml      # bar indicator: recording state, click for panel
-Panel.qml          # timeline panel + settings footer
-engine/            # Go CLI/daemon (the tracking engine)
-scripts/stress.sh  # live stress test
-preview.png        # marketplace preview
-```
-
-## Requirements
-
-- Wayland compositor where `grim` works (Hyprland, sway, river, … — any wlroots-based compositor, any GPU vendor). On non-wlroots compositors set `capture_command` to a tool that writes an image to stdout.
-- `systemd --user` for the background units
-- `hyprctl` (optional) for the app ignore list — Hyprland only
-- An OpenRouter API key
-- Go to build the engine (prebuilt binaries: see Releases)
-
-## Install the engine
-
-```sh
-cd engine
-go build -o dayflow .
-install -Dm755 dayflow ~/.local/bin/dayflow
-dayflow install    # writes + enables systemd user units
-systemctl --user enable --now dayflow-capture.service
-```
-
-Onboarding:
-
-```sh
-dayflow setup      # interactive: paste key, it validates + picks a vision model
-dayflow doctor     # sanity-check session, grim, key, model
-dayflow models     # list vision-capable models for your key
-```
-
-Or set the key manually: `dayflow config set openrouter_api_key sk-or-...`, `OPENROUTER_API_KEY` env, or `~/.config/openrouter/keys.json` (auto-detected). Use a dedicated OpenRouter key if you want separate spend tracking.
-
-### Using a local model (Ollama / LM Studio)
-
-```sh
-dayflow config set api_base_url http://localhost:11434/v1
-dayflow config set model llama3.2-vision   # or any vision model served by your endpoint
-dayflow config set openrouter_api_key ""     # local endpoints usually need no key
-```
-
-Dayflow uses the OpenAI-compatible `/chat/completions` endpoint. Any local server that accepts base64 `image_url` payloads works.
-
-### Upgrading the engine
-
-The panel, the engine binary, and the database schema must stay in sync. After pulling a new release:
-
-```sh
-cd engine && go build -o dayflow . && install -Dm755 dayflow ~/.local/bin/dayflow
-systemctl --user restart dayflow-capture.service
-```
-
-Then restart any long-lived `dayflow mcp` clients (editors and agents keep their own process running the old binary). `dayflow doctor` reports the engine version, the database schema version, integrity, and untracked frame files; run it after every upgrade. Migrations run automatically on the next engine start and are additive — existing journal data is preserved.
-
-## Install the plugin
+### Omarchy / Quickshell (panel UI)
 
 ```sh
 omarchy plugin add https://github.com/duketopceo/dayflow-linux.git --enable
 ```
 
-or for local development:
+Bar widget + full-window panel (timeline, timelapse, context shifts, agent recaps, forecast). Then `dayflow setup` to configure a provider.
+
+### Any Linux (engine only)
+
+The engine needs no Omarchy — it's a standalone CLI + TUI + MCP server. Works on any wlroots compositor (Hyprland, sway, river, …) via `grim`; on KDE/GNOME/X11 set `capture_command` to any tool that writes an image to stdout.
 
 ```sh
-cp -r . ~/.config/omarchy/plugins/io.github.duketopceo.dayflow   # excludes .git
-omarchy-shell shell rescanPlugins
-omarchy plugin enable io.github.duketopceo.dayflow
+cd engine && go build -o dayflow .
+install -Dm755 dayflow ~/.local/bin/dayflow
+dayflow install      # writes + enables systemd user units
+dayflow setup        # interactive: paste key, validates + picks a vision model
+dayflow doctor       # sanity-check session, grim, key, model, stores
 ```
 
-Bar widget: recording indicator; left-click opens the timeline panel, right-click pauses/resumes. The panel shows today's blocks, engine stats, the ignore list, and pause / ignore-focused-app / summarize-now / standup / insights controls.
+Prebuilt binaries (amd64 + arm64) are attached to each [release](https://github.com/duketopceo/dayflow-linux/releases). See [docs/install-linux.md](docs/install-linux.md) for the non-Omarchy walkthrough.
 
-The panel's **Full view** button opens a standalone window with Today/Week timelines, a timelapse frame scrubber (requires `dayflow playback on`), a context-shift flow diagram, agent-session recaps (Claude Code, Codex, OpenCode, Devin, Cursor), and a next-day forecast.
+**Requirements:** `grim` (or a `capture_command`), `systemd --user`, `hyprctl` (optional — app ignore list and `output: "auto"` focus-follow are Hyprland-only), an OpenRouter key or local endpoint.
 
-## Uninstall
+## What you get
 
-```sh
-omarchy plugin disable io.github.duketopceo.dayflow
-omarchy plugin remove io.github.duketopceo.dayflow   # or rm -rf ~/.config/omarchy/plugins/io.github.duketopceo.dayflow
-dayflow uninstall                                       # removes systemd user units
-dayflow pause
-rm -rf ~/.local/share/dayflow                         # wipes all captured frames and the journal
-rm -rf ~/.config/dayflow                              # wipes config
-```
+**Journal** — semantic activity cards (consecutive same-activity blocks merge), per-app activity segments, 15-minute workflow grid, inline editing of title/category/summary, FTS5 full-text search (`dayflow search`), markdown export, daily goals + streaks.
 
-Uninstalling leaves your data in place until you `rm -rf` it, so you can back out or migrate first.
+**Analytics** — weekly category donut, app treemap, context-shift flow, focus blocks, week-over-week trends, next-day forecast from your history.
+
+**Agents** — recaps of your coding-agent sessions across Claude Code, Codex, OpenCode, Devin, and Cursor (opt-in; Jev judges which sessions are worth summarizing and scores the result). Per-source drift reporting so a broken store is visible, not silently empty.
+
+**Ops** — desktop notifications (capture stall on by default — silence means data loss), focus-following capture on multi-monitor setups (`output: "auto"`), usage/cost reporting (`dayflow usage --days 7` with optional pricing), backups with integrity verification, `doctor` health checks, MCP server for agent access.
+
+**Chat** — ask natural-language questions about your timeline: `dayflow chat "What did I work on this week?"` or the panel's Chat tab.
+
+<details>
+<summary><b>Privacy model</b> — what's collected, what egresses, what you control</summary>
+
+- `dayflow pause` (or right-click the bar widget) drops a flag file the daemon checks before every capture.
+- Capture auto-pauses while your session is locked (`auto_pause_locked`, via `loginctl`).
+- Ignored apps are skipped at capture time — their frames never touch disk.
+- Frames are deleted after summarization unless `keep_frames` is on; `max_frames_mb`/`max_db_mb` cap each pool; `retention_days` prunes by age on top.
+- The FTS index follows deletes — `dayflow scrub` removes the text from the journal *and* the index, including the `block_edits` overlay.
+- Agent recaps are **off by default**: enabling them sends a bounded, scrubbed transcript excerpt (paths → `~`, token shapes → `[redacted]`) to your chat provider and OpenRouter's decisions endpoint. Jev classification (`jev_classification`, default on) sends small per-block descriptors to the same endpoint — set `false` to keep every block local.
+- Everything lives in `~/.local/share/dayflow/` — `rm -rf` wipes all data.
+
+Plain-language version: [PRIVACY.md](PRIVACY.md).
+
+</details>
 
 ## CLI
 
 ```sh
 dayflow today                  # today's timeline
-dayflow day 2026-09-03         # any day
-dayflow day --grid             # macOS-style daily workflow grid
-dayflow status                 # state, counts, model
-dayflow standup                # yesterday/today standup update
-dayflow standup save           # save draft fields for today
-dayflow standup draft          # load saved draft
-dayflow insights [day|week|month] # focus, categories, apps, distractions
-dayflow weekly                 # weekly analytics + charts
-dayflow chat "What did I work on this week?" [--conversation-id N]
-dayflow conversations          # list chat threads
-dayflow edit <start> <field> <value>   # correct title/category/summary/productive
-dayflow provider list|add|set|remove|test  # multi-provider routing
-dayflow summarize --now        # force summarization including the current block
-dayflow pause | resume | toggle
-dayflow ignore <class>         # never capture while this app is focused
-dayflow ignore --active        # ignore the currently focused app (Hyprland)
-dayflow unignore <class>
-dayflow events -n 20           # full audit log: captures, skips, errors
-dayflow usage                  # token totals across all API calls
-dayflow blocks                 # failed summaries (auto-retried)
-dayflow frames [YYYY-MM-DD]    # list captured frames for a day
-dayflow playback on|off|status # opt-in frame retention for timelapse (10GB cap)
-dayflow agents [YYYY-MM-DD]    # Claude Code / Codex / OpenCode / Devin / Cursor sessions + recaps
-dayflow agents --no-recaps     # fast session list, no model calls
-dayflow forecast [YYYY-MM-DD]  # predict a day's category mix from history (default: tomorrow)
-dayflow goal [set <text>|done|clear] [--date D]  # daily goal + completion streak
-dayflow key set|status|del     # store API keys in OmaSeal instead of config.json
-dayflow log <msg>              # append a UI action line to debug.log
-dayflow week | month           # multi-day rollups
-dayflow export week [--copy]   # markdown export to stdout (or clipboard)
-dayflow export week --out <path> # atomic file export (0600; used by dayflow-export.timer)
-dayflow search <query>         # search titles, summaries, apps
-dayflow retry                  # reset failed/dead blocks for re-summarization
-dayflow reconcile [--dry-run]  # report/quarantine frame files missing from the index
-dayflow backup [dir]           # snapshot db + config (redacted) + frames
-dayflow backup-verify <dir>    # check a backup's manifest and db integrity
-dayflow restore <dir> [--force] # restore a backup (stop capture first)
-dayflow scrub <query>          # delete blocks matching a query
+dayflow day 2026-09-03         # any day          ·  day --grid  # workflow grid
 dayflow tui                    # interactive terminal timeline, standup, insights
+dayflow status                 # state, counts, model
+dayflow standup [save|draft]   # standup update / saved draft fields
+dayflow insights [day|week|month]   # focus, categories, apps, distractions
+dayflow weekly | week | month  # rollups + charts
+dayflow agents [day]           # coding-agent sessions + recaps (--no-recaps)
+dayflow forecast [day]         # predict a day's category mix (default: tomorrow)
+dayflow search <query>         # FTS5 search over titles/summaries/categories/apps
+dayflow search --reindex       # rebuild the index
+dayflow usage [--days N]       # tokens, latency, failure rate, est. cost
+dayflow edit <start> <field> <value>  # correct a block (title/category/summary/productive)
+dayflow chat "<question>"      # ask the journal (--conversation-id N continues)
+dayflow goal [set|done|clear]  # daily goal + streak
+dayflow export week [--copy|--out path]   # markdown export
+dayflow playback on|off        # opt-in frame retention for timelapse (10 GB cap)
+dayflow frames [day] | blocks  # raw frames / failed summaries (auto-retried)
+dayflow pause | resume | toggle
+dayflow ignore <class> | --active | unignore   # never capture an app
+dayflow retry | reconcile [--dry-run] | scrub <query>
+dayflow backup [dir] | backup-verify | restore <dir> [--force]
+dayflow provider list|add|set|remove|test     # multi-provider routing
+dayflow key set|status|del     # store API keys in the system keyring
+dayflow events -n 20           # audit log: captures, skips, errors
 dayflow mcp                    # MCP server for agents (stdio)
-dayflow config set <k> <v>     # live settings
+dayflow config set <k> <v> | patch '<json>'   # live settings
+dayflow fixtures capture <source>  # regenerate agent-store fixtures
+dayflow summarize --now        # force summarization incl. current block
 dayflow uninstall              # remove systemd units (data stays)
 ```
 
@@ -171,83 +111,68 @@ All query commands accept `--json`.
 
 ## Config
 
-`~/.config/dayflow/config.json`:
+`~/.config/dayflow/config.json` — set via `dayflow config set <k> <v>` or `config patch '<json>'` for nested values.
 
 | key | default | notes |
 |---|---|---|
 | `model` | `google/gemma-4-31b-it` | any vision model |
-| `api_base_url` | `""` | OpenAI-compatible endpoint; empty = OpenRouter. Set to `http://localhost:11434/v1` for Ollama. |
+| `api_base_url` | `""` | OpenAI-compatible endpoint; empty = OpenRouter. `http://localhost:11434/v1` for Ollama |
 | `capture_interval_sec` | 10 | frame interval |
 | `block_minutes` | 15 | summary granularity |
 | `frames_per_block` | 30 | frames sampled per API call |
 | `jpeg_quality` | 55 | grim JPEG quality |
-| `frame_max_dim` | 1920 | downscale stored frames so the long edge is ≤ N px; 0 = store native res. Frames are an all-outputs composite — when docked, per-display fidelity is lower |
+| `frame_max_dim` | 1920 | downscale stored frames so long edge ≤ N px; `0` = native res. Docked composites reduce per-display fidelity |
 | `keep_frames` | false | keep raw frames after summarizing |
-| `retention_days` | 0 | prunes frames, events, and api logs older than N days; 0 = keep until the storage caps below |
-| `max_frames_mb` | 20480 | cap on frames + quarantine dirs; 0 = unlimited |
-| `max_db_mb` | 10240 | cap on the journal database (blocks, events, calls); 0 = unlimited |
-| `max_storage_mb` | 0 | legacy combined cap on the whole data dir — honored when present and migrates to `max_frames_mb` on older configs; leave 0 with the split caps |
-| `auto_pause_locked` | true | pause capture while the session is locked (via loginctl) |
+| `retention_days` | 0 | prune frames/events/api logs older than N days; `0` = caps only |
+| `max_frames_mb` | 20480 | cap on frames + quarantine; `0` = unlimited |
+| `max_db_mb` | 10240 | cap on the journal DB (blocks, events, calls); `0` = unlimited |
+| `auto_pause_locked` | true | pause capture while the session is locked |
 | `ignore_apps` | `[]` | window classes never captured (Hyprland) |
-| `output` | `""` | restrict capture to one monitor (`grim -o`) |
-| `capture_command` | `""` | custom screenshot command (writes image to stdout) |
-| `openrouter_api_key` | `""` | API key |
-| `jev_classification` | `true` | TypeSafe Jev calibrated judgments — category, merge, quality, triage, forecast. Judge calls egress to OpenRouter's decisions endpoint; set `false` to keep every block local. |
-| `agent_recaps` | `false` | Opt-in: generate agent-session recaps. Generation sends a bounded, scrubbed transcript excerpt (paths → `~`, common token shapes → `[redacted]`) to the chat provider and decisions endpoint; `false` serves cached recaps only — a durable no-egress state. |
-| `classification_model` | `typesafe/jev-1.13` | Jev model slug (OpenRouter decisions API) |
+| `output` | `""` | one monitor via `grim -o`; `"auto"` follows the focused monitor (Hyprland; falls back to composite). Ignored when `capture_command` is set |
+| `capture_command` | `""` | custom screenshot command writing image to stdout; whitespace-separated, no quoting support |
+| `notifications` | `{enabled:true, classes:{stall:true}}` | desktop notifications; `classes` gates `stall`/`paused`/`recovered`/`standup`/`goal` via `config patch` |
+| `pricing` | `{}` | model slug → USD/1M tok; `usage` renders `$` only for configured models. E.g. `dayflow config patch '{"pricing":{"google/gemma-4-31b-it":0.09}}'` |
+| `openrouter_api_key` | `""` | API key (or `OPENROUTER_API_KEY` env, or `~/.config/openrouter/keys.json`) |
+| `jev_classification` | `true` | Jev calibrated judgments — category, merge, quality, triage, forecast. Egresses small descriptors to OpenRouter's decisions endpoint; `false` disables Jev classification (summarization still uses your configured chat provider unless that provider is local) |
+| `agent_recaps` | `false` | opt-in: recap generation egresses a bounded, scrubbed excerpt to the chat provider + decisions endpoint |
+| `classification_model` | `typesafe/jev-1.13` | Jev model slug |
 | `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
+
+## Upgrading
+
+```sh
+cd engine && go build -o dayflow . && install -Dm755 dayflow ~/.local/bin/dayflow
+systemctl --user restart dayflow-capture.service
+```
+
+Restart long-lived `dayflow mcp` clients too (agents keep the old binary). `dayflow doctor` reports engine↔schema↔manifest consistency and probes each detected agent store — run it after every upgrade. Migrations are automatic and additive. Full checklist: [docs/maintenance.md](docs/maintenance.md).
 
 ## Backups
 
-`dayflow install` enables a daily `dayflow-backup.timer` that snapshots the
-database, a secret-redacted copy of the config, and any retained frames into
-`~/.local/share/dayflow-backups/dayflow-<timestamp>/` (keeps the last 7).
-Override the location with `DAYFLOW_BACKUP_DIR`.
+`dayflow install` enables a daily `dayflow-backup.timer` — snapshots the DB, a secret-redacted config, and retained frames to `~/.local/share/dayflow-backups/` (keeps 7, `DAYFLOW_BACKUP_DIR` overrides).
 
 ```sh
-dayflow backup                  # snapshot now (default dir)
-dayflow backup /mnt/backup      # snapshot somewhere else
-dayflow backup --no-frames      # db + config only
-dayflow backup-verify <dir>     # manifest + integrity check
-```
-
-To restore, stop capture, restore, and restart:
-
-```sh
+dayflow backup [dir]           # snapshot now  ·  backup-verify <dir>  # integrity check
 systemctl --user stop dayflow-capture.service dayflow-summarize.timer
 dayflow restore ~/.local/share/dayflow-backups/dayflow-<timestamp>
 systemctl --user start dayflow-capture.service dayflow-summarize.timer
 ```
 
-Restore refuses to overwrite a live database without `--force` and rejects
-backups from a newer engine schema. The config file is restored manually —
-API keys are redacted from backups on purpose, so re-set them with
-`dayflow config set openrouter_api_key <key>`.
+Restore refuses a live DB without `--force` and rejects newer-schema backups. API keys are redacted from backups on purpose — re-set them after restore.
 
-## Privacy
+## Uninstall
 
-- `dayflow pause` (or right-click the bar widget) drops a flag file the daemon checks before every capture.
-- Capture automatically pauses while your session is locked when `auto_pause_locked` is true (via `loginctl`).
-- Ignored apps are skipped at capture time — their frames are never written to disk.
-- All frames are deleted after summarization unless `keep_frames` is on; `max_frames_mb` and `max_db_mb` cap each pool independently (oldest data evicted first), and `retention_days` optionally prunes by age on top.
-- `max_frames_mb` caps frames + quarantine (oldest summarized frames evicted first); `max_db_mb` caps the journal database (log tables trimmed, then oldest blocks pruned and vacuumed). A legacy `max_storage_mb` still caps the whole directory when set.
-- Everything lives in `~/.local/share/dayflow/` — `rm -rf` it to wipe all data.
-
-For a plain-language summary, see [PRIVACY.md](PRIVACY.md).
-
-## Cross-hardware / portability
-
-Capture goes through `grim` → the compositor's screencopy protocol, which is hardware-agnostic (Intel, AMD, NVIDIA, ARM). The Go binary is pure-Go + `modernc.org/sqlite` (no cgo) and builds for `amd64`, `arm64`, etc. AI can run on OpenRouter or any OpenAI-compatible local endpoint (`api_base_url` = `http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM Studio, etc.). On non-wlroots compositors (KDE, GNOME), set `capture_command` — e.g. `"gnome-screenshot -f /dev/stdout"` or a small wrapper.
+```sh
+omarchy plugin disable io.github.duketopceo.dayflow && omarchy plugin remove io.github.duketopceo.dayflow   # panel
+dayflow uninstall                                   # systemd units
+dayflow pause
+rm -rf ~/.local/share/dayflow                       # wipes frames + journal
+rm -rf ~/.config/dayflow                            # wipes config
+```
 
 ## MCP / agent access
 
-`dayflow mcp` is a stdio MCP server exposing `get_timeline`, `get_status`,
-`search_journal`, `get_events`, `get_usage`, `get_stats`, `get_standup`,
-`get_insights`, and `chat`. All tools except `chat` are pure reads; `chat`
-writes conversation history and calls the configured AI provider. Use
-`--read-only` (or `DAYFLOW_MCP_READONLY=1`) to hide and block `chat`.
-See [docs/agent-contract.md](docs/agent-contract.md) for the agent contract
-(read rules, schema, Tailscale/remote access).
+`dayflow mcp` is a stdio MCP server exposing `get_timeline`, `get_status`, `search_journal`, `get_events`, `get_usage`, `get_stats`, `get_standup`, `get_insights`, `chat`. All read-only except `chat`; `--read-only` (or `DAYFLOW_MCP_READONLY=1`) hides it. Contract: [docs/agent-contract.md](docs/agent-contract.md).
 
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp
@@ -255,13 +180,29 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 claude mcp add dayflow-remote -- ssh <host>.<tailnet>.ts.net ~/.local/bin/dayflow mcp --read-only
 ```
 
-## Testing
+## Repository layout
+
+```
+manifest.json      # Omarchy plugin manifest (repo root, per marketplace rules)
+BarWidget.qml      # bar indicator: recording state, click for panel
+Panel.qml          # timeline panel + settings footer
+*.qml              # full view: panes, tabs, onboarding, settings
+engine/            # Go CLI/daemon/TUI/MCP — the tracking engine
+scripts/           # stress.sh (live stress), smoke-install.sh (sandboxed install smoke)
+docs/              # plans, research, maintenance runbook, agent contract, publish docs
+preview.png        # marketplace preview
+```
+
+## Development
 
 ```sh
-cd engine && go test ./...   # unit + end-to-end tests with a stubbed API
-scripts/stress.sh            # live stress test against a sandboxed data dir
+cd engine && go test ./...     # unit + end-to-end tests with stubbed providers
+cd .. && scripts/smoke-install.sh   # sandboxed install smoke (scoped dirs, stubbed systemctl)
+cd .. && scripts/stress.sh          # live stress against a sandboxed data dir
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/maintenance.md](docs/maintenance.md) (drift-watch + upgrade safety), and [docs/research/](docs/research/) for the audio-capture spike and macOS Agents-section analysis.
 
 ## Not a 1:1 port
 
-No audio capture, no menu-bar app, no onboarding wizard. Just the tracking engine plus a minimal bar widget. MIT licensed, like the original.
+No audio capture (spike doc says conditional-go), no menu-bar app — the bar widget + full-window panel take that role. The Agents section goes past upstream: five sources instead of two, with drift surfacing and a gated recap pipeline. MIT licensed, like the [original](https://github.com/JerryZLiu/Dayflow).

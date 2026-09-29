@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const version = "1.3.1"
+const version = "1.4.0"
 
 // positionalArgs returns non-flag argv entries; an empty arg is not a flag
 // and is skipped (a[0] on "" panics).
@@ -113,7 +113,8 @@ Control:
   ignore [--active|class] Add an app to the ignore list (--active = focused window)
   unignore <class>        Remove an app from the ignore list
   events [--json] [-n N]  Recent event log (captures, skips, errors, summaries)
-  usage [--json]          Token usage totals from the api_calls log
+  usage [--days N] [--json]   Token/cost usage over the last N local days
+                          (default: all retained rows; shows coverage floor)
   stats [--json]          Storage, block counts, date range, and API usage
   week | month [--json]   Timeline rollups
   weekly [--json]        Weekly analytics payload (donut, treemap, context shifts, highlights)
@@ -123,6 +124,7 @@ Control:
                           --read-only hides and blocks the chat tool
   tui                     Interactive terminal timeline (day/week/month, search, standup, insights)
   search <query>          Search block titles, summaries, and apps
+                          (--reindex rebuilds the search index)
   chat [message] [--conversation-id N] [--json]  Ask a question about the journal
   conversations [--json]  List saved chat conversations
   conversation <id> [--json]  Print one conversation's messages
@@ -143,6 +145,10 @@ Setup & health:
   doctor [--json] [--deep]  Check session, grim, key, model, endpoint;
                           --deep runs a full sqlite integrity check
   detect [--json]         Probe for local model endpoints (Ollama, LM Studio)
+  fixtures capture <source> [--db P] [--out F]   Regenerate an agent-store
+                          contract fixture — schema + sentinel rows only,
+                          never real payloads (sources: claude codex
+                          opencode devin cursor; run from engine/)
 
 Config: %s
 Data:   %s
@@ -434,7 +440,11 @@ func main() {
 		printEvents(cfg, args, jsonOut)
 
 	case "usage":
-		printUsage(jsonOut)
+		// usage [--days N] [--json] — N bounds the window to the last N
+		// local days; omitted = all retained rows.
+		days, err := usageDays(args)
+		fatal(err)
+		printUsage(cfg, jsonOut, days)
 
 	case "stats":
 		printStats(cfg, jsonOut)
@@ -674,10 +684,15 @@ func main() {
 		}
 
 	case "search":
-		if len(args) == 0 || args[0][0] == '-' {
+		query, reindex := parseSearchArgs(args)
+		if reindex {
+			printReindex(jsonOut)
+			break
+		}
+		if query == "" {
 			usage()
 		}
-		printSearch(args[0], jsonOut)
+		printSearch(query, jsonOut)
 
 	case "chat":
 		db, err := openDB()
@@ -1097,6 +1112,10 @@ func main() {
 
 	case "doctor":
 		runDoctor(cfg, jsonOut, hasFlag(args, "--deep"))
+	case "fixtures":
+		// Drift-watch fixture regeneration (U6a): schema-only capture of an
+		// agent store plus synthesized sentinel rows — see docs/maintenance.md.
+		fatal(runFixtures(args))
 	case "detect":
 		runDetect(jsonOut)
 	case "models":
@@ -1301,24 +1320,21 @@ func printSearch(query string, asJSON bool) {
 	db, err := openDB()
 	fatal(err)
 	defer db.Close()
-	rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,app FROM blocks
-	  WHERE status='done' AND (title LIKE ? OR summary LIKE ? OR app LIKE ?) ORDER BY start_ts DESC LIMIT 50`,
-		"%"+query+"%", "%"+query+"%", "%"+query+"%")
+	blocks, err := searchBlocks(db, query)
 	fatal(err)
-	defer rows.Close()
 	type M struct {
 		Start, End, Title, Summary, Category, App string
 	}
-	var out []M
-	for rows.Next() {
-		var s, e int64
-		var m M
-		if err := rows.Scan(&s, &e, &m.Title, &m.Summary, &m.Category, &m.App); err != nil {
-			continue
-		}
-		m.Start = time.Unix(s, 0).Local().Format("2006-01-02 3:04 PM")
-		m.End = time.Unix(e, 0).Local().Format("3:04 PM")
-		out = append(out, m)
+	out := []M{}
+	for _, b := range blocks {
+		out = append(out, M{
+			Start:    b.Start.Format("2006-01-02 3:04 PM"),
+			End:      b.End.Format("3:04 PM"),
+			Title:    b.Title,
+			Summary:  b.Summary,
+			Category: b.Category,
+			App:      b.App,
+		})
 	}
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(out)
@@ -1332,28 +1348,86 @@ func printSearch(query string, asJSON bool) {
 	}
 }
 
-func printUsage(asJSON bool) {
+// printReindex rebuilds the derived FTS search indexes from scratch
+// (`dayflow search --reindex`) — the repair path for a stale or missing index.
+func printReindex(asJSON bool) {
 	db, err := openDB()
 	fatal(err)
 	defer db.Close()
-	sum, err := usageSummary(db)
+	fatal(rebuildSearchIndex(db))
+	if asJSON {
+		json.NewEncoder(os.Stdout).Encode(map[string]string{"status": "rebuilt"})
+		return
+	}
+	fmt.Println("search index rebuilt")
+}
+
+// usageDays parses the `usage --days` flag: absent = 0 (all retained rows),
+// a bare `--days`/`--days=` or a non-positive/non-numeric value is a hard
+// error — silently widening to full history would misreport exactly the
+// window the user asked to bound.
+func usageDays(args []string) (int, error) {
+	if v := flagValue(args, "--days"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("--days must be a positive integer")
+		}
+		return n, nil
+	}
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "--days" || strings.HasPrefix(a, "--days=") {
+			return 0, fmt.Errorf("--days requires a positive integer (e.g. --days 7)")
+		}
+	}
+	return 0, nil
+}
+
+func printUsage(cfg Config, asJSON bool, days int) {
+	db, err := openDB()
+	fatal(err)
+	defer db.Close()
+	sum, err := usageSummaryWindow(db, days, cfg)
 	fatal(err)
 	if asJSON {
 		json.NewEncoder(os.Stdout).Encode(sum)
 		return
 	}
+	window := "all retained data"
+	if days > 0 {
+		window = fmt.Sprintf("last %d day(s)", days)
+	}
+	if since, _ := sum["data_since"].(string); since != "" {
+		fmt.Printf("usage: %s · data since %s\n", window, since)
+	} else {
+		fmt.Printf("usage: %s · no call rows recorded\n", window)
+	}
 	calls := sum["api_calls"].(int)
-	fmt.Printf("api calls: %d (%d ok, %d failed)\n", calls, sum["ok"], sum["failed"])
+	fmt.Printf("api calls: %d (%d ok, %d failed, %.1f%% fail) avg %.0f ms\n",
+		calls, sum["ok"], sum["failed"], sum["failure_rate"].(float64)*100, sum["avg_latency_ms"].(float64))
 	other := sum["other_llm_calls"].(int)
 	if other > 0 {
-		fmt.Printf("other llm calls: %d (%d ok, %d failed)\n", other, sum["other_ok"], sum["other_failed"])
+		fmt.Printf("other llm calls: %d (%d ok, %d failed, %.1f%% fail) avg %.0f ms\n",
+			other, sum["other_ok"], sum["other_failed"],
+			sum["other_failure_rate"].(float64)*100, sum["other_avg_latency_ms"].(float64))
 	}
 	fmt.Printf("prompt tokens: %d\ncompletion tokens: %d\n",
 		sum["total_prompt_tokens"], sum["total_completion_tokens"])
+	if cost, ok := sum["est_cost_usd"].(float64); ok {
+		fmt.Printf("estimated cost: $%.2f", cost)
+		// The total covers only models with pricing configured — label it
+		// so a partial sum is never read as the whole window's cost.
+		if unpriced, ok := sum["unpriced_models"].([]string); ok && len(unpriced) > 0 {
+			fmt.Printf(" (partial — no pricing for %d model(s): %s)", len(unpriced), strings.Join(unpriced, ", "))
+		}
+		fmt.Println()
+	}
 	breakdown, _ := sum["breakdown"].(map[string]any)
 	for _, dim := range []struct {
 		label, key string
-	}{{"by task", "by_task"}, {"by provider", "by_provider"}, {"by model", "by_model"}} {
+	}{{"by day", "by_day"}, {"by task", "by_task"}, {"by provider", "by_provider"}, {"by model", "by_model"}} {
 		rows, _ := breakdown[dim.key].(map[string]usageRow)
 		if len(rows) == 0 {
 			continue
@@ -1366,8 +1440,12 @@ func printUsage(asJSON bool) {
 		fmt.Printf("%s:\n", dim.label)
 		for _, name := range names {
 			r := rows[name]
-			fmt.Printf("  %-32s %d calls (%d ok, %d failed)\n",
-				name, r.Calls, r.OK, r.Failed)
+			fmt.Printf("  %-32s %d calls (%d ok, %d failed, %.1f%% fail) avg %.0f ms",
+				name, r.Calls, r.OK, r.Failed, r.FailureRate*100, r.AvgLatencyMs)
+			if r.EstCostUSD != nil {
+				fmt.Printf("  $%.2f", *r.EstCostUSD)
+			}
+			fmt.Println()
 		}
 	}
 }

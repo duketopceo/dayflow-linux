@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -221,6 +222,20 @@ func runSetup() error {
 		choice = suggested
 	}
 
+	// Recaps opt-in (R5): only offered when a local agent transcript store
+	// exists — nothing detected means nothing to recap. Only an explicit
+	// "y" enables it; empty, EOF, or non-interactive input defaults to no
+	// and writes nothing, so a piped/interrupted setup can't flip it on.
+	recaps := false
+	if stores := detectedStoreNames(); len(stores) > 0 {
+		fmt.Printf("\nAgent transcript stores found: %s\n", strings.Join(stores, ", "))
+		fmt.Println("Dayflow can write a one-line recap of each coding-agent session. Transcripts")
+		fmt.Println("are read locally either way; recaps send a bounded, scrubbed excerpt to")
+		fmt.Println("your chat provider and to the decisions endpoint that judges sessions.")
+		fmt.Print("Enable agent-session recaps? [y/N]: ")
+		recaps = promptYes(r)
+	}
+
 	if err := setConfigValue("api_base_url", baseURL); err != nil {
 		return err
 	}
@@ -229,6 +244,11 @@ func runSetup() error {
 	}
 	if err := setConfigValue("model", choice); err != nil {
 		return err
+	}
+	if recaps {
+		if err := setConfigValue("agent_recaps", "true"); err != nil {
+			return err
+		}
 	}
 	fmt.Printf("\nWrote %s (model=%s)\n", configPath(), choice)
 	fmt.Println("Next: dayflow install && systemctl --user enable --now dayflow-capture.service")
@@ -262,7 +282,8 @@ func listModels(cfg Config) {
 	}
 }
 
-// doctorCheck is one doctor result; status is "ok", "warn", or "fail".
+// doctorCheck is one doctor result; status is "ok", "warn", "info", or
+// "fail". "info" is advisory — it never counts toward the failure total.
 type doctorCheck struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
@@ -289,6 +310,11 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 	check("wayland session", os.Getenv("WAYLAND_DISPLAY") != "", "not running under Wayland")
 	_, grimErr := exec.LookPath("grim")
 	check("grim installed", grimErr == nil || cfg.CaptureCommand != "", "install grim or set capture_command")
+	// output:"auto" only resolves on the grim path — a custom capture_command
+	// never gets the -o injection, so the setting is silently dead there.
+	if cfg.Output == "auto" && cfg.CaptureCommand != "" {
+		warn("output auto", "output \"auto\" is ignored when capture_command is set — the custom command controls which monitor is grabbed")
+	}
 	check("config file", fileExists(configPath()), "run: dayflow setup")
 	// A cli-kind provider is a working endpoint too — it shells out to a
 	// subscription-auth'd agent CLI and needs no API key or base URL.
@@ -327,13 +353,32 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 	if hyErr != nil && len(cfg.IgnoreApps) > 0 {
 		warn("hyprctl", "hyprctl not found — ignore_apps won't work on this compositor")
 	}
+	// notify-send on PATH is not enough: the capture service runs under a
+	// systemd env that only recently gained DBUS_SESSION_BUS_ADDRESS, and a
+	// binary that exists still can't reach the user's session bus without it
+	// (or GLib's $XDG_RUNTIME_DIR/bus fallback). Pure env/socket probe — a
+	// test-send would be a side effect, not a check.
+	if notificationBusReachable() {
+		checks = append(checks, doctorCheck{Name: "notification bus", Status: "ok"})
+	} else {
+		warn("notification bus", "DBUS_SESSION_BUS_ADDRESS unset and $XDG_RUNTIME_DIR/bus missing — notifications from dayflow-capture won't reach the desktop daemon")
+	}
 
 	if _, err := os.Stat(dbPath()); os.IsNotExist(err) {
 		warn("database", "no database yet — capture has not run")
 	} else {
 		sv, svErr := peekSchemaVersion()
-		check("schema version", svErr == nil && sv <= schemaVersion,
-			fmt.Sprintf("database at schema v%d, binary expects v%d — upgrade the engine", sv, schemaVersion))
+		if svErr != nil {
+			check("schema version", false, "could not read schema version: "+svErr.Error())
+		} else if sv <= schemaVersion {
+			checks = append(checks, doctorCheck{Name: "schema version", Status: "ok",
+				Detail: fmt.Sprintf("database v%d, binary v%d", sv, schemaVersion)})
+		} else {
+			// A newer database than this binary understands can only be
+			// fixed by upgrading the engine (or pointing it at the newer db).
+			check("schema version", false,
+				fmt.Sprintf("database at schema v%d, binary expects v%d — upgrade the engine", sv, schemaVersion))
+		}
 		if svErr == nil && sv < schemaVersion {
 			warn("schema migration", fmt.Sprintf("database was at schema v%d; migrated to v%d — restart dayflow-capture and any dayflow mcp clients", sv, schemaVersion))
 		}
@@ -370,7 +415,295 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 		check("config permissions", fi.Mode().Perm()&0o077 == 0,
 			fmt.Sprintf("%s is %04o, want 0600", configPath(), fi.Mode().Perm()))
 	}
+	// Agent transcript stores: probe each DB-backed store read-only via
+	// openStoreProbe (no temp-dir copy — Devin's sessions.db is multi-GB)
+	// and run the adapter's own candidate extraction over a recent window,
+	// so upstream schema drift lands in doctor with the same vocabulary
+	// `agents --json` reports. Absent stores are info — an uninstalled tool
+	// is not drift.
+	for _, name := range []string{"opencode", "devin", "cursor"} {
+		var present []string
+		for _, p := range agentStoreDBs()[name] {
+			if _, err := os.Stat(p); err == nil {
+				present = append(present, p)
+			}
+		}
+		if len(present) == 0 {
+			checks = append(checks, doctorCheck{Name: "agent store " + name, Status: "info",
+				Detail: "store absent — source not installed"})
+			continue
+		}
+		if err := probeAgentStore(name, present); err != nil {
+			warn("agent store "+name, err.Error())
+		} else {
+			checks = append(checks, doctorCheck{Name: "agent store " + name, Status: "ok",
+				Detail: fmt.Sprintf("%d store(s) readable", len(present))})
+		}
+	}
+	// Binary vs installed plugin manifest: the two upgrade together, so a
+	// version gap means a half-applied upgrade. No manifest at all is an
+	// engine-only install — info, not a failure.
+	if mPath, mVer, err := pluginManifestVersion(); err != nil {
+		warn("plugin manifest", mPath+" unreadable: "+err.Error())
+	} else if mPath == "" {
+		checks = append(checks, doctorCheck{Name: "plugin manifest", Status: "info",
+			Detail: "engine-only install (no installed plugin manifest)"})
+	} else if mVer != version {
+		exe, _ := os.Executable()
+		fail++
+		checks = append(checks, doctorCheck{Name: "plugin manifest", Status: "fail",
+			Detail: fmt.Sprintf("manifest %s at %s vs engine %s (%s) — upgrade both halves", mVer, mPath, version, exe)})
+	} else {
+		checks = append(checks, doctorCheck{Name: "plugin manifest", Status: "ok", Detail: "v" + mVer})
+	}
 	return checks, fail
+}
+
+// probeAgentStore opens each present store read-only and runs the
+// source's own candidate extraction over a recent window. Extraction —
+// not a {table→columns} assertion — is the contract: Cursor's two legal
+// layouts would false-positive a schema check, and a renamed payload
+// field wouldn't trip one.
+func probeAgentStore(name string, paths []string) error {
+	var errs []string
+	for _, p := range paths {
+		db, err := openStoreProbe(p)
+		if err != nil {
+			errs = append(errs, filepath.Base(p)+": "+err.Error())
+			continue
+		}
+		err = probeAgentStoreExtraction(name, db)
+		db.Close()
+		if err != nil {
+			errs = append(errs, filepath.Base(p)+": "+err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// probeTailRows bounds every agent-store probe to a table's newest rows.
+// The adapters' windowed extraction is a full-table scan on the big
+// stores — Devin's message_nodes is multi-GB with no created_at index,
+// Cursor's cursorDiskKV can't use its key index for a LIKE prefix, and
+// composerHeaders' value is a per-row blob — so doctor runs the same
+// tables/columns over a bounded tail instead of calling them.
+const probeTailRows = 500
+
+func probeAgentStoreExtraction(name string, db *sql.DB) error {
+	e := time.Now()
+	s := e.AddDate(0, 0, -90)
+	switch name {
+	case "opencode":
+		layout := opencodeLayout(db)
+		if layout == "" {
+			return fmt.Errorf("schema drift: no known opencode layout")
+		}
+		return probeOpencodeStore(db, layout, s.UnixMilli(), e.UnixMilli())
+	case "devin":
+		return probeDevinStore(db, s.Unix(), e.Unix())
+	case "cursor":
+		hasKV := sqliteTableExists(db, "cursorDiskKV")
+		switch {
+		case sqliteTableExists(db, "composerHeaders"):
+			return probeCursorHeaders(db)
+		case hasKV:
+			return probeCursorKVFallback(db)
+		default:
+			return fmt.Errorf("schema drift: no composer tables")
+		}
+	}
+	return fmt.Errorf("unknown agent source %q", name)
+}
+
+// probeOpencodeStore exercises both opencode extraction reads over a
+// rowid tail: the session join (opencodeCandidates' shape) and the
+// message-table columns ocMessages reads (LENGTH(data) instead of the
+// blob itself). time_created has no guaranteed index, so the unbounded
+// window filter could full-scan a large store.
+func probeOpencodeStore(db *sql.DB, layout string, sMs, eMs int64) error {
+	msgTable := "session_message"
+	if layout == "old" {
+		msgTable = "message"
+	}
+	rows, err := db.Query(`SELECT s.id, s.title, s.directory FROM session s
+	  WHERE s.id IN (SELECT session_id FROM `+msgTable+`
+	    WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM `+msgTable+`) - ?
+	      AND time_created >= ? AND time_created < ?)
+	  ORDER BY s.time_created`, probeTailRows, sMs, eMs)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var title, dir sql.NullString
+		if err := rows.Scan(&id, &title, &dir); err != nil {
+			rows.Close()
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	if layout == "old" {
+		mq := `SELECT id, session_id, time_created, time_updated,
+		  COALESCE(LENGTH(data),0) FROM message
+		  WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM message) - ?`
+		if err := probeScan(db, mq, probeTailRows); err != nil {
+			return err
+		}
+		return probeScan(db, `SELECT message_id, COALESCE(LENGTH(data),0)
+		  FROM part
+		  WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM part) - ?`,
+			probeTailRows)
+	}
+	return probeScan(db, `SELECT id, session_id, type, seq, time_created,
+	  time_updated, COALESCE(LENGTH(data),0) FROM session_message
+	  WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM session_message) - ?`,
+		probeTailRows)
+}
+
+// probeDevinStore runs devinCandidates' join shape and devinDBMessages'
+// column set over the row_id tail — message_nodes has no created_at
+// index, so the adapter's windowed IN subquery would full-scan a
+// multi-GB table on every doctor run.
+func probeDevinStore(db *sql.DB, sSec, eSec int64) error {
+	if !sqliteTableExists(db, "sessions") || !sqliteTableExists(db, "message_nodes") {
+		return fmt.Errorf("schema drift: devin store missing sessions/message_nodes")
+	}
+	rows, err := db.Query(`SELECT s.id, s.title, s.working_directory FROM sessions s
+	  WHERE s.id IN (SELECT session_id FROM message_nodes
+	    WHERE row_id > (SELECT COALESCE(MAX(row_id),0) FROM message_nodes) - ?
+	      AND created_at >= ? AND created_at < ?)
+	  ORDER BY s.created_at`, probeTailRows, sSec, eSec)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var title, dir sql.NullString
+		if err := rows.Scan(&id, &title, &dir); err != nil {
+			rows.Close()
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	// LENGTH() reads the record header, never the chat_message payload —
+	// the column is exercised without paying for the blob.
+	return probeScan(db, `SELECT node_id, created_at,
+	  COALESCE(LENGTH(chat_message),0) FROM message_nodes
+	  WHERE row_id > (SELECT COALESCE(MAX(row_id),0) FROM message_nodes) - ?`,
+		probeTailRows)
+}
+
+// probeCursorHeaders exercises composerHeaders over the rowid tail:
+// cheap columns for the tail rows, then the value blob for a few of
+// them — the adapter's SELECT includes value for every row, which reads
+// every blob in the table.
+func probeCursorHeaders(db *sql.DB) error {
+	rows, err := db.Query(`SELECT composerId, workspaceId, createdAt, lastUpdatedAt
+	  FROM composerHeaders
+	  WHERE rowid > (SELECT COALESCE(MAX(rowid),0) FROM composerHeaders) - ?`,
+		probeTailRows)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var h cursorHeader
+		var ws, created, updated any
+		if err := rows.Scan(&h.id, &ws, &created, &updated); err != nil {
+			rows.Close()
+			return err
+		}
+		h.workspace = cursorStr(ws)
+		h.created = cursorMs(created)
+		h.updated = cursorMs(updated)
+		if len(ids) < 3 {
+			ids = append(ids, h.id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, id := range ids {
+		var v any
+		if err := db.QueryRow(`SELECT value FROM composerHeaders
+		  WHERE composerId = ?`, id).Scan(&v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// probeCursorKVFallback is cursorHeaderFallback's read bounded and made
+// index-usable: 'composerData;' is the byte after ':' so the range covers
+// exactly the composerData:* keys the LIKE 'composerData:%' pattern
+// matched, and the key index keeps it off a full cursorDiskKV scan.
+func probeCursorKVFallback(db *sql.DB) error {
+	rows, err := db.Query(`SELECT key, value FROM cursorDiskKV
+	  WHERE key >= 'composerData:' AND key < 'composerData;'
+	  ORDER BY key LIMIT ?`, probeTailRows)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var value any
+		if err := rows.Scan(&key, &value); err != nil {
+			return err
+		}
+		// Undecodable blobs are skipped by the adapter's fallback too —
+		// the probe's contract is that the read succeeds, not that every
+		// payload parses.
+		var d struct {
+			ComposerID string `json:"composerId"`
+			CreatedAt  any    `json:"createdAt"`
+			UpdatedAt  any    `json:"lastUpdatedAt"`
+			IsDraft    bool   `json:"isDraft"`
+			Name       string `json:"name"`
+		}
+		if json.Unmarshal(cursorBytes(value), &d) != nil {
+			continue
+		}
+	}
+	return rows.Err()
+}
+
+// probeScan drains a tail-bounded query's rows into loosely-typed values —
+// the probe asserts the read succeeds, so per-column types don't matter.
+func probeScan(db *sql.DB, query string, args ...any) error {
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		dest := make([]any, len(cols))
+		for i := range dest {
+			dest[i] = new(any)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func runDoctor(cfg Config, jsonOut bool, deep bool) {
@@ -398,6 +731,8 @@ func runDoctor(cfg Config, jsonOut bool, deep bool) {
 				}
 			case "warn":
 				fmt.Printf("  warn %s — %s\n", c.Name, c.Detail)
+			case "info":
+				fmt.Printf("  info %s — %s\n", c.Name, c.Detail)
 			default:
 				fmt.Printf("  FAIL %s — %s\n", c.Name, c.Detail)
 			}
@@ -421,15 +756,21 @@ func probeEndpoint(base string) bool {
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
+// detectResult is the `detect` payload. Agents reports which coding-agent
+// transcript stores exist locally — Onboarding.qml gates its recaps
+// consent step on this map, and runSetup gates its recaps prompt on it.
+type detectResult struct {
+	Ollama   bool            `json:"ollama"`
+	LMStudio bool            `json:"lmstudio"`
+	Agents   map[string]bool `json:"agents"`
+	Presets  []ModelPreset   `json:"presets"`
+}
+
 func runDetect(jsonOut bool) {
-	type detected struct {
-		Ollama   bool          `json:"ollama"`
-		LMStudio bool          `json:"lmstudio"`
-		Presets  []ModelPreset `json:"presets"`
-	}
-	d := detected{
+	d := detectResult{
 		Ollama:   probeEndpoint("http://localhost:11434/v1"),
 		LMStudio: probeEndpoint("http://localhost:1234/v1"),
+		Agents:   agentStoresDetected(),
 		Presets:  modelPresets(),
 	}
 	if jsonOut {
@@ -441,11 +782,23 @@ func runDetect(jsonOut bool) {
 	if d.Ollama || d.LMStudio {
 		fmt.Println("local endpoint found — a local model works without an API key")
 	}
+	var stores []string
+	for name, ok := range d.Agents {
+		if ok {
+			stores = append(stores, name)
+		}
+	}
+	sort.Strings(stores)
+	if len(stores) > 0 {
+		fmt.Println("agent stores: " + strings.Join(stores, ", "))
+	}
 	printModelPresets()
 }
 
 // peekSchemaVersion reads the recorded schema version without running
-// migrations. Returns 0 for a database that predates schema_migrations.
+// migrations. Returns 0 for a database that predates schema_migrations; a
+// read failure (corrupt file, locked db) is returned as an error so callers
+// can report it as what it is instead of "schema v0".
 func peekSchemaVersion() (int, error) {
 	db, err := sql.Open("sqlite", dbPath()+"?_pragma=query_only(1)")
 	if err != nil {
@@ -454,7 +807,10 @@ func peekSchemaVersion() (int, error) {
 	defer db.Close()
 	var v int
 	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v); err != nil {
-		return 0, nil // unversioned database
+		if strings.Contains(err.Error(), "no such table") {
+			return 0, nil // unversioned database — predates schema_migrations
+		}
+		return 0, err
 	}
 	return v, nil
 }
@@ -462,4 +818,99 @@ func peekSchemaVersion() (int, error) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// notificationBusReachable reports whether a session D-Bus is plausibly
+// reachable from this environment: an explicit DBUS_SESSION_BUS_ADDRESS,
+// or the socket at $XDG_RUNTIME_DIR/bus that GLib falls back to. Pure
+// env/socket inspection — doctor must not send test notifications.
+func notificationBusReachable() bool {
+	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") != "" {
+		return true
+	}
+	rt := os.Getenv("XDG_RUNTIME_DIR")
+	if rt == "" {
+		return false
+	}
+	st, err := os.Stat(filepath.Join(rt, "bus"))
+	return err == nil && st.Mode()&os.ModeSocket != 0
+}
+
+// pluginManifestPath locates the installed omarchy plugin manifest — the
+// engine binary and the plugin upgrade together, so version drift between
+// them means a half-applied upgrade.
+func pluginManifestPath() string {
+	d, err := os.UserConfigDir()
+	if err != nil {
+		d = filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	return filepath.Join(d, "omarchy", "plugins", "io.github.duketopceo.dayflow", "manifest.json")
+}
+
+// pluginManifestVersion reads the installed plugin manifest's version.
+// An absent manifest returns ("", "", nil) — an engine-only install is
+// not a failure; other read/parse failures come back as err.
+func pluginManifestVersion() (path, ver string, err error) {
+	path = pluginManifestPath()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", nil
+		}
+		return path, "", err
+	}
+	var m struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return path, "", err
+	}
+	return path, m.Version, nil
+}
+
+// agentStoresDetected reports which agent transcript stores exist on this
+// machine, keyed by source name. It reuses the adapters' own store-root
+// resolution (including their DAYFLOW_*_DIR/DB test overrides) so detection
+// can never disagree with what a scan would find.
+func agentStoresDetected() map[string]bool {
+	opencode := false
+	for _, p := range opencodeDBPaths() {
+		if fileExists(p) {
+			opencode = true
+			break
+		}
+	}
+	return map[string]bool{
+		"claude":   fileExists(claudeDir()),
+		"codex":    fileExists(codexDir()),
+		"opencode": opencode,
+		"devin":    fileExists(devinDir()),
+		"cursor":   fileExists(cursorDBPath()),
+	}
+}
+
+// detectedStoreNames is the sorted subset of agent sources with a store
+// present — the gate behind both the detect payload consumers and the
+// setup recaps prompt.
+func detectedStoreNames() []string {
+	var names []string
+	for name, ok := range agentStoresDetected() {
+		if ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// promptYes reads one answer line; only an explicit "y"/"yes" is true.
+// EOF, empty input, and anything else are a no — the recaps opt-in must
+// default off on piped or interrupted stdin.
+func promptYes(r *bufio.Reader) bool {
+	line, _ := r.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	}
+	return false
 }

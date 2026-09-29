@@ -34,7 +34,7 @@ type Config struct {
 	RetentionDays        int        `json:"retention_days"`
 	IgnoreApps           []string   `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
 	CaptureCommand       string     `json:"capture_command"` // override; default auto-detect grim
-	Output               string     `json:"output"`          // grim -o <output>; empty = all outputs
+	Output               string     `json:"output"`          // grim -o <output>; empty = all outputs; "auto" = focused monitor per tick
 	SiteName             string     `json:"site_name"`       // OpenRouter X-Title
 	MaxStorageMB         int        `json:"max_storage_mb"`  // legacy: cap on the whole data dir; 0 = off (new installs use the split caps below)
 	MaxFramesMB          int        `json:"max_frames_mb"`   // cap on frames + quarantine dirs; 0 = unlimited
@@ -49,8 +49,15 @@ type Config struct {
 	ClassificationModel  string     `json:"classification_model"`  // Jev model slug; default typesafe/jev-1.13
 	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
-	PanelExpanded        bool       `json:"panel_expanded"` // remember the panel Expand/Shrink toggle
-	DisableJudges        bool       `json:"-"`              // runtime-only: read-only MCP sessions must not egress
+	// Pricing maps a model slug to USD per 1M tokens (prompt+completion
+	// combined). `dayflow usage` renders dollar estimates only when set;
+	// rates are never fetched. Set via `config patch` — nested maps merge,
+	// so one patch can add a model without restating the others.
+	Pricing       map[string]float64 `json:"pricing,omitempty"`
+	PanelExpanded bool               `json:"panel_expanded"` // remember the panel Expand/Shrink toggle
+	DisableJudges bool               `json:"-"`              // runtime-only: read-only MCP sessions must not egress
+
+	Notifications NotificationConfig `json:"notifications"` // desktop notifications: master switch + per-class gates
 }
 
 // normalizeAPIBaseURL trims whitespace and trailing slashes, and appends /v1
@@ -127,6 +134,7 @@ func defaultConfig() Config {
 		JevClassification:    true,
 		ClassificationModel:  defaultJevModel,
 		AgentRecaps:          false,
+		Notifications:        defaultNotifications(),
 	}
 }
 
@@ -227,6 +235,30 @@ func loadConfig() (Config, error) {
 	}
 	// agent_recaps has no absent-key backfill: it is opt-in, so a missing
 	// key must decode to false like any other default-off bool.
+	// notifications: an absent object keeps the defaultConfig values, but a
+	// present object that omits "enabled", or whose classes omit "stall"
+	// (a hand edit, or a `config patch` that only set other keys), must not
+	// silently disable stall alerts — silence means a capture stall goes
+	// unreported. Disabling stall requires an explicit stall:false.
+	var nprobe struct {
+		Notifications struct {
+			Enabled *bool           `json:"enabled"`
+			Classes map[string]bool `json:"classes"`
+		} `json:"notifications"`
+	}
+	if json.Unmarshal(b, &nprobe) == nil {
+		if nprobe.Notifications.Enabled == nil {
+			cfg.Notifications.Enabled = true
+		}
+		if nprobe.Notifications.Classes == nil {
+			cfg.Notifications.Classes = map[string]bool{notifyClassStall: true}
+		} else if _, ok := nprobe.Notifications.Classes[notifyClassStall]; !ok {
+			if cfg.Notifications.Classes == nil {
+				cfg.Notifications.Classes = map[string]bool{}
+			}
+			cfg.Notifications.Classes[notifyClassStall] = true
+		}
+	}
 	if cfg.ClassificationModel == "" {
 		cfg.ClassificationModel = defaultJevModel
 	}
@@ -341,6 +373,30 @@ func patchConfig(patch string) error {
 	if err := json.Unmarshal(mergedJSON, &cfg); err != nil {
 		return fmt.Errorf("patched config is invalid: %w", err)
 	}
+	// A "notifications" patch replaces the whole object — one that omits
+	// "enabled", or whose classes omit "stall", must not switch them off by
+	// omission (silence means a capture stall goes unreported). Disabling
+	// stall requires an explicit stall:false; loadConfig applies the same
+	// backfill to hand-edited files.
+	if v, ok := patchMap["notifications"]; ok {
+		var n struct {
+			Enabled *bool           `json:"enabled"`
+			Classes map[string]bool `json:"classes"`
+		}
+		if json.Unmarshal(v, &n) == nil {
+			if n.Enabled == nil {
+				cfg.Notifications.Enabled = true
+			}
+			if n.Classes == nil {
+				cfg.Notifications.Classes = map[string]bool{notifyClassStall: true}
+			} else if _, ok := n.Classes[notifyClassStall]; !ok {
+				if cfg.Notifications.Classes == nil {
+					cfg.Notifications.Classes = map[string]bool{}
+				}
+				cfg.Notifications.Classes[notifyClassStall] = true
+			}
+		}
+	}
 	if cfg.Model == "" {
 		return fmt.Errorf("model is required")
 	}
@@ -363,7 +419,8 @@ func writeDefaultConfig() error {
 // provider, model, api_base_url, capture_interval_sec, block_minutes, frames_per_block,
 // jpeg_quality, frame_max_dim, keep_frames, retention_days, ignore_apps (comma list),
 // openrouter_api_key, output, capture_command, max_storage_mb, max_frames_mb,
-// max_db_mb, auto_pause_locked, filter_inappropriate, debug.
+// max_db_mb, auto_pause_locked, filter_inappropriate, debug, notifications.enabled,
+// notifications (JSON object — deeper keys belong to `config patch`).
 func setConfigValue(key, value string) error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -459,6 +516,18 @@ func setConfigValue(key, value string) error {
 			return fmt.Errorf("agent_recaps must be true or false")
 		}
 		cfg.AgentRecaps = b
+	case "notifications.enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("notifications.enabled must be true or false")
+		}
+		cfg.Notifications.Enabled = b
+	case "notifications":
+		// Whole-object write; the unmarshal merges over the loaded defaults,
+		// so fields the value omits keep their current setting.
+		if err := json.Unmarshal([]byte(value), &cfg.Notifications); err != nil {
+			return fmt.Errorf("notifications must be a JSON object {enabled, classes, goal_reminder_hour}: %w", err)
+		}
 	case "classification_model":
 		cfg.ClassificationModel = value
 	case "categories":
@@ -488,7 +557,9 @@ func setConfigValue(key, value string) error {
 			cfg.MaxDBMB = n
 		}
 	case "output":
-		cfg.Output = value
+		// "auto" is valid: on the grim path it resolves to the focused
+		// monitor per tick. With capture_command set it is ignored.
+		cfg.Output = strings.TrimSpace(value)
 	case "capture_command":
 		cfg.CaptureCommand = value
 	default:

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,7 +14,9 @@ import (
 
 // schemaVersion is the highest migration this binary knows how to apply.
 // Bump it and add an applyMigration case when the schema changes.
-const schemaVersion = 3
+// Derived-index versions (schemaVersionFTS, schemaVersionFTSCleanup) are
+// applied by applyDerivedIndexMigrations, not the linear chain in migrate.
+const schemaVersion = 5
 
 // schema is the base (v1) schema: capture and journal tables only.
 const schema = `
@@ -252,6 +255,36 @@ func applyMigration(db *sql.DB, v int) error {
 		if _, err := tx.Exec(schemaV3); err != nil {
 			return err
 		}
+	case 4:
+		// FTS5 search index: virtual table + maintenance triggers +
+		// backfill, all in this transaction — a killed mid-backfill can
+		// never leave a stamped-but-empty index. The backfill is idempotent
+		// (NOT IN) so a retry over an index a `search --reindex` already
+		// populated is a no-op rather than a double-indexing pass.
+		if _, err := tx.Exec(schemaV4); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ftsBackfillStmt); err != nil {
+			return err
+		}
+		// A successful build clears the failure marker inside the same
+		// commit so the backoff can't outlive the index it was throttling.
+		if _, err := tx.Exec(`DELETE FROM meta WHERE k=?`, metaFTSFailedAt); err != nil {
+			return err
+		}
+	case 5:
+		if _, err := tx.Exec(schemaV5); err != nil {
+			return err
+		}
+		// Upgrade v4-era trigger bodies in place — but only when a real FTS
+		// index is present. A degraded v4 leaves no blocks_fts (or a plain
+		// squatter table), and triggers pointing at a missing index would
+		// fail every blocks write.
+		if ftsIndexPresentTx(tx) {
+			if _, err := tx.Exec(schemaV5TriggerRefresh); err != nil {
+				return err
+			}
+		}
 	default:
 		return fmt.Errorf("no migration defined for schema version %d", v)
 	}
@@ -292,10 +325,19 @@ func migrate(db *sql.DB) error {
 		cur = 1
 	}
 	for v := cur + 1; v <= schemaVersion; v++ {
+		if v == schemaVersionFTS || v == schemaVersionFTSCleanup {
+			continue // derived-index state; applyDerivedIndexMigrations runs it
+		}
 		if err := applyMigration(db, v); err != nil {
 			return fmt.Errorf("migration to schema v%d: %w", v, err)
 		}
 	}
+	// The FTS index is derived state: it applies outside the linear chain so
+	// a failure degrades to LIKE fallback instead of wedging openDB — and so
+	// its retry bookkeeping doesn't ride on MAX(version), which a later
+	// migration may already have stamped. Unapplied versions stay unstamped;
+	// a recorded failure backs the retry off for ftsRetryBackoff.
+	applyDerivedIndexMigrations(db)
 	return nil
 }
 
@@ -468,12 +510,66 @@ func blockAttempts(db *sql.DB, start time.Time) int {
 	return n
 }
 
+// resetFailedBlocks deletes failed/dead blocks so they re-summarize — and
+// deletes their block_edits rows too, otherwise an edit made on a failed
+// block would overlay whatever the retry summarizes at the same start_ts.
+// The match set is snapshotted first because the same WHERE can't re-derive
+// it once the blocks are gone, and the edits delete must run second: the
+// blocks_fts_ad trigger reads block_edits to un-index the effective OLD
+// text.
 func resetFailedBlocks(db *sql.DB) (int64, error) {
-	res, err := db.Exec(`DELETE FROM blocks WHERE status IN ('failed','dead')`)
+	return deleteBlocksWhere(db, `status IN ('failed','dead')`)
+}
+
+// deleteBlocksWhere deletes blocks rows matching pred (plus their
+// block_edits overlay rows) in one transaction. blocks go first — the
+// blocks_fts_ad trigger's unindex must still see the edits — and the
+// explicit edits delete also covers a degraded database where the index
+// (and therefore the cascade inside the trigger) doesn't exist.
+func deleteBlocksWhere(db *sql.DB, pred string, args ...any) (int64, error) {
+	tx, err := db.Begin()
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT start_ts FROM blocks WHERE `+pred, args...)
+	if err != nil {
+		return 0, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	var total int64
+	for i := 0; i < len(ids); i += 500 {
+		j := min(i+500, len(ids))
+		ph := strings.TrimSuffix(strings.Repeat("?,", j-i), ",")
+		chunk := make([]any, 0, j-i)
+		for _, id := range ids[i:j] {
+			chunk = append(chunk, id)
+		}
+		r, err := tx.Exec(`DELETE FROM blocks WHERE start_ts IN (`+ph+`)`, chunk...)
+		if err != nil {
+			return 0, err
+		}
+		if n, err := r.RowsAffected(); err == nil {
+			total += n
+		}
+		if _, err := tx.Exec(`DELETE FROM block_edits WHERE start_ts IN (`+ph+`)`, chunk...); err != nil {
+			return 0, err
+		}
+	}
+	return total, tx.Commit()
 }
 
 type Activity struct {
@@ -613,17 +709,43 @@ func logAPICall(db *sql.DB, blockStart time.Time, model string, framesSent, prom
 }
 
 type usageRow struct {
-	Calls     int `json:"calls"`
-	OK        int `json:"ok"`
-	Failed    int `json:"failed"`
-	PromptTok int `json:"prompt_tokens"`
-	ComplTok  int `json:"completion_tokens"`
+	Calls        int     `json:"calls"`
+	OK           int     `json:"ok"`
+	Failed       int     `json:"failed"`
+	FailureRate  float64 `json:"failure_rate"` // failed/calls, per the status != 'ok' convention
+	PromptTok    int     `json:"prompt_tokens"`
+	ComplTok     int     `json:"completion_tokens"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	// EstCostUSD is set only on by_model rows when the pricing config names
+	// the model — absent means the output stays token-only for that row.
+	EstCostUSD *float64 `json:"est_cost_usd,omitempty"`
+
+	latSum int64 // merged across ledgers so AVG survives the fold
 }
 
-// usageGroup aggregates one ledger grouped by a column. The select must
-// return (key, calls, ok, failed, prompt_tokens, completion_tokens).
-func usageGroup(db *sql.DB, query string) (map[string]usageRow, error) {
-	rows, err := db.Query(query)
+// add folds another group's totals into this row — the same dimension is
+// grouped per-ledger (api_calls + llm_calls) and then merged.
+func (r *usageRow) add(o usageRow) {
+	r.Calls += o.Calls
+	r.OK += o.OK
+	r.Failed += o.Failed
+	r.PromptTok += o.PromptTok
+	r.ComplTok += o.ComplTok
+	r.latSum += o.latSum
+}
+
+// finalize derives the rate and latency fields once raw totals are merged.
+func (r *usageRow) finalize() {
+	if r.Calls > 0 {
+		r.FailureRate = float64(r.Failed) / float64(r.Calls)
+		r.AvgLatencyMs = float64(r.latSum) / float64(r.Calls)
+	}
+}
+
+// usageGroup aggregates one ledger grouped by an expression. The select must
+// return (key, calls, ok, failed, prompt_tokens, completion_tokens, lat_sum).
+func usageGroup(db *sql.DB, query string, args ...any) (map[string]usageRow, error) {
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -632,89 +754,190 @@ func usageGroup(db *sql.DB, query string) (map[string]usageRow, error) {
 	for rows.Next() {
 		var k string
 		var r usageRow
-		if err := rows.Scan(&k, &r.Calls, &r.OK, &r.Failed, &r.PromptTok, &r.ComplTok); err != nil {
+		if err := rows.Scan(&k, &r.Calls, &r.OK, &r.Failed, &r.PromptTok, &r.ComplTok, &r.latSum); err != nil {
 			return nil, err
 		}
 		if k == "" {
 			k = "unknown"
 		}
+		r.finalize()
 		out[k] = r
 	}
 	return out, rows.Err()
 }
 
+// usageGroupSelect takes (group expression, table, where clause or "",
+// group expression). The where clause is always a bound `ts` predicate —
+// never interpolated input.
 const usageGroupSelect = `SELECT %s, COUNT(1),
   COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0),
   COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
-  COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0)
-  FROM %s GROUP BY %s`
+  COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+  COALESCE(SUM(latency_ms),0)
+  FROM %s%s GROUP BY %s`
+
+// usageWindow converts a --days N window into a cutoff. N counts local
+// calendar days ending today (1 = today only), matching the localtime day
+// bucketing below and blocksForDay's time.Local day boundaries. days <= 0
+// means the full retained history.
+func usageWindow(days int) time.Time {
+	if days <= 0 {
+		return time.Time{}
+	}
+	now := time.Now()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	return start.AddDate(0, 0, -(days - 1))
+}
 
 // usageSummary aggregates both LLM ledgers: api_calls (block summarization,
-// always OpenRouter) and llm_calls (chat/review/standup, any provider).
+// always OpenRouter) and llm_calls (chat/review/standup, any provider). This
+// keeps the original signature for existing callers; it reports over the
+// full retained history with no pricing.
 func usageSummary(db *sql.DB) (map[string]any, error) {
+	return usageSummaryWindow(db, 0, Config{})
+}
+
+// usageSummaryWindow is usageSummary over a bounded local-day window (days
+// <= 0 = all retained rows). When cfg.Pricing is set it adds per-model dollar
+// estimates to by_model plus a total est_cost_usd. data_since reports the
+// earliest row actually counted, so ledger trimming (the 2000-row cap and
+// retention_days) is visible rather than silently clipping totals.
+func usageSummaryWindow(db *sql.DB, days int, cfg Config) (map[string]any, error) {
+	where := ""
+	var args []any
+	if since := usageWindow(days); !since.IsZero() {
+		where = " WHERE ts >= ?"
+		args = append(args, since.Unix())
+	}
 	var calls, pt, ct, okn, failed int
+	var latSum int64
 	if err := db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
-	  FROM api_calls`).Scan(&calls, &pt, &ct, &okn, &failed); err != nil {
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
+	  COALESCE(SUM(latency_ms),0)
+	  FROM api_calls`+where, args...).Scan(&calls, &pt, &ct, &okn, &failed, &latSum); err != nil {
 		return nil, err
 	}
 	var lcalls, lpt, lct, lok, lfailed int
+	var llatSum int64
 	db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
-	  FROM llm_calls`).Scan(&lcalls, &lpt, &lct, &lok, &lfailed)
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
+	  COALESCE(SUM(latency_ms),0)
+	  FROM llm_calls`+where, args...).Scan(&lcalls, &lpt, &lct, &lok, &lfailed, &llatSum)
 
-	byTask, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "task", "llm_calls", "task"))
+	// Coverage floor: earliest row in the counted window across both ledgers.
+	var dataSince string
+	var minTS int64
+	for _, tbl := range []string{"api_calls", "llm_calls"} {
+		var m sql.NullInt64
+		db.QueryRow(`SELECT MIN(ts) FROM `+tbl+where, args...).Scan(&m)
+		if m.Valid && (minTS == 0 || m.Int64 < minTS) {
+			minTS = m.Int64
+		}
+	}
+	if minTS > 0 {
+		dataSince = time.Unix(minTS, 0).Local().Format("2006-01-02")
+	}
+
+	apiRow := usageRow{Calls: calls, OK: okn, Failed: failed, PromptTok: pt, ComplTok: ct, latSum: latSum}
+	apiRow.finalize()
+	otherRow := usageRow{Calls: lcalls, OK: lok, Failed: lfailed, PromptTok: lpt, ComplTok: lct, latSum: llatSum}
+	otherRow.finalize()
+
+	byTask, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "task", "llm_calls", where, "task"), args...)
 	if err != nil {
 		return nil, err
 	}
 	if calls > 0 {
 		r := byTask["summarize"]
-		r.Calls += calls
-		r.OK += okn
-		r.Failed += failed
-		r.PromptTok += pt
-		r.ComplTok += ct
+		r.add(apiRow)
+		r.finalize()
 		byTask["summarize"] = r
 	}
-	byProvider, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "provider", "llm_calls", "provider"))
+	byProvider, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "provider", "llm_calls", where, "provider"), args...)
 	if err != nil {
 		return nil, err
 	}
-	if calls > 0 {
-		r := byProvider["openrouter"]
-		r.Calls += calls
-		r.OK += okn
-		r.Failed += failed
-		r.PromptTok += pt
-		r.ComplTok += ct
-		byProvider["openrouter"] = r
+	// api_calls has no provider column — derive the bucket from the model
+	// label summarize logged: 'cli:<command|id>' means a cli vision provider
+	// (summarize.go), anything else went over OpenRouter.
+	const apiProviderExpr = `CASE WHEN model LIKE 'cli:%' THEN 'cli' ELSE 'openrouter' END`
+	apiProviders, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, apiProviderExpr, "api_calls", where, apiProviderExpr), args...)
+	if err != nil {
+		return nil, err
+	}
+	for k, gr := range apiProviders {
+		r := byProvider[k]
+		r.add(gr)
+		r.finalize()
+		byProvider[k] = r
 	}
 	byModel := map[string]usageRow{}
+	byDay := map[string]usageRow{}
+	// Day buckets use the engine's localtime convention — date(ts,'unixepoch',
+	// 'localtime') matches blocksForDay's time.Local day boundaries.
+	const dayExpr = `date(ts,'unixepoch','localtime')`
 	for _, tbl := range []string{"api_calls", "llm_calls"} {
-		g, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "model", tbl, "model"))
+		mg, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "model", tbl, where, "model"), args...)
 		if err != nil {
 			return nil, err
 		}
-		for k, r := range g {
+		for k, gr := range mg {
 			m := byModel[k]
-			m.Calls += r.Calls
-			m.OK += r.OK
-			m.Failed += r.Failed
-			m.PromptTok += r.PromptTok
-			m.ComplTok += r.ComplTok
+			m.add(gr)
+			m.finalize()
 			byModel[k] = m
 		}
+		dg, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, dayExpr, tbl, where, dayExpr), args...)
+		if err != nil {
+			return nil, err
+		}
+		for k, gr := range dg {
+			d := byDay[k]
+			d.add(gr)
+			d.finalize()
+			byDay[k] = d
+		}
 	}
-	return map[string]any{
+	sum := map[string]any{
+		"window_days": days, "data_since": dataSince,
 		"api_calls": calls, "ok": okn, "failed": failed,
+		"failure_rate": apiRow.FailureRate, "avg_latency_ms": apiRow.AvgLatencyMs,
 		"prompt_tokens": pt, "completion_tokens": ct,
 		"other_llm_calls": lcalls, "other_ok": lok, "other_failed": lfailed,
+		"other_failure_rate": otherRow.FailureRate, "other_avg_latency_ms": otherRow.AvgLatencyMs,
 		"other_prompt_tokens": lpt, "other_completion_tokens": lct,
 		"total_prompt_tokens": pt + lpt, "total_completion_tokens": ct + lct,
-		"breakdown": map[string]any{
-			"by_task": byTask, "by_provider": byProvider, "by_model": byModel,
+		// The row caps in trimLogTables (capture.go, literal 2000) apply even
+		// when retention_days is 0 — data_since makes any clipping visible.
+		"coverage": map[string]any{
+			"api_calls_row_cap": 2000,
+			"llm_calls_row_cap": 2000,
+			"retention_days":    cfg.RetentionDays,
 		},
-	}, nil
+		"breakdown": map[string]any{
+			"by_task": byTask, "by_provider": byProvider, "by_model": byModel, "by_day": byDay,
+		},
+	}
+	if len(cfg.Pricing) > 0 {
+		total := 0.0
+		var unpriced []string
+		for k, r := range byModel {
+			if rate, ok := cfg.Pricing[k]; ok {
+				c := float64(r.PromptTok+r.ComplTok) * rate / 1e6
+				r.EstCostUSD = &c
+				byModel[k] = r
+				total += c
+			} else {
+				unpriced = append(unpriced, k)
+			}
+		}
+		sum["est_cost_usd"] = total
+		if len(unpriced) > 0 {
+			sort.Strings(unpriced)
+			sum["unpriced_models"] = unpriced
+		}
+	}
+	return sum, nil
 }
 
 // framesBefore deletes frame rows (and optionally files) older than cutoff.
@@ -740,19 +963,28 @@ func framesBefore(db *sql.DB, cutoff time.Time) ([]string, error) {
 }
 
 // deleteBlocksLike removes done/failed blocks whose title or summary matches
-// the case-insensitive LIKE pattern. It returns the number of rows deleted.
+// the case-insensitive LIKE pattern — and their block_edits overlay rows,
+// whose old_value/new_value would otherwise keep the scrubbed text forever.
+// The match covers edited text too: the edit overlay is what users see
+// (applyBlockEdits) and what the FTS index holds (ftsEffExpr), so a scrub
+// must catch a term that exists only in block_edits.new_value — and still
+// catch the raw term an edit renamed away (old_value). It returns the
+// number of blocks rows deleted.
 func deleteBlocksLike(db *sql.DB, pattern string) (int64, error) {
 	like := "%" + pattern + "%"
-	r, err := db.Exec(`DELETE FROM blocks
-	  WHERE status IN ('done','failed') AND
-	        (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))`, like, like)
-	if err != nil {
-		return 0, err
-	}
-	return r.RowsAffected()
+	return deleteBlocksWhere(db, `status IN ('done','failed') AND
+	  (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?)
+	   OR EXISTS (SELECT 1 FROM block_edits e WHERE e.start_ts = blocks.start_ts
+	     AND (LOWER(e.old_value) LIKE LOWER(?) OR LOWER(e.new_value) LIKE LOWER(?))))`,
+		like, like, like, like)
 }
 
 func pruneOldEvents(db *sql.DB, cutoff time.Time) {
 	db.Exec(`DELETE FROM events WHERE ts < ?`, cutoff.Unix())
 	db.Exec(`DELETE FROM api_calls WHERE ts < ?`, cutoff.Unix())
+	// llm_calls joins the retention window (U5): the cost ledger must not
+	// silently outlive the journal rows it accounts. trimLogTables
+	// (capture.go) also caps it at the newest 2000 rows alongside
+	// events/api_calls.
+	db.Exec(`DELETE FROM llm_calls WHERE ts < ?`, cutoff.Unix())
 }

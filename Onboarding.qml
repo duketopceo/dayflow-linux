@@ -18,8 +18,18 @@ Flickable {
   property string baseUrl: ""
   property string modelSlug: "google/gemma-4-31b-it"
   property var catPicks: ({})
+  // Set only by the explicit "Enable recaps" click on the consent step —
+  // the "Not now" and Back handlers clear it explicitly, so the patch
+  // never carries agent_recaps: true unless the user opted in. The consent
+  // step's apply writes the flag explicitly (true or false) so an existing
+  // config's agent_recaps: true can't silently survive "Not now".
+  property bool recapsOptIn: false
   property string testResult: ""
   property bool testing: false
+  // True while any config write or its doctor check is still in flight —
+  // the result actions stay hidden until the last apply settles, so a
+  // queued consent patch can't be overtaken by the previous check's finish.
+  property bool busy: root.testing || applyProc.running || root.applyQueued || keySetProc.running
 
   signal dismissed()
 
@@ -55,8 +65,14 @@ Flickable {
     onStarted: { write(pendingPatch + "\n"); pendingPatch = ""; applyProc.didStart = true }
     onExited: function(exitCode) {
       if (exitCode === 0) {
+        if (root.applyQueued) {
+          root.applyQueued = false
+          root.applyPatch()
+          return
+        }
         testProc.running = true
       } else {
+        root.applyQueued = false
         root.testResult = "config write failed"
         root.testing = false
       }
@@ -139,8 +155,23 @@ Flickable {
   }
 
   property bool keyInPatch: false
+  // Set by apply() when the agent-recaps consent decision is being applied;
+  // applyPatch reads it so the decision survives the keySetProc and queued
+  // re-apply chains.
+  property bool consentApply: false
+  // Set when apply() is re-invoked while a config write is in flight —
+  // applyProc re-enters applyPatch on exit so the latest patch (e.g.
+  // recapsOptIn flipped on the consent step) is never dropped.
+  property bool applyQueued: false
 
-  function apply() {
+  function apply(consentStep) {
+    // consentStep is passed (true or false) only by the agent-recaps
+    // decision buttons; every other caller leaves it undefined. When it is
+    // defined, the patch writes agent_recaps explicitly so the user's
+    // choice always lands — an existing agent_recaps: true can't silently
+    // survive "Not now".
+    root.consentApply = (consentStep !== undefined)
+    if (dayflow) dayflow.uilog("onboarding apply " + root.mode)
     root.testing = true
     root.testResult = "Testing..."
     if (root.mode === "openrouter" && root.apiKey !== "") {
@@ -154,6 +185,14 @@ Flickable {
   }
 
   function applyPatch() {
+    // Process.running = true is a no-op while the process is running, so
+    // a re-apply during an in-flight write must queue instead. The patch
+    // is built from live state when it actually sends, so the queued
+    // write always carries the newest picks.
+    if (applyProc.running) {
+      root.applyQueued = true
+      return
+    }
     var patch = { model: root.modelSlug }
     if (root.mode === "openrouter") {
       patch.provider = "openrouter"
@@ -177,6 +216,9 @@ Flickable {
     if (cats.length > 0) {
       patch.categories = cats.map(function(n) { return { name: n, description: n } })
     }
+    // The consent step's Enable/Not now is the only path that sets this —
+    // every other apply omits the key, which patchConfig preserves.
+    if (root.consentApply) patch.agent_recaps = root.recapsOptIn
     applyProc.pendingPatch = JSON.stringify(patch)
     applyProc.command = ["dayflow", "config", "patch", "-"]
     applyProc.running = true
@@ -451,11 +493,23 @@ Flickable {
           radius: Style.cornerRadius
           color: root.dayflow ? root.dayflow.accentFill(0.16) : "transparent"
           border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
-          Text { id: finText; anchors.centerIn: parent; text: "Save & test"
+          Text { id: finText; anchors.centerIn: parent; text: "Continue"
             color: root.dayflow ? root.dayflow.foreground : Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
-          MouseArea { anchors.fill: parent; onClicked: { if (dayflow) dayflow.uilog("onboarding apply " + root.mode); root.apply(); root.step = 3 } }
+          // Continue writes the config now — dismissing on the consent
+          // step must not discard provider/model/key. The patch omits
+          // agent_recaps unless recapsOptIn, so writing here is not a
+          // consent leak; step 3's buttons just re-apply.
+          MouseArea { anchors.fill: parent; onClicked: {
+            root.apply()
+            var agents = root.detected.agents || {}
+            var anyAgent = false
+            for (var k in agents) {
+              if (agents[k]) { anyAgent = true; break }
+            }
+            root.step = anyAgent ? 3 : 4
+          } }
         }
         Text {
           anchors.verticalCenter: parent.verticalCenter
@@ -469,9 +523,83 @@ Flickable {
       }
     }
 
-    // ---- step 3: result ----
+    // ---- step 3: agent-session recaps opt-in ----
+    // The base config was already written by step 2's Continue (the patch
+    // omits agent_recaps), so this step only decides whether a follow-up
+    // patch turns recaps on: Enable applies agent_recaps=true; "Not now"
+    // applies agent_recaps=false (so an existing enabled value can't
+    // survive the explicit choice); Back clears the flag and returns.
+    // Shown only when detect saw an agent store.
     Column {
       visible: root.step === 3
+      width: parent.width
+      spacing: Style.space(8)
+
+      Text {
+        width: parent.width
+        text: "Agent-session recaps (optional)"
+        color: root.dayflow ? root.dayflow.foreground : Color.foreground
+        font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body; font.bold: true
+      }
+      Text {
+        width: parent.width
+        text: "Dayflow can write a one-line recap of each coding-agent session it finds in Claude Code, Codex, OpenCode, Devin, and Cursor. Transcripts are always read locally to build the session list — that happens either way, on or off."
+        color: root.dayflow ? root.dayflow.dim : Color.muted
+        font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WordWrap
+      }
+      Text {
+        width: parent.width
+        text: "When recaps are on, a bounded, scrubbed transcript excerpt leaves your machine — to your configured chat provider, which writes the recap, and to OpenRouter's decisions endpoint, which judges which sessions are worth summarizing. Recaps are off by default; nothing extra is sent unless you enable them here or later in Settings."
+        color: root.dayflow ? root.dayflow.dim : Color.muted
+        font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WordWrap
+      }
+
+      Row {
+        spacing: Style.space(6)
+        Rectangle {
+          width: enText.implicitWidth + Style.space(16)
+          height: enText.implicitHeight + Style.space(8)
+          radius: Style.cornerRadius
+          color: root.dayflow ? root.dayflow.accentFill(0.16) : "transparent"
+          border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
+          Text { id: enText; anchors.centerIn: parent; text: "Enable recaps"
+            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body; font.bold: true }
+          MouseArea { anchors.fill: parent; onClicked: { root.recapsOptIn = true; root.apply(true); root.step = 4 } }
+        }
+        Rectangle {
+          width: offText.implicitWidth + Style.space(16)
+          height: offText.implicitHeight + Style.space(8)
+          radius: Style.cornerRadius
+          color: root.dayflow ? root.dayflow.btnBg(offMa.containsMouse) : "transparent"
+          border.color: root.dayflow ? root.dayflow.fgFill(0.12) : "transparent"
+          Text { id: offText; anchors.centerIn: parent; text: "Not now"
+            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body }
+          MouseArea { id: offMa; anchors.fill: parent; hoverEnabled: true; onClicked: { root.recapsOptIn = false; root.apply(false); root.step = 4 } }
+        }
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Back"
+          color: root.dayflow ? root.dayflow.dim : Color.muted
+          font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+          font.underline: true
+          MouseArea { anchors.fill: parent; onClicked: { root.recapsOptIn = false; root.step = 2 } }
+        }
+      }
+    }
+
+    // ---- step 4: result ----
+    Column {
+      visible: root.step === 4
       width: parent.width
       spacing: Style.space(8)
 
@@ -484,7 +612,7 @@ Flickable {
         wrapMode: Text.WordWrap
       }
       Text {
-        visible: !root.testing
+        visible: !root.busy
         width: parent.width
         text: "Install services to start capturing in the background, or open the panel and finish setup in Settings."
         color: root.dayflow ? root.dayflow.dim : Color.muted
@@ -495,7 +623,7 @@ Flickable {
       Row {
         spacing: Style.space(6)
         Rectangle {
-          visible: !root.testing
+          visible: !root.busy
           width: instText.implicitWidth + Style.space(16)
           height: instText.implicitHeight + Style.space(8)
           radius: Style.cornerRadius
@@ -508,7 +636,7 @@ Flickable {
           MouseArea { anchors.fill: parent; onClicked: installProc.running = true }
         }
         Rectangle {
-          visible: !root.testing
+          visible: !root.busy
           width: doneText.implicitWidth + Style.space(16)
           height: doneText.implicitHeight + Style.space(8)
           radius: Style.cornerRadius

@@ -317,56 +317,6 @@ func fetchInsights(db *sql.DB, cfg Config, r string) (map[string]any, error) {
 	return in.JSON(), nil
 }
 
-func searchBlocks(db *sql.DB, query string) ([]Block, error) {
-	like := "%" + query + "%"
-	rows, err := db.Query(`SELECT start_ts, end_ts, title, summary, category, app, activities, productive,
-	  category_confidence, quality_confidence, same_as_prev FROM blocks
-	  WHERE status='done' AND (title LIKE ? OR summary LIKE ? OR app LIKE ?)
-	  ORDER BY start_ts DESC LIMIT 50`, like, like, like)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Block
-	for rows.Next() {
-		var b Block
-		var s, e int64
-		var acts string
-		var prod sql.NullBool
-		var conf, qual sql.NullFloat64
-		var sap sql.NullBool
-		if err := rows.Scan(&s, &e, &b.Title, &b.Summary, &b.Category, &b.App, &acts, &prod,
-			&conf, &qual, &sap); err != nil {
-			return nil, err
-		}
-		if prod.Valid {
-			b.Productive = &prod.Bool
-		}
-		if conf.Valid {
-			b.CategoryConfidence = &conf.Float64
-		}
-		if qual.Valid {
-			b.QualityConfidence = &qual.Float64
-		}
-		if sap.Valid {
-			b.SameAsPrev = &sap.Bool
-		}
-		if acts != "" {
-			json.Unmarshal([]byte(acts), &b.Activities)
-		}
-		b.LowConfidence = blockLowConfidence(b)
-		b.Start = time.Unix(s, 0).Local()
-		b.End = time.Unix(e, 0).Local()
-		b.StartTs = s
-		b.EndTs = e
-		b.StartStr = b.Start.Format("3:04 PM")
-		b.EndStr = b.End.Format("3:04 PM")
-		b.AppName = appDisplayName(b.App)
-		out = append(out, b)
-	}
-	return out, rows.Err()
-}
-
 const finalAnswerPrompt = "Answer the user's question in plain English using the tool results above. Do not output JSON, markdown code fences, or raw structured data."
 
 // chatWithJournal sends a user message and carries out up to 3 tool turns.

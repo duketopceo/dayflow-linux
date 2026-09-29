@@ -52,8 +52,9 @@ var mcpTools = []map[string]any{
 	{"name": "get_frames", "description": "Captured frame list for a date (YYYY-MM-DD, default today): timestamp, path, exists flag.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD; default today"}}}},
-	{"name": "get_usage", "description": "LLM usage totals across all call types and providers, with per-task/per-provider/per-model breakdown.",
-		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "get_usage", "description": "LLM usage totals across all call types and providers: per-task/per-provider/per-model/per-day breakdown, avg latency, failure rate, a coverage floor (data_since — the oldest row actually counted, so log trimming is visible), and dollar estimates when the pricing config is set.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"days": map[string]any{"type": "integer", "description": "limit to the last N local days; 0/omitted = all retained rows"}}}},
 	{"name": "get_stats", "description": "Storage usage (db, frames, total), journal block counts, date coverage, and API call/token totals.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "get_standup", "description": "Generate a standup update from yesterday and today's blocks.",
@@ -157,25 +158,16 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if q == "" {
 			return nil, fmt.Errorf("query required")
 		}
-		like := "%" + q + "%"
-		rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,app FROM blocks
-		  WHERE status='done' AND (title LIKE ? OR summary LIKE ? OR app LIKE ?) ORDER BY start_ts DESC LIMIT 50`,
-			like, like, like)
+		blocks, err := searchBlocks(db, q)
 		if err != nil {
 			return nil, err
 		}
-		defer rows.Close()
 		out := []map[string]string{}
-		for rows.Next() {
-			var s, e int64
-			var t, su, c, a string
-			if err := rows.Scan(&s, &e, &t, &su, &c, &a); err != nil {
-				continue
-			}
+		for _, b := range blocks {
 			out = append(out, map[string]string{
-				"start": time.Unix(s, 0).Local().Format("2006-01-02 15:04"),
-				"end":   time.Unix(e, 0).Local().Format("15:04"),
-				"title": t, "summary": su, "category": c, "app": a,
+				"start": b.Start.Format("2006-01-02 15:04"),
+				"end":   b.End.Format("15:04"),
+				"title": b.Title, "summary": b.Summary, "category": b.Category, "app": b.App,
 			})
 		}
 		return map[string]any{"matches": out}, nil
@@ -233,7 +225,11 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		return map[string]any{"date": t.Local().Format("2006-01-02"), "frames": frames, "count": len(frames)}, nil
 
 	case "get_usage":
-		return usageSummary(db)
+		days := 0
+		if v, ok := args["days"].(float64); ok && v > 0 {
+			days = int(v)
+		}
+		return usageSummaryWindow(db, days, cfg)
 
 	case "get_stats":
 		var blocksTotal, blocksDone, blocksFailed, blocksDead, framesPending, eventsTotal int
