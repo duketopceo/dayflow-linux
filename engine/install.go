@@ -23,7 +23,7 @@ Wants=graphical-session.target
 ExecStart=%s daemon
 Restart=always
 RestartSec=5
-PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
+PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
 Environment="WAYLAND_DISPLAY=wayland-1"
 
 [Install]
@@ -36,6 +36,7 @@ Description=dayflow block summarizer (OpenRouter)
 [Service]
 Type=oneshot
 ExecStart=%s summarize
+PassEnvironment=DBUS_SESSION_BUS_ADDRESS
 `
 
 const summarizeTimer = `[Unit]
