@@ -347,6 +347,12 @@ func pendingBlocks(db *sql.DB, cfg Config, now time.Time) ([]time.Time, error) {
 }
 
 func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) {
+	// This oneshot is a second live process — the only place a wedged or
+	// dead capture daemon can still be reported from. Runs before provider
+	// resolution so a broken config can't skip the check. Synchronous
+	// notify: the oneshot exits right after this call, so an async send
+	// could die with the process.
+	checkCaptureStall(db, cfg)
 	vp, err := providerForTask(cfg, "vision")
 	if err != nil {
 		return 0, err
