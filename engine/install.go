@@ -17,7 +17,6 @@ const unitMarker = "# Managed by dayflow — dayflow install/uninstall may repla
 const captureService = `[Unit]
 Description=dayflow screen capture daemon
 After=graphical-session.target
-Wants=graphical-session.target
 
 [Service]
 ExecStart=%s daemon
@@ -27,7 +26,7 @@ PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DBUS_SESSION
 Environment="WAYLAND_DISPLAY=wayland-1"
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 `
 
 // PassEnvironment carries the session bus address into the oneshot so
