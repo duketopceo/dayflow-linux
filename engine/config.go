@@ -34,7 +34,7 @@ type Config struct {
 	RetentionDays        int        `json:"retention_days"`
 	IgnoreApps           []string   `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
 	CaptureCommand       string     `json:"capture_command"` // override; default auto-detect grim
-	Output               string     `json:"output"`          // grim -o <output>; empty = all outputs
+	Output               string     `json:"output"`          // grim -o <output>; empty = all outputs; "auto" = focused monitor per tick
 	SiteName             string     `json:"site_name"`       // OpenRouter X-Title
 	MaxStorageMB         int        `json:"max_storage_mb"`  // legacy: cap on the whole data dir; 0 = off (new installs use the split caps below)
 	MaxFramesMB          int        `json:"max_frames_mb"`   // cap on frames + quarantine dirs; 0 = unlimited
@@ -488,7 +488,9 @@ func setConfigValue(key, value string) error {
 			cfg.MaxDBMB = n
 		}
 	case "output":
-		cfg.Output = value
+		// "auto" is valid: on the grim path it resolves to the focused
+		// monitor per tick. With capture_command set it is ignored.
+		cfg.Output = strings.TrimSpace(value)
 	case "capture_command":
 		cfg.CaptureCommand = value
 	default:
