@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -221,6 +222,20 @@ func runSetup() error {
 		choice = suggested
 	}
 
+	// Recaps opt-in (R5): only offered when a local agent transcript store
+	// exists — nothing detected means nothing to recap. Only an explicit
+	// "y" enables it; empty, EOF, or non-interactive input defaults to no
+	// and writes nothing, so a piped/interrupted setup can't flip it on.
+	recaps := false
+	if stores := detectedStoreNames(); len(stores) > 0 {
+		fmt.Printf("\nAgent transcript stores found: %s\n", strings.Join(stores, ", "))
+		fmt.Println("Dayflow can write a one-line recap of each coding-agent session. Transcripts")
+		fmt.Println("are read locally either way; recaps send a bounded, scrubbed excerpt to")
+		fmt.Println("your chat provider and to the decisions endpoint that judges sessions.")
+		fmt.Print("Enable agent-session recaps? [y/N]: ")
+		recaps = promptYes(r)
+	}
+
 	if err := setConfigValue("api_base_url", baseURL); err != nil {
 		return err
 	}
@@ -229,6 +244,11 @@ func runSetup() error {
 	}
 	if err := setConfigValue("model", choice); err != nil {
 		return err
+	}
+	if recaps {
+		if err := setConfigValue("agent_recaps", "true"); err != nil {
+			return err
+		}
 	}
 	fmt.Printf("\nWrote %s (model=%s)\n", configPath(), choice)
 	fmt.Println("Next: dayflow install && systemctl --user enable --now dayflow-capture.service")
@@ -262,7 +282,8 @@ func listModels(cfg Config) {
 	}
 }
 
-// doctorCheck is one doctor result; status is "ok", "warn", or "fail".
+// doctorCheck is one doctor result; status is "ok", "warn", "info", or
+// "fail". "info" is advisory — it never counts toward the failure total.
 type doctorCheck struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
@@ -289,6 +310,11 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 	check("wayland session", os.Getenv("WAYLAND_DISPLAY") != "", "not running under Wayland")
 	_, grimErr := exec.LookPath("grim")
 	check("grim installed", grimErr == nil || cfg.CaptureCommand != "", "install grim or set capture_command")
+	// output:"auto" only resolves on the grim path — a custom capture_command
+	// never gets the -o injection, so the setting is silently dead there.
+	if cfg.Output == "auto" && cfg.CaptureCommand != "" {
+		warn("output auto", "output \"auto\" is ignored when capture_command is set — the custom command controls which monitor is grabbed")
+	}
 	check("config file", fileExists(configPath()), "run: dayflow setup")
 	// A cli-kind provider is a working endpoint too — it shells out to a
 	// subscription-auth'd agent CLI and needs no API key or base URL.
@@ -327,13 +353,28 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 	if hyErr != nil && len(cfg.IgnoreApps) > 0 {
 		warn("hyprctl", "hyprctl not found — ignore_apps won't work on this compositor")
 	}
+	// notify-send on PATH is not enough: the capture service runs under a
+	// systemd env that only recently gained DBUS_SESSION_BUS_ADDRESS, and a
+	// binary that exists still can't reach the user's session bus without it
+	// (or GLib's $XDG_RUNTIME_DIR/bus fallback). Pure env/socket probe — a
+	// test-send would be a side effect, not a check.
+	if notificationBusReachable() {
+		checks = append(checks, doctorCheck{Name: "notification bus", Status: "ok"})
+	} else {
+		warn("notification bus", "DBUS_SESSION_BUS_ADDRESS unset and $XDG_RUNTIME_DIR/bus missing — notifications from dayflow-capture won't reach the desktop daemon")
+	}
 
 	if _, err := os.Stat(dbPath()); os.IsNotExist(err) {
 		warn("database", "no database yet — capture has not run")
 	} else {
 		sv, svErr := peekSchemaVersion()
-		check("schema version", svErr == nil && sv <= schemaVersion,
-			fmt.Sprintf("database at schema v%d, binary expects v%d — upgrade the engine", sv, schemaVersion))
+		if svErr == nil && sv <= schemaVersion {
+			checks = append(checks, doctorCheck{Name: "schema version", Status: "ok",
+				Detail: fmt.Sprintf("database v%d, binary v%d", sv, schemaVersion)})
+		} else {
+			check("schema version", false,
+				fmt.Sprintf("database at schema v%d, binary expects v%d — upgrade the engine", sv, schemaVersion))
+		}
 		if svErr == nil && sv < schemaVersion {
 			warn("schema migration", fmt.Sprintf("database was at schema v%d; migrated to v%d — restart dayflow-capture and any dayflow mcp clients", sv, schemaVersion))
 		}
@@ -370,6 +411,22 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 		check("config permissions", fi.Mode().Perm()&0o077 == 0,
 			fmt.Sprintf("%s is %04o, want 0600", configPath(), fi.Mode().Perm()))
 	}
+	// Binary vs installed plugin manifest: the two upgrade together, so a
+	// version gap means a half-applied upgrade. No manifest at all is an
+	// engine-only install — info, not a failure.
+	if mPath, mVer, err := pluginManifestVersion(); err != nil {
+		warn("plugin manifest", mPath+" unreadable: "+err.Error())
+	} else if mPath == "" {
+		checks = append(checks, doctorCheck{Name: "plugin manifest", Status: "info",
+			Detail: "engine-only install (no installed plugin manifest)"})
+	} else if mVer != version {
+		exe, _ := os.Executable()
+		fail++
+		checks = append(checks, doctorCheck{Name: "plugin manifest", Status: "fail",
+			Detail: fmt.Sprintf("manifest %s at %s vs engine %s (%s) — upgrade both halves", mVer, mPath, version, exe)})
+	} else {
+		checks = append(checks, doctorCheck{Name: "plugin manifest", Status: "ok", Detail: "v" + mVer})
+	}
 	return checks, fail
 }
 
@@ -398,6 +455,8 @@ func runDoctor(cfg Config, jsonOut bool, deep bool) {
 				}
 			case "warn":
 				fmt.Printf("  warn %s — %s\n", c.Name, c.Detail)
+			case "info":
+				fmt.Printf("  info %s — %s\n", c.Name, c.Detail)
 			default:
 				fmt.Printf("  FAIL %s — %s\n", c.Name, c.Detail)
 			}
@@ -421,15 +480,21 @@ func probeEndpoint(base string) bool {
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
+// detectResult is the `detect` payload. Agents reports which coding-agent
+// transcript stores exist locally — Onboarding.qml gates its recaps
+// consent step on this map, and runSetup gates its recaps prompt on it.
+type detectResult struct {
+	Ollama   bool            `json:"ollama"`
+	LMStudio bool            `json:"lmstudio"`
+	Agents   map[string]bool `json:"agents"`
+	Presets  []ModelPreset   `json:"presets"`
+}
+
 func runDetect(jsonOut bool) {
-	type detected struct {
-		Ollama   bool          `json:"ollama"`
-		LMStudio bool          `json:"lmstudio"`
-		Presets  []ModelPreset `json:"presets"`
-	}
-	d := detected{
+	d := detectResult{
 		Ollama:   probeEndpoint("http://localhost:11434/v1"),
 		LMStudio: probeEndpoint("http://localhost:1234/v1"),
+		Agents:   agentStoresDetected(),
 		Presets:  modelPresets(),
 	}
 	if jsonOut {
@@ -440,6 +505,16 @@ func runDetect(jsonOut bool) {
 	fmt.Printf("ollama:   %v\nlmstudio: %v\n", d.Ollama, d.LMStudio)
 	if d.Ollama || d.LMStudio {
 		fmt.Println("local endpoint found — a local model works without an API key")
+	}
+	var stores []string
+	for name, ok := range d.Agents {
+		if ok {
+			stores = append(stores, name)
+		}
+	}
+	sort.Strings(stores)
+	if len(stores) > 0 {
+		fmt.Println("agent stores: " + strings.Join(stores, ", "))
 	}
 	printModelPresets()
 }
@@ -462,4 +537,99 @@ func peekSchemaVersion() (int, error) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// notificationBusReachable reports whether a session D-Bus is plausibly
+// reachable from this environment: an explicit DBUS_SESSION_BUS_ADDRESS,
+// or the socket at $XDG_RUNTIME_DIR/bus that GLib falls back to. Pure
+// env/socket inspection — doctor must not send test notifications.
+func notificationBusReachable() bool {
+	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") != "" {
+		return true
+	}
+	rt := os.Getenv("XDG_RUNTIME_DIR")
+	if rt == "" {
+		return false
+	}
+	st, err := os.Stat(filepath.Join(rt, "bus"))
+	return err == nil && st.Mode()&os.ModeSocket != 0
+}
+
+// pluginManifestPath locates the installed omarchy plugin manifest — the
+// engine binary and the plugin upgrade together, so version drift between
+// them means a half-applied upgrade.
+func pluginManifestPath() string {
+	d, err := os.UserConfigDir()
+	if err != nil {
+		d = filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	return filepath.Join(d, "omarchy", "plugins", "io.github.duketopceo.dayflow", "manifest.json")
+}
+
+// pluginManifestVersion reads the installed plugin manifest's version.
+// An absent manifest returns ("", "", nil) — an engine-only install is
+// not a failure; other read/parse failures come back as err.
+func pluginManifestVersion() (path, ver string, err error) {
+	path = pluginManifestPath()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", nil
+		}
+		return path, "", err
+	}
+	var m struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return path, "", err
+	}
+	return path, m.Version, nil
+}
+
+// agentStoresDetected reports which agent transcript stores exist on this
+// machine, keyed by source name. It reuses the adapters' own store-root
+// resolution (including their DAYFLOW_*_DIR/DB test overrides) so detection
+// can never disagree with what a scan would find.
+func agentStoresDetected() map[string]bool {
+	opencode := false
+	for _, p := range opencodeDBPaths() {
+		if fileExists(p) {
+			opencode = true
+			break
+		}
+	}
+	return map[string]bool{
+		"claude":   fileExists(claudeDir()),
+		"codex":    fileExists(codexDir()),
+		"opencode": opencode,
+		"devin":    fileExists(devinDir()),
+		"cursor":   fileExists(cursorDBPath()),
+	}
+}
+
+// detectedStoreNames is the sorted subset of agent sources with a store
+// present — the gate behind both the detect payload consumers and the
+// setup recaps prompt.
+func detectedStoreNames() []string {
+	var names []string
+	for name, ok := range agentStoresDetected() {
+		if ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// promptYes reads one answer line; only an explicit "y"/"yes" is true.
+// EOF, empty input, and anything else are a no — the recaps opt-in must
+// default off on piped or interrupted stdin.
+func promptYes(r *bufio.Reader) bool {
+	line, _ := r.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	}
+	return false
 }
