@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -628,17 +629,43 @@ func logAPICall(db *sql.DB, blockStart time.Time, model string, framesSent, prom
 }
 
 type usageRow struct {
-	Calls     int `json:"calls"`
-	OK        int `json:"ok"`
-	Failed    int `json:"failed"`
-	PromptTok int `json:"prompt_tokens"`
-	ComplTok  int `json:"completion_tokens"`
+	Calls        int     `json:"calls"`
+	OK           int     `json:"ok"`
+	Failed       int     `json:"failed"`
+	FailureRate  float64 `json:"failure_rate"` // failed/calls, per the status != 'ok' convention
+	PromptTok    int     `json:"prompt_tokens"`
+	ComplTok     int     `json:"completion_tokens"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	// EstCostUSD is set only on by_model rows when the pricing config names
+	// the model — absent means the output stays token-only for that row.
+	EstCostUSD *float64 `json:"est_cost_usd,omitempty"`
+
+	latSum int64 // merged across ledgers so AVG survives the fold
 }
 
-// usageGroup aggregates one ledger grouped by a column. The select must
-// return (key, calls, ok, failed, prompt_tokens, completion_tokens).
-func usageGroup(db *sql.DB, query string) (map[string]usageRow, error) {
-	rows, err := db.Query(query)
+// add folds another group's totals into this row — the same dimension is
+// grouped per-ledger (api_calls + llm_calls) and then merged.
+func (r *usageRow) add(o usageRow) {
+	r.Calls += o.Calls
+	r.OK += o.OK
+	r.Failed += o.Failed
+	r.PromptTok += o.PromptTok
+	r.ComplTok += o.ComplTok
+	r.latSum += o.latSum
+}
+
+// finalize derives the rate and latency fields once raw totals are merged.
+func (r *usageRow) finalize() {
+	if r.Calls > 0 {
+		r.FailureRate = float64(r.Failed) / float64(r.Calls)
+		r.AvgLatencyMs = float64(r.latSum) / float64(r.Calls)
+	}
+}
+
+// usageGroup aggregates one ledger grouped by an expression. The select must
+// return (key, calls, ok, failed, prompt_tokens, completion_tokens, lat_sum).
+func usageGroup(db *sql.DB, query string, args ...any) (map[string]usageRow, error) {
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -647,89 +674,182 @@ func usageGroup(db *sql.DB, query string) (map[string]usageRow, error) {
 	for rows.Next() {
 		var k string
 		var r usageRow
-		if err := rows.Scan(&k, &r.Calls, &r.OK, &r.Failed, &r.PromptTok, &r.ComplTok); err != nil {
+		if err := rows.Scan(&k, &r.Calls, &r.OK, &r.Failed, &r.PromptTok, &r.ComplTok, &r.latSum); err != nil {
 			return nil, err
 		}
 		if k == "" {
 			k = "unknown"
 		}
+		r.finalize()
 		out[k] = r
 	}
 	return out, rows.Err()
 }
 
+// usageGroupSelect takes (group expression, table, where clause or "",
+// group expression). The where clause is always a bound `ts` predicate —
+// never interpolated input.
 const usageGroupSelect = `SELECT %s, COUNT(1),
   COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0),
   COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
-  COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0)
-  FROM %s GROUP BY %s`
+  COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+  COALESCE(SUM(latency_ms),0)
+  FROM %s%s GROUP BY %s`
+
+// usageWindow converts a --days N window into a cutoff. N counts local
+// calendar days ending today (1 = today only), matching the localtime day
+// bucketing below and blocksForDay's time.Local day boundaries. days <= 0
+// means the full retained history.
+func usageWindow(days int) time.Time {
+	if days <= 0 {
+		return time.Time{}
+	}
+	now := time.Now()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	return start.AddDate(0, 0, -(days - 1))
+}
 
 // usageSummary aggregates both LLM ledgers: api_calls (block summarization,
-// always OpenRouter) and llm_calls (chat/review/standup, any provider).
+// always OpenRouter) and llm_calls (chat/review/standup, any provider). This
+// keeps the original signature for existing callers; it reports over the
+// full retained history with no pricing.
 func usageSummary(db *sql.DB) (map[string]any, error) {
+	return usageSummaryWindow(db, 0, Config{})
+}
+
+// usageSummaryWindow is usageSummary over a bounded local-day window (days
+// <= 0 = all retained rows). When cfg.Pricing is set it adds per-model dollar
+// estimates to by_model plus a total est_cost_usd. data_since reports the
+// earliest row actually counted, so ledger trimming (the 2000-row cap and
+// retention_days) is visible rather than silently clipping totals.
+func usageSummaryWindow(db *sql.DB, days int, cfg Config) (map[string]any, error) {
+	where := ""
+	var args []any
+	if since := usageWindow(days); !since.IsZero() {
+		where = " WHERE ts >= ?"
+		args = append(args, since.Unix())
+	}
 	var calls, pt, ct, okn, failed int
+	var latSum int64
 	if err := db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
-	  FROM api_calls`).Scan(&calls, &pt, &ct, &okn, &failed); err != nil {
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
+	  COALESCE(SUM(latency_ms),0)
+	  FROM api_calls`+where, args...).Scan(&calls, &pt, &ct, &okn, &failed, &latSum); err != nil {
 		return nil, err
 	}
 	var lcalls, lpt, lct, lok, lfailed int
+	var llatSum int64
 	db.QueryRow(`SELECT COUNT(1), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0)
-	  FROM llm_calls`).Scan(&lcalls, &lpt, &lct, &lok, &lfailed)
+	  COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END),0),
+	  COALESCE(SUM(latency_ms),0)
+	  FROM llm_calls`+where, args...).Scan(&lcalls, &lpt, &lct, &lok, &lfailed, &llatSum)
 
-	byTask, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "task", "llm_calls", "task"))
+	// Coverage floor: earliest row in the counted window across both ledgers.
+	var dataSince string
+	var minTS int64
+	for _, tbl := range []string{"api_calls", "llm_calls"} {
+		var m sql.NullInt64
+		db.QueryRow(`SELECT MIN(ts) FROM `+tbl+where, args...).Scan(&m)
+		if m.Valid && (minTS == 0 || m.Int64 < minTS) {
+			minTS = m.Int64
+		}
+	}
+	if minTS > 0 {
+		dataSince = time.Unix(minTS, 0).Local().Format("2006-01-02")
+	}
+
+	apiRow := usageRow{Calls: calls, OK: okn, Failed: failed, PromptTok: pt, ComplTok: ct, latSum: latSum}
+	apiRow.finalize()
+	otherRow := usageRow{Calls: lcalls, OK: lok, Failed: lfailed, PromptTok: lpt, ComplTok: lct, latSum: llatSum}
+	otherRow.finalize()
+
+	byTask, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "task", "llm_calls", where, "task"), args...)
 	if err != nil {
 		return nil, err
 	}
 	if calls > 0 {
 		r := byTask["summarize"]
-		r.Calls += calls
-		r.OK += okn
-		r.Failed += failed
-		r.PromptTok += pt
-		r.ComplTok += ct
+		r.add(apiRow)
+		r.finalize()
 		byTask["summarize"] = r
 	}
-	byProvider, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "provider", "llm_calls", "provider"))
+	byProvider, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "provider", "llm_calls", where, "provider"), args...)
 	if err != nil {
 		return nil, err
 	}
 	if calls > 0 {
 		r := byProvider["openrouter"]
-		r.Calls += calls
-		r.OK += okn
-		r.Failed += failed
-		r.PromptTok += pt
-		r.ComplTok += ct
+		r.add(apiRow)
+		r.finalize()
 		byProvider["openrouter"] = r
 	}
 	byModel := map[string]usageRow{}
+	byDay := map[string]usageRow{}
+	// Day buckets use the engine's localtime convention — date(ts,'unixepoch',
+	// 'localtime') matches blocksForDay's time.Local day boundaries.
+	const dayExpr = `date(ts,'unixepoch','localtime')`
 	for _, tbl := range []string{"api_calls", "llm_calls"} {
-		g, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "model", tbl, "model"))
+		mg, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, "model", tbl, where, "model"), args...)
 		if err != nil {
 			return nil, err
 		}
-		for k, r := range g {
+		for k, gr := range mg {
 			m := byModel[k]
-			m.Calls += r.Calls
-			m.OK += r.OK
-			m.Failed += r.Failed
-			m.PromptTok += r.PromptTok
-			m.ComplTok += r.ComplTok
+			m.add(gr)
+			m.finalize()
 			byModel[k] = m
 		}
+		dg, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, dayExpr, tbl, where, dayExpr), args...)
+		if err != nil {
+			return nil, err
+		}
+		for k, gr := range dg {
+			d := byDay[k]
+			d.add(gr)
+			d.finalize()
+			byDay[k] = d
+		}
 	}
-	return map[string]any{
+	sum := map[string]any{
+		"window_days": days, "data_since": dataSince,
 		"api_calls": calls, "ok": okn, "failed": failed,
+		"failure_rate": apiRow.FailureRate, "avg_latency_ms": apiRow.AvgLatencyMs,
 		"prompt_tokens": pt, "completion_tokens": ct,
 		"other_llm_calls": lcalls, "other_ok": lok, "other_failed": lfailed,
+		"other_failure_rate": otherRow.FailureRate, "other_avg_latency_ms": otherRow.AvgLatencyMs,
 		"other_prompt_tokens": lpt, "other_completion_tokens": lct,
 		"total_prompt_tokens": pt + lpt, "total_completion_tokens": ct + lct,
-		"breakdown": map[string]any{
-			"by_task": byTask, "by_provider": byProvider, "by_model": byModel,
+		// The row caps in trimLogTables (capture.go, literal 2000) apply even
+		// when retention_days is 0 — data_since makes any clipping visible.
+		"coverage": map[string]any{
+			"api_calls_row_cap": 2000,
+			"llm_calls_row_cap": 2000,
+			"retention_days":    cfg.RetentionDays,
 		},
-	}, nil
+		"breakdown": map[string]any{
+			"by_task": byTask, "by_provider": byProvider, "by_model": byModel, "by_day": byDay,
+		},
+	}
+	if len(cfg.Pricing) > 0 {
+		total := 0.0
+		var unpriced []string
+		for k, r := range byModel {
+			if rate, ok := cfg.Pricing[k]; ok {
+				c := float64(r.PromptTok+r.ComplTok) * rate / 1e6
+				r.EstCostUSD = &c
+				byModel[k] = r
+				total += c
+			} else {
+				unpriced = append(unpriced, k)
+			}
+		}
+		sum["est_cost_usd"] = total
+		if len(unpriced) > 0 {
+			sort.Strings(unpriced)
+			sum["unpriced_models"] = unpriced
+		}
+	}
+	return sum, nil
 }
 
 // framesBefore deletes frame rows (and optionally files) older than cutoff.
@@ -770,4 +890,8 @@ func deleteBlocksLike(db *sql.DB, pattern string) (int64, error) {
 func pruneOldEvents(db *sql.DB, cutoff time.Time) {
 	db.Exec(`DELETE FROM events WHERE ts < ?`, cutoff.Unix())
 	db.Exec(`DELETE FROM api_calls WHERE ts < ?`, cutoff.Unix())
+	// llm_calls joins the retention window (U5): the cost ledger must not
+	// silently outlive the journal rows it accounts. The 2000-row cap in
+	// trimLogTables (capture.go) still covers events/api_calls only.
+	db.Exec(`DELETE FROM llm_calls WHERE ts < ?`, cutoff.Unix())
 }
