@@ -1327,7 +1327,7 @@ Panel {
           visible: dayflow.engineVersion !== "" && dayflow.engineVersion !== dayflow.pluginVersion
           width: parent.width - content.leftPadding - content.rightPadding
           text: "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
-                " — run `dayflow install` or rescan plugins"
+                " — upgrade the engine binary and rescan plugins"
           textFormat: Text.PlainText
           color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
           font.family: dayflow.fontFamily
