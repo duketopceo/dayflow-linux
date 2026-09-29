@@ -95,3 +95,27 @@ func TestUnitSetMarked(t *testing.T) {
 		}
 	}
 }
+
+// No generated unit may pull graphical-session.target up: under uwsm >= 0.27.0
+// an early-active session target blocks the compositor from starting (#24).
+func TestUnitsNeverActivateGraphicalSession(t *testing.T) {
+	for name, body := range unitSet() {
+		for _, line := range strings.Split(body, "\n") {
+			key, val, ok := strings.Cut(line, "=")
+			if !ok || !strings.Contains(val, "graphical-session") {
+				continue
+			}
+			switch key {
+			case "Wants", "Requires", "Requisite", "BindsTo", "Upholds":
+				t.Errorf("%s: %s activates graphical-session.target", name, line)
+			}
+		}
+	}
+	capture := unitSet()["dayflow-capture.service"]
+	if !strings.Contains(capture, "\nWantedBy=graphical-session.target\n") {
+		t.Error("dayflow-capture.service must be WantedBy=graphical-session.target")
+	}
+	if strings.Contains(capture, "WantedBy=default.target") {
+		t.Error("dayflow-capture.service must not start at default.target")
+	}
+}
