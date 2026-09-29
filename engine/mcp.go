@@ -157,25 +157,16 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if q == "" {
 			return nil, fmt.Errorf("query required")
 		}
-		like := "%" + q + "%"
-		rows, err := db.Query(`SELECT start_ts,end_ts,title,summary,category,app FROM blocks
-		  WHERE status='done' AND (title LIKE ? OR summary LIKE ? OR app LIKE ?) ORDER BY start_ts DESC LIMIT 50`,
-			like, like, like)
+		blocks, err := searchBlocks(db, q)
 		if err != nil {
 			return nil, err
 		}
-		defer rows.Close()
 		out := []map[string]string{}
-		for rows.Next() {
-			var s, e int64
-			var t, su, c, a string
-			if err := rows.Scan(&s, &e, &t, &su, &c, &a); err != nil {
-				continue
-			}
+		for _, b := range blocks {
 			out = append(out, map[string]string{
-				"start": time.Unix(s, 0).Local().Format("2006-01-02 15:04"),
-				"end":   time.Unix(e, 0).Local().Format("15:04"),
-				"title": t, "summary": su, "category": c, "app": a,
+				"start": b.Start.Format("2006-01-02 15:04"),
+				"end":   b.End.Format("15:04"),
+				"title": b.Title, "summary": b.Summary, "category": b.Category, "app": b.App,
 			})
 		}
 		return map[string]any{"matches": out}, nil

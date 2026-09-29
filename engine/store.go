@@ -13,7 +13,7 @@ import (
 
 // schemaVersion is the highest migration this binary knows how to apply.
 // Bump it and add an applyMigration case when the schema changes.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // schema is the base (v1) schema: capture and journal tables only.
 const schema = `
@@ -252,6 +252,13 @@ func applyMigration(db *sql.DB, v int) error {
 		if _, err := tx.Exec(schemaV3); err != nil {
 			return err
 		}
+	case 4:
+		// FTS5 search index: virtual tables + maintenance triggers +
+		// backfill, all in this transaction — a killed mid-backfill can
+		// never leave a stamped-but-empty index.
+		if _, err := tx.Exec(schemaV4); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("no migration defined for schema version %d", v)
 	}
@@ -293,6 +300,14 @@ func migrate(db *sql.DB) error {
 	}
 	for v := cur + 1; v <= schemaVersion; v++ {
 		if err := applyMigration(db, v); err != nil {
+			if v == schemaVersionFTS {
+				// The FTS index is derived state — a failure here must not
+				// wedge openDB for every command (doctor included). Log and
+				// open without the index; search falls back to LIKE. The
+				// version stays unstamped so the next open retries.
+				logEvent(db, "fts_error", fmt.Sprintf("search index migration failed: %v", err))
+				continue
+			}
 			return fmt.Errorf("migration to schema v%d: %w", v, err)
 		}
 	}
