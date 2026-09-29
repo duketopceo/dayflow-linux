@@ -14,20 +14,25 @@ import (
 // share our names.
 const unitMarker = "# Managed by dayflow — dayflow install/uninstall may replace or remove this file\n"
 
+// captureService belongs to the graphical session: it is started *by*
+// graphical-session.target and must never pull that target up itself. A
+// Wants=/Requires= on it, or WantedBy=default.target, activates the target on
+// every login (TTY, SSH, display-manager autologin) before any compositor
+// exists, and uwsm >= 0.27.0 then refuses to start the compositor at all.
+// WAYLAND_DISPLAY comes from the session environment the compositor imports.
 const captureService = `[Unit]
 Description=dayflow screen capture daemon
 After=graphical-session.target
-Wants=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 ExecStart=%s daemon
 Restart=always
 RestartSec=5
 PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
-Environment="WAYLAND_DISPLAY=wayland-1"
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 `
 
 const summarizeService = `[Unit]
@@ -210,6 +215,12 @@ func installUnits() error {
 		c.Run()
 	}
 	run("--user", "daemon-reload")
+	// Installs before this fix enabled capture under default.target.wants;
+	// reenable moves the symlink to graphical-session.target.wants so an
+	// already-enabled capture unit stops activating the session target.
+	if out, _ := exec.Command("systemctl", "--user", "is-enabled", "dayflow-capture.service").Output(); strings.TrimSpace(string(out)) == "enabled" {
+		run("--user", "reenable", "dayflow-capture.service")
+	}
 	run("--user", "enable", "--now", "dayflow-summarize.timer")
 	run("--user", "enable", "--now", "dayflow-backup.timer")
 	run("--user", "enable", "--now", "dayflow-export.timer")
