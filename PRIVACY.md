@@ -7,6 +7,7 @@ Dayflow is a **local-first** automatic work journal. This notice describes what 
 - **Screenshots**: a lightweight JPEG frame is captured at the interval you configure (default every 10 seconds) while Dayflow is recording and your session is not paused or locked.
 - **Focused window information**: the active window class/app name is recorded alongside each frame so the journal can attribute activity to apps.
 - **Journal entries**: the SQLite database in `~/.local/share/dayflow/` stores `{title, summary, category, app, timestamps}` for each summarized block.
+- **Derived search index**: a local FTS5 index over block and standup text, maintained inside the same database by triggers — deleted rows stop being searchable, including after `dayflow scrub` and retention pruning.
 - **Audit metadata**: `events`, `api_calls`, and usage logs are stored locally for diagnostics and token accounting.
 
 ## What leaves your machine
@@ -20,6 +21,10 @@ You may configure a provider of kind `cli`, which runs a locally installed agent
 To limit blast radius, the subprocess boundary is hardened: the command runs argv-style with no shell; prompt text is delivered on stdin or after a `--` terminator, never where it could be parsed as a flag; permission-escalation flags (`--yolo`, `--force`, `--auto`, `-f`, and equivalents) are rejected at config time and again on the final argv at exec time; the child receives a minimal environment (PATH, HOME, LANG, TMPDIR — Dayflow's own environment, including your provider API keys, is not inherited; additional variables require an explicit `env_passthrough` list, and `scratch_home` can replace the real HOME); the working directory is a fresh scratch dir under the system temp; and each call is bounded by a timeout (`cli_timeout_sec`, default 180s). Cli providers serve text tasks (chat, review, agent recaps) by default; routing the per-block `vision`/`summary` loop to one requires opting in with `allow_hot_path`, since subprocess calls run at minutes-scale latency.
 
 Residual risk: the deny-list constrains the argv Dayflow builds, not the CLI's own permission profile — the subprocess can still act within whatever tools and permissions its own configuration grants it.
+
+### Desktop notifications
+
+Optional `notify-send` alerts (capture stall, pause/resume, standup ready, goal pending) go to your session's local notification daemon only — nothing is transmitted. Bodies carry event-class labels such as "capture stalled", never journal text. `notifications.enabled` (master switch) and `notifications.classes` (per-class gates) control them; only `stall` is on by default.
 
 Dayflow does **not** include telemetry, analytics, crash reporting, or cloud synchronization.
 
@@ -38,7 +43,8 @@ rm -rf ~/.local/share/dayflow ~/.config/dayflow
 - **Auto-pause on lock**: `auto_pause_locked` is enabled by default; the daemon pauses while your session is locked.
 - **Ignore apps**: add window classes to `ignore_apps` so their frames are never captured.
 - **Retention**: `retention_days` and `max_storage_mb` prune old frames, events, and API logs automatically.
-- **Scrub**: `dayflow scrub <query>` deletes existing blocks matching a title or summary.
+- **Scrub**: `dayflow scrub <query>` deletes existing blocks matching a title or summary; the search index follows the delete.
+- **Fixture capture** (developer tool): `dayflow fixtures capture` reads agent-store *schema* only and writes synthesized sentinel rows — it never serializes real payload data.
 - **No idle tracking**: empty blocks (no frames) are not stored, so idle or screen-off time does not appear in the journal.
 
 ## Sensitive content

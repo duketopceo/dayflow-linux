@@ -17,7 +17,11 @@ It captures a lightweight screenshot every 10 seconds, deduplicates unchanged fr
 - **Semantic activity cards**: contiguous same-activity blocks merge into single cards everywhere — `day`/`timeline`/`week`/`month`/`insights --json`, MCP `get_timeline`/`get_insights`, and the QML panel all consume the same engine-emitted `cards` array.
 - **Frame normalization**: stored frames are downscaled to a configurable long edge (`frame_max_dim`, default 1920, `0` = off) — smaller storage, cheaper vision egress. Dedup hashing is unchanged (it runs on the decoded frame before resize).
 - **Jev classification**: after the vision model writes title/summary, [TypeSafe Jev](https://openrouter.ai/typesafe/jev-1.13) (`typesafe/jev-1.13` via OpenRouter's decisions API) picks category and productive flag — fast, typed, and calibrated instead of asking the vision model to guess both.
-- **Agent-session recaps** (opt-in): five sources — Claude Code, Codex, OpenCode, Devin, and Cursor — get a generated one-line recap of what was accomplished — Jev judges which sessions are worth summarizing and scores the result. **Off by default** — `dayflow config set agent_recaps true` enables it (generation sends a bounded, scrubbed excerpt to your chat provider); transcripts are always read locally for the session list either way. Cached per transcript; `dayflow agents --no-recaps` for the raw list. Per-source status is reported so a store that silently drifted is visible rather than empty. Store paths are overridable via `DAYFLOW_*_DIR`/`DAYFLOW_*_DB` env vars (see docs/agent-contract.md).
+- **Agent-session recaps** (opt-in): five sources — Claude Code, Codex, OpenCode, Devin, and Cursor — get a generated one-line recap of what was accomplished — Jev judges which sessions are worth summarizing and scores the result. **Off by default** — the first-run wizard and Settings offer the opt-in, or `dayflow config set agent_recaps true` enables it (generation sends a bounded, scrubbed excerpt to your chat provider); transcripts are always read locally for the session list either way. Cached per transcript; `dayflow agents --no-recaps` for the raw list. Per-source status is reported so a store that silently drifted is visible rather than empty. Store paths are overridable via `DAYFLOW_*_DIR`/`DAYFLOW_*_DB` env vars (see docs/agent-contract.md).
+- **Focus-following capture** (opt-in): `output: "auto"` resolves the focused monitor each capture tick (`hyprctl monitors -j`) and passes `grim -o <name>` — dock/undock records the screen you're actually on. Explicit output names keep working; lookup failures and non-Hyprland sessions fall back to the all-outputs composite. Ignored (with a doctor warning) when `capture_command` is set.
+- **Desktop notifications**: `notify-send` alerts for operator-meaningful states — capture stall, capture paused/resumed, standup ready, daily goal pending. `stall` is on by default (silence = data loss); the rest are opt-in via `notifications.classes`. Bodies carry event labels only, never journal text. Rate-limited to 3/class/day.
+- **Full-text search**: `dayflow search` runs an FTS5 index over block titles/summaries/categories/apps (post-edit effective text) — relevance-ranked, FTS5 MATCH syntax supported (phrases, AND/OR/prefix; bad syntax falls back to a quoted-phrase retry, then LIKE). A `standup_fts` index over standup drafts is maintained alongside it. `dayflow search --reindex` rebuilds.
+- **Usage & cost reporting**: `dayflow usage [--days N]` reports calls, failure rate, avg latency, and per-day/task/provider/model breakdowns with a coverage floor (`data since <date>`) so log trimming is visible. Set `pricing` config for dollar estimates.
 - **Daily goals + streaks**: set a goal for the day, check it off, and track your consecutive-day completion streak (current, best, and all-time totals).
 - **Week-over-week trends**: the weekly view diffs this week against last — tracked/focus/distraction/shift deltas plus per-category movement in minutes and share points.
 - **Chat with your journal**: ask natural-language questions about your timeline, standup, weekly analytics, or search your journal.
@@ -36,6 +40,7 @@ BarWidget.qml      # bar indicator: recording state, click for panel
 Panel.qml          # timeline panel + settings footer
 engine/            # Go CLI/daemon (the tracking engine)
 scripts/stress.sh  # live stress test
+scripts/smoke-install.sh  # sandboxed install smoke (scoped dirs, stubbed systemctl)
 preview.png        # marketplace preview
 ```
 
@@ -56,6 +61,8 @@ install -Dm755 dayflow ~/.local/bin/dayflow
 dayflow install    # writes + enables systemd user units
 systemctl --user enable --now dayflow-capture.service
 ```
+
+The capture unit passes `DBUS_SESSION_BUS_ADDRESS` through (`PassEnvironment`) so desktop notifications can reach the session bus. If you installed before that landed, re-run `dayflow install` to rewrite the unit — `dayflow doctor` warns when the bus looks unreachable.
 
 Onboarding:
 
@@ -86,7 +93,7 @@ cd engine && go build -o dayflow . && install -Dm755 dayflow ~/.local/bin/dayflo
 systemctl --user restart dayflow-capture.service
 ```
 
-Then restart any long-lived `dayflow mcp` clients (editors and agents keep their own process running the old binary). `dayflow doctor` reports the engine version, the database schema version, integrity, and untracked frame files; run it after every upgrade. Migrations run automatically on the next engine start and are additive — existing journal data is preserved.
+Then restart any long-lived `dayflow mcp` clients (editors and agents keep their own process running the old binary). `dayflow doctor` reports the engine version, the database schema version, integrity, and untracked frame files; run it after every upgrade. It also checks that the binary version matches the installed plugin `manifest.json` (engine-only installs report an info line, not a failure), probes each detected agent store read-only for shape drift, verifies the notification bus is reachable, and warns when `output: "auto"` is set alongside `capture_command` (the custom command wins). Migrations run automatically on the next engine start and are additive — existing journal data is preserved. See `docs/maintenance.md` for the full upgrade-smoke checklist.
 
 ## Install the plugin
 
@@ -141,7 +148,7 @@ dayflow ignore <class>         # never capture while this app is focused
 dayflow ignore --active        # ignore the currently focused app (Hyprland)
 dayflow unignore <class>
 dayflow events -n 20           # full audit log: captures, skips, errors
-dayflow usage                  # token totals across all API calls
+dayflow usage [--days N]       # token/cost usage, latency, failure rates over a window
 dayflow blocks                 # failed summaries (auto-retried)
 dayflow frames [YYYY-MM-DD]    # list captured frames for a day
 dayflow playback on|off|status # opt-in frame retention for timelapse (10GB cap)
@@ -154,7 +161,8 @@ dayflow log <msg>              # append a UI action line to debug.log
 dayflow week | month           # multi-day rollups
 dayflow export week [--copy]   # markdown export to stdout (or clipboard)
 dayflow export week --out <path> # atomic file export (0600; used by dayflow-export.timer)
-dayflow search <query>         # search titles, summaries, apps
+dayflow search <query>         # FTS5 full-text search over titles, summaries, categories, apps
+dayflow search --reindex       # rebuild the search index
 dayflow retry                  # reset failed/dead blocks for re-summarization
 dayflow reconcile [--dry-run]  # report/quarantine frame files missing from the index
 dayflow backup [dir]           # snapshot db + config (redacted) + frames
@@ -164,6 +172,8 @@ dayflow scrub <query>          # delete blocks matching a query
 dayflow tui                    # interactive terminal timeline, standup, insights
 dayflow mcp                    # MCP server for agents (stdio)
 dayflow config set <k> <v>     # live settings
+dayflow config patch '<json>'  # merge a JSON object into the config (pricing, notifications, categories)
+dayflow fixtures capture <source>  # regenerate an agent-store contract fixture (see docs/maintenance.md)
 dayflow uninstall              # remove systemd units (data stays)
 ```
 
@@ -189,8 +199,10 @@ All query commands accept `--json`.
 | `max_storage_mb` | 0 | legacy combined cap on the whole data dir — honored when present and migrates to `max_frames_mb` on older configs; leave 0 with the split caps |
 | `auto_pause_locked` | true | pause capture while the session is locked (via loginctl) |
 | `ignore_apps` | `[]` | window classes never captured (Hyprland) |
-| `output` | `""` | restrict capture to one monitor (`grim -o`) |
-| `capture_command` | `""` | custom screenshot command (writes image to stdout) |
+| `output` | `""` | restrict capture to one monitor (`grim -o`); `"auto"` follows the focused monitor each tick (Hyprland only, falls back to composite) |
+| `capture_command` | `""` | custom screenshot command (writes image to stdout); overrides `output`, including `"auto"` |
+| `notifications` | `{enabled: true, classes: {stall: true}, goal_reminder_hour: 17}` | desktop notifications via `notify-send`. `enabled` is the master switch (`config set notifications.enabled false`); `classes` gates `stall`, `paused`, `recovered`, `standup`, `goal` individually — set via `config patch` |
+| `pricing` | `{}` | model slug → USD per 1M tokens; `dayflow usage` renders dollar estimates only for configured models, rates are never fetched. Example: `dayflow config patch '{"pricing":{"google/gemma-4-31b-it":0.09}}'` |
 | `openrouter_api_key` | `""` | API key |
 | `jev_classification` | `true` | TypeSafe Jev calibrated judgments — category, merge, quality, triage, forecast. Judge calls egress to OpenRouter's decisions endpoint; set `false` to keep every block local. |
 | `agent_recaps` | `false` | Opt-in: generate agent-session recaps. Generation sends a bounded, scrubbed transcript excerpt (paths → `~`, common token shapes → `[redacted]`) to the chat provider and decisions endpoint; `false` serves cached recaps only — a durable no-egress state. |
@@ -260,8 +272,9 @@ claude mcp add dayflow-remote -- ssh <host>.<tailnet>.ts.net ~/.local/bin/dayflo
 ```sh
 cd engine && go test ./...   # unit + end-to-end tests with a stubbed API
 scripts/stress.sh            # live stress test against a sandboxed data dir
+scripts/smoke-install.sh     # install smoke: scoped config/data dirs + stubbed systemctl
 ```
 
 ## Not a 1:1 port
 
-No audio capture, no menu-bar app, no onboarding wizard. Just the tracking engine plus a minimal bar widget. MIT licensed, like the original.
+No audio capture, no menu-bar app. Just the tracking engine plus a minimal bar widget. MIT licensed, like the original.
