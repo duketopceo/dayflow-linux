@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const version = "1.3.1"
+const version = "1.4.0"
 
 // positionalArgs returns non-flag argv entries; an empty arg is not a flag
 // and is skipped (a[0] on "" panics).
