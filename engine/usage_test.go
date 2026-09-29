@@ -266,13 +266,25 @@ func TestPrintUsageRenders(t *testing.T) {
 	db.Close() // printUsage opens its own handle
 
 	// Text output: coverage floor, latency, failure rate — and no panic on
-	// the extended summary shape.
+	// the extended summary shape. The rendered report is asserted line by
+	// line so a formatting or aggregation regression can't pass on a bare
+	// "avg" substring.
+	today := now.Local().Format("2006-01-02")
 	out := captureStdout(t, func() { printUsage(cfg, false, 0) })
-	if !strings.Contains(out, "data since "+now.Local().Format("2006-01-02")) {
+	if !strings.Contains(out, "data since "+today) {
 		t.Fatalf("missing coverage floor:\n%s", out)
 	}
-	if !strings.Contains(out, "by day:") || !strings.Contains(out, "avg") {
-		t.Fatalf("missing day grouping/latency:\n%s", out)
+	if !strings.Contains(out, "api calls: 1 (1 ok, 0 failed, 0.0% fail) avg 100 ms") {
+		t.Fatalf("missing api call line:\n%s", out)
+	}
+	if !strings.Contains(out, "by day:") {
+		t.Fatalf("missing day grouping:\n%s", out)
+	}
+	// The dated day row aggregates the api call and the llm call: 2 calls,
+	// avg (100+10)/2 ms.
+	if !strings.Contains(out, today) ||
+		!strings.Contains(out, "2 calls (2 ok, 0 failed, 0.0% fail) avg 55 ms") {
+		t.Fatalf("missing dated day row:\n%s", out)
 	}
 	if strings.Contains(out, "$") {
 		t.Fatalf("dollars rendered without pricing:\n%s", out)
@@ -286,6 +298,25 @@ func TestPrintUsageRenders(t *testing.T) {
 	out = captureStdout(t, func() { printUsage(cfg, false, 30) })
 	if !strings.Contains(out, "estimated cost: $2.00") || !strings.Contains(out, "last 30 day(s)") {
 		t.Fatalf("priced text output wrong:\n%s", out)
+	}
+	// Every model in the window is priced, so the total must not carry a
+	// partial-cost label.
+	if strings.Contains(out, "partial") {
+		t.Fatalf("full pricing rendered as partial:\n%s", out)
+	}
+	// A window containing an unpriced model must label the total as partial.
+	seedUnpriced := func() {
+		db, err := openDB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		seedAPICall(t, db, now, "unpriced-model", 1, 0, 20, "ok")
+		db.Close()
+	}
+	seedUnpriced()
+	out = captureStdout(t, func() { printUsage(cfg, false, 0) })
+	if !strings.Contains(out, "estimated cost: $2.00 (partial — no pricing for 1 model(s): unpriced-model)") {
+		t.Fatalf("partial cost not labeled:\n%s", out)
 	}
 
 	// Empty db → explicit empty-state line, still no panic.

@@ -101,15 +101,15 @@ Each unit is its own PR; ordering is recommended sequence.
 
 ### U3. Notification engine + stall reporting that survives a wedged daemon
 
-- **Goal:** stalls, long pauses, standup-ready, pending-goal nudges reach the operator.
+- **Goal:** stalls, long pauses, standup-ready, pending-goal nudges reach the operator. Notification bodies carry fixed, event-class label strings only ("capture stalled", "standup draft ready") — never journal text, transcript excerpts, titles, or other user content, not even truncated: a notification is readable from the lock screen and lands in the desktop notification store.
 - **Files:** `engine/notify.go` (new — `notify(cfg, class, title, body)`, per-class gate, `meta`-keyed daily cap of 3 + quiet period, `CommandContext` 5s, emit off-tick), `engine/config.go` (`notifications` struct — `config patch`/new `set` cases per KTD8), `engine/install.go` (unit gains `DBUS_SESSION_BUS_ADDRESS` in `PassEnvironment`), `engine/capture.go` (stall/pause emission sites + stall-detection duplicated into the summarize oneshot path per KTD2), a daemon ticker for standup-ready (`blocks done today && no standup_drafts row`) and goal-pending checks (define "pending" = goal set, not done, hour ≥ configured), `engine/setup.go` (doctor: bus reachability probe — name-owner check or test-send — not just `LookPath`).
 - **Tests:** stub `notify-send` on PATH via marker file; cap=3/day; recovery doesn't reset; disabled class never execs; absent binary → no panic; hang → bounded.
 - **Depends on:** none.
 
 ### U4. FTS5 search
 
-- **Goal:** relevance-ranked full-text search across blocks (effective text) and standup drafts, one code path.
-- **Files:** `engine/store.go` (`blocks_fts`/`standup_fts` external-content virtual tables, triggers incl. `AFTER DELETE`, tx-atomic migration+backfill+stamp, non-fatal degrade), `engine/main.go` (`search` — fix the `args[0]` panic, `--reindex` flag inside the case), `engine/mcp.go` (`search_journal`), `engine/chat.go` (`searchBlocks` shares the helper), `engine/edit.go` (edit overlay recompute path), docs.
+- **Goal:** relevance-ranked full-text search across blocks (effective text), one code path. Standup drafts are deliberately out of FTS scope: the shipped v5 migration dropped the never-queried `standup_fts` index (drift-prone implicit-rowid external content over a TEXT-keyed table); drafts are read via the standup commands.
+- **Files:** `engine/store.go` (`blocks_fts` external-content virtual table, triggers incl. `AFTER DELETE`, tx-atomic migration+backfill+stamp, non-fatal degrade), `engine/main.go` (`search` — fix the `args[0]` panic, `--reindex` flag inside the case), `engine/mcp.go` (`search_journal`), `engine/chat.go` (`searchBlocks` shares the helper), `engine/edit.go` (edit overlay recompute path), docs.
 - **Tests:** migration on pre-FTS fixture → backfilled; insert/edit/scrub/retry-delete/cap-evict each reflected (scrub → term no longer MATCHes — the privacy regression test); `app` column searchable; MATCH-syntax-error → LIKE fallback; empty/absent index → LIKE; `--reindex` rebuilds; read-only DB → LIKE; MCP + chat paths return identical hits.
 - **Depends on:** none (A2 verified).
 
@@ -155,7 +155,7 @@ As listed under Requirements; additionally: `journal_entries` stays vestigial (n
 ## System-Wide Impact
 
 - **Config:** `output:"auto"` (opt-in), `notifications{enabled,classes}` (`stall` on by default — note: upgrades gain a new local exec path + notifications for stall; other classes off), `pricing`, `agent_recaps` onboarding writes. `config set`/`patch` plumbing per KTD8.
-- **Schema:** `blocks_fts` + `standup_fts` external-content tables, triggers on `blocks`/`block_edits`, `schema_migrations` bump (not `user_version` — wrong term earlier), `meta` keys `notify_count:*`.
+- **Schema:** `blocks_fts` external-content table, triggers on `blocks`/`block_edits` (every block deletion path — `deleteBlocksLike`, `resetFailedBlocks`, `pruneOldestBlocks`, `scrub` — is a SQL `DELETE FROM blocks`, so the `AFTER DELETE` trigger covers all of them), `schema_migrations` bump (not `user_version` — wrong term earlier), `meta` keys `notify_count:*`.
 - **Egress:** unchanged — nothing new egresses. U1's consent copy must stay accurate to `agent_recaps`' documented behavior.
 - **Process:** bounded `hyprctl`/`notify-send` spawns; FTS index-write overhead on block paths; doctor gets cheaper (ro-probe, not temp-copy).
 - **Fixes-in-passing:** `activeWindowClass` unbounded exec; `search ""` panic; `--reindex` flag eaten by the empty-arg guard; `llm_calls` unbounded-vs-capped asymmetry surfaced (decision, not necessarily change).

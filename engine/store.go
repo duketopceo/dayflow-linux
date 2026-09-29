@@ -965,11 +965,18 @@ func framesBefore(db *sql.DB, cutoff time.Time) ([]string, error) {
 // deleteBlocksLike removes done/failed blocks whose title or summary matches
 // the case-insensitive LIKE pattern — and their block_edits overlay rows,
 // whose old_value/new_value would otherwise keep the scrubbed text forever.
-// It returns the number of blocks rows deleted.
+// The match covers edited text too: the edit overlay is what users see
+// (applyBlockEdits) and what the FTS index holds (ftsEffExpr), so a scrub
+// must catch a term that exists only in block_edits.new_value — and still
+// catch the raw term an edit renamed away (old_value). It returns the
+// number of blocks rows deleted.
 func deleteBlocksLike(db *sql.DB, pattern string) (int64, error) {
 	like := "%" + pattern + "%"
 	return deleteBlocksWhere(db, `status IN ('done','failed') AND
-	  (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))`, like, like)
+	  (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?)
+	   OR EXISTS (SELECT 1 FROM block_edits e WHERE e.start_ts = blocks.start_ts
+	     AND (LOWER(e.old_value) LIKE LOWER(?) OR LOWER(e.new_value) LIKE LOWER(?))))`,
+		like, like, like, like)
 }
 
 func pruneOldEvents(db *sql.DB, cutoff time.Time) {

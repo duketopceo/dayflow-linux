@@ -1416,7 +1416,13 @@ func printUsage(cfg Config, asJSON bool, days int) {
 	fmt.Printf("prompt tokens: %d\ncompletion tokens: %d\n",
 		sum["total_prompt_tokens"], sum["total_completion_tokens"])
 	if cost, ok := sum["est_cost_usd"].(float64); ok {
-		fmt.Printf("estimated cost: $%.2f\n", cost)
+		fmt.Printf("estimated cost: $%.2f", cost)
+		// The total covers only models with pricing configured — label it
+		// so a partial sum is never read as the whole window's cost.
+		if unpriced, ok := sum["unpriced_models"].([]string); ok && len(unpriced) > 0 {
+			fmt.Printf(" (partial — no pricing for %d model(s): %s)", len(unpriced), strings.Join(unpriced, ", "))
+		}
+		fmt.Println()
 	}
 	breakdown, _ := sum["breakdown"].(map[string]any)
 	for _, dim := range []struct {

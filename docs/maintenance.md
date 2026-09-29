@@ -76,7 +76,10 @@ The per-source `agent store <name>` doctor checks open each present store
 through `openStoreProbe` (`engine/fixtures.go`) — `mode=ro`+`immutable`,
 **not** `openROStore`, whose WAL temp-copy fallback would duplicate
 hundreds of MB on Cursor's `state.vscdb`. `agentStoreDBs()` (same file)
-resolves each DB-backed source's path(s) including test overrides;
+resolves each DB-backed source's path(s) including test overrides
+(`opencode`, `devin`, `cursor` only — Claude and Codex use JSONL
+transcript stores, so their drift is surfaced through `dayflow agents'
+source status, not through this SQLite probe);
 `agentStoresDetected()` (setup.go) covers presence for all five sources
 and feeds the `agents` map in `detect --json`. Each probe
 (`probeAgentStoreExtraction`, setup.go) runs the adapter's extraction

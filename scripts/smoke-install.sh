@@ -64,14 +64,18 @@ leaks() {
     [ -d "$d" ] || continue
     # No -name filter: a leak is any write into these dirs, not just
     # dayflow-named files (e.g. config.json, or .dayflow-* temp files —
-    # find includes dotfiles either way).
-    out+=$(find "$d" -newer "$MARKER" 2>/dev/null)
+    # find includes dotfiles either way). -H follows a symlinked directory:
+    # [ -d ] accepts symlinks, but find without -H would skip the target
+    # and misses writes beneath it.
+    out+=$(find -H "$d" -newer "$MARKER" 2>/dev/null)
   done
   echo "$out"
 }
-# Resolve the real home dir, failing hard: an empty REAL_HOME would make
-# the leak check silently inspect nothing.
-if ! REAL_HOME=$(getent passwd "${USER:-$(id -un)}" | cut -d: -f6); then
+# Resolve the real home dir from the process identity, not the inherited
+# USER (which can name a different account than the one running the smoke),
+# failing hard: an empty REAL_HOME would make the leak check silently
+# inspect nothing.
+if ! REAL_HOME=$(getent passwd "$(id -un)" | cut -d: -f6); then
   echo "smoke: getent could not resolve the real user's home dir" >&2
   exit 1
 fi
@@ -92,9 +96,9 @@ for u in dayflow-capture.service dayflow-summarize.service \
 done
 grep -q 'Managed by dayflow' "$UNITDIR/dayflow-capture.service" \
   && ok "unit marker present" || bad "unit marker absent"
-grep -q 'DBUS_SESSION_BUS_ADDRESS' "$UNITDIR/dayflow-capture.service" \
+grep -q '^PassEnvironment=DBUS_SESSION_BUS_ADDRESS' "$UNITDIR/dayflow-capture.service" \
   && ok "capture unit passes DBUS_SESSION_BUS_ADDRESS" \
-  || bad "capture unit missing DBUS_SESSION_BUS_ADDRESS"
+  || bad "capture unit missing PassEnvironment=DBUS_SESSION_BUS_ADDRESS"
 
 [ -f "$DAYFLOW_SMOKE_SYSTEMCTL_LOG" ] \
   && ok "systemctl stub was invoked" || bad "systemctl never called"

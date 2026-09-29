@@ -368,10 +368,14 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 		warn("database", "no database yet — capture has not run")
 	} else {
 		sv, svErr := peekSchemaVersion()
-		if svErr == nil && sv <= schemaVersion {
+		if svErr != nil {
+			check("schema version", false, "could not read schema version: "+svErr.Error())
+		} else if sv <= schemaVersion {
 			checks = append(checks, doctorCheck{Name: "schema version", Status: "ok",
 				Detail: fmt.Sprintf("database v%d, binary v%d", sv, schemaVersion)})
 		} else {
+			// A newer database than this binary understands can only be
+			// fixed by upgrading the engine (or pointing it at the newer db).
 			check("schema version", false,
 				fmt.Sprintf("database at schema v%d, binary expects v%d — upgrade the engine", sv, schemaVersion))
 		}
@@ -792,7 +796,9 @@ func runDetect(jsonOut bool) {
 }
 
 // peekSchemaVersion reads the recorded schema version without running
-// migrations. Returns 0 for a database that predates schema_migrations.
+// migrations. Returns 0 for a database that predates schema_migrations; a
+// read failure (corrupt file, locked db) is returned as an error so callers
+// can report it as what it is instead of "schema v0".
 func peekSchemaVersion() (int, error) {
 	db, err := sql.Open("sqlite", dbPath()+"?_pragma=query_only(1)")
 	if err != nil {
@@ -801,7 +807,10 @@ func peekSchemaVersion() (int, error) {
 	defer db.Close()
 	var v int
 	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v); err != nil {
-		return 0, nil // unversioned database
+		if strings.Contains(err.Error(), "no such table") {
+			return 0, nil // unversioned database — predates schema_migrations
+		}
+		return 0, err
 	}
 	return v, nil
 }

@@ -50,20 +50,39 @@ func fixtureTime(off time.Duration) time.Time {
 	return time.Unix(fixtureEpochS, 0).UTC().Add(off)
 }
 
-// openStoreProbe opens a sqlite store read-only for schema probing:
-// mode=ro first, then mode=ro&immutable=1 (an immutable open skips the shm
-// handshake a live WAL store may refuse). Unlike openROStore it never
-// falls back to a temp-dir copy — the caller gets a fast failure instead
-// of a multi-GB file copy. The doctor agent-stores check uses this same
-// probe (one drift vocabulary, one open discipline).
+// sqliteDSNURI renders a filesystem path as a SQLite file: URI, escaping
+// the characters SQLite would otherwise read as URI structure ('%' starts
+// percent-decoding, '?' starts the query string, '#' starts a fragment).
+// Without this, a --db value like "/tmp/x?mode=rwc/opencode.db" could
+// smuggle its own URI parameters past the appended mode=ro.
+func sqliteDSNURI(path string) string {
+	var b strings.Builder
+	for _, r := range path {
+		switch r {
+		case '%', '?', '#':
+			b.WriteByte('%')
+			b.WriteString(fmt.Sprintf("%02X", r))
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return "file:" + b.String()
+}
+
+// openStoreProbe opens an agent store database strictly read-only for
+// extraction (handshake a live WAL store may refuse). Unlike openROStore it
+// never falls back to a temp-dir copy — the caller gets a fast failure
+// instead of a multi-GB file copy. The doctor agent-stores check uses this
+// same probe (one drift vocabulary, one open discipline).
 func openStoreProbe(path string) (*sql.DB, error) {
 	probes := []string{
 		"?mode=ro&_pragma=busy_timeout(3000)&_pragma=query_only(1)",
 		"?mode=ro&immutable=1&_pragma=busy_timeout(3000)&_pragma=query_only(1)",
 	}
+	uri := sqliteDSNURI(path)
 	var lastErr error
 	for _, q := range probes {
-		db, err := sql.Open("sqlite", "file:"+path+q)
+		db, err := sql.Open("sqlite", uri+q)
 		if err != nil {
 			lastErr = err
 			continue

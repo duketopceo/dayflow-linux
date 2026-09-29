@@ -20,10 +20,16 @@ Flickable {
   property var catPicks: ({})
   // Set only by the explicit "Enable recaps" click on the consent step —
   // the "Not now" and Back handlers clear it explicitly, so the patch
-  // never carries agent_recaps: true unless the user opted in.
+  // never carries agent_recaps: true unless the user opted in. The consent
+  // step's apply writes the flag explicitly (true or false) so an existing
+  // config's agent_recaps: true can't silently survive "Not now".
   property bool recapsOptIn: false
   property string testResult: ""
   property bool testing: false
+  // True while any config write or its doctor check is still in flight —
+  // the result actions stay hidden until the last apply settles, so a
+  // queued consent patch can't be overtaken by the previous check's finish.
+  property bool busy: root.testing || applyProc.running || root.applyQueued || keySetProc.running
 
   signal dismissed()
 
@@ -149,12 +155,22 @@ Flickable {
   }
 
   property bool keyInPatch: false
+  // Set by apply() when the agent-recaps consent decision is being applied;
+  // applyPatch reads it so the decision survives the keySetProc and queued
+  // re-apply chains.
+  property bool consentApply: false
   // Set when apply() is re-invoked while a config write is in flight —
   // applyProc re-enters applyPatch on exit so the latest patch (e.g.
   // recapsOptIn flipped on the consent step) is never dropped.
   property bool applyQueued: false
 
-  function apply() {
+  function apply(consentStep) {
+    // consentStep is passed (true or false) only by the agent-recaps
+    // decision buttons; every other caller leaves it undefined. When it is
+    // defined, the patch writes agent_recaps explicitly so the user's
+    // choice always lands — an existing agent_recaps: true can't silently
+    // survive "Not now".
+    root.consentApply = (consentStep !== undefined)
     if (dayflow) dayflow.uilog("onboarding apply " + root.mode)
     root.testing = true
     root.testResult = "Testing..."
@@ -200,9 +216,9 @@ Flickable {
     if (cats.length > 0) {
       patch.categories = cats.map(function(n) { return { name: n, description: n } })
     }
-    // The consent step's Enable is the only path that sets this — a bare
-    // patch merge leaves agent_recaps absent, which decodes to off.
-    if (root.recapsOptIn) patch.agent_recaps = true
+    // The consent step's Enable/Not now is the only path that sets this —
+    // every other apply omits the key, which patchConfig preserves.
+    if (root.consentApply) patch.agent_recaps = root.recapsOptIn
     applyProc.pendingPatch = JSON.stringify(patch)
     applyProc.command = ["dayflow", "config", "patch", "-"]
     applyProc.running = true
@@ -509,10 +525,11 @@ Flickable {
 
     // ---- step 3: agent-session recaps opt-in ----
     // The base config was already written by step 2's Continue (the patch
-    // omits agent_recaps unless recapsOptIn), so this step only decides
-    // whether a follow-up patch turns recaps on: Enable sets recapsOptIn
-    // and re-applies; "Not now" re-applies unchanged; Back clears the flag
-    // and returns. Shown only when detect saw an agent store.
+    // omits agent_recaps), so this step only decides whether a follow-up
+    // patch turns recaps on: Enable applies agent_recaps=true; "Not now"
+    // applies agent_recaps=false (so an existing enabled value can't
+    // survive the explicit choice); Back clears the flag and returns.
+    // Shown only when detect saw an agent store.
     Column {
       visible: root.step === 3
       width: parent.width
@@ -554,7 +571,7 @@ Flickable {
             color: root.dayflow ? root.dayflow.foreground : Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
-          MouseArea { anchors.fill: parent; onClicked: { root.recapsOptIn = true; root.apply(); root.step = 4 } }
+          MouseArea { anchors.fill: parent; onClicked: { root.recapsOptIn = true; root.apply(true); root.step = 4 } }
         }
         Rectangle {
           width: offText.implicitWidth + Style.space(16)
@@ -566,7 +583,7 @@ Flickable {
             color: root.dayflow ? root.dayflow.foreground : Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body }
-          MouseArea { id: offMa; anchors.fill: parent; hoverEnabled: true; onClicked: { root.recapsOptIn = false; root.apply(); root.step = 4 } }
+          MouseArea { id: offMa; anchors.fill: parent; hoverEnabled: true; onClicked: { root.recapsOptIn = false; root.apply(false); root.step = 4 } }
         }
         Text {
           anchors.verticalCenter: parent.verticalCenter
@@ -595,7 +612,7 @@ Flickable {
         wrapMode: Text.WordWrap
       }
       Text {
-        visible: !root.testing
+        visible: !root.busy
         width: parent.width
         text: "Install services to start capturing in the background, or open the panel and finish setup in Settings."
         color: root.dayflow ? root.dayflow.dim : Color.muted
@@ -606,7 +623,7 @@ Flickable {
       Row {
         spacing: Style.space(6)
         Rectangle {
-          visible: !root.testing
+          visible: !root.busy
           width: instText.implicitWidth + Style.space(16)
           height: instText.implicitHeight + Style.space(8)
           radius: Style.cornerRadius
@@ -619,7 +636,7 @@ Flickable {
           MouseArea { anchors.fill: parent; onClicked: installProc.running = true }
         }
         Rectangle {
-          visible: !root.testing
+          visible: !root.busy
           width: doneText.implicitWidth + Style.space(16)
           height: doneText.implicitHeight + Style.space(8)
           radius: Style.cornerRadius

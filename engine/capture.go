@@ -1005,7 +1005,13 @@ func runDaemon(cfg Config) error {
 			return nil
 		case <-tick.C:
 			if cfg.AutoPauseLocked && locked {
-				// locked: do not capture, reset hash so we don't leak last frame
+				// locked: do not capture, reset hash so we don't leak last frame.
+				// Keep the liveness heartbeat fresh too: the loop is alive and
+				// on purpose quiet, and the stall oneshot's captureQuietNow can
+				// miss a locked screen (loginctl failure, missing XDG_SESSION_ID
+				// in the oneshot env) — without a heartbeat it would then report
+				// a false "capture stalled" after 30 minutes of locked screen.
+				metaSet(db, metaCaptureHeartbeat, strconv.FormatInt(time.Now().Unix(), 10))
 				lastHash = nil
 				continue
 			}

@@ -253,6 +253,9 @@ func loadConfig() (Config, error) {
 		if nprobe.Notifications.Classes == nil {
 			cfg.Notifications.Classes = map[string]bool{notifyClassStall: true}
 		} else if _, ok := nprobe.Notifications.Classes[notifyClassStall]; !ok {
+			if cfg.Notifications.Classes == nil {
+				cfg.Notifications.Classes = map[string]bool{}
+			}
 			cfg.Notifications.Classes[notifyClassStall] = true
 		}
 	}
@@ -387,6 +390,9 @@ func patchConfig(patch string) error {
 			if n.Classes == nil {
 				cfg.Notifications.Classes = map[string]bool{notifyClassStall: true}
 			} else if _, ok := n.Classes[notifyClassStall]; !ok {
+				if cfg.Notifications.Classes == nil {
+					cfg.Notifications.Classes = map[string]bool{}
+				}
 				cfg.Notifications.Classes[notifyClassStall] = true
 			}
 		}

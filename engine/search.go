@@ -99,27 +99,45 @@ func ftsIndexInsertStmt(pred string) string {
 // valid while the content row is unchanged — i.e. the block_edits BEFORE
 // INSERT trigger. For blocks UPDATE/DELETE the row is already gone or
 // updated; ftsIndexDeleteOldStmt must be used instead.
+//
+// The _docsize guard makes every un-index conditional on the row actually
+// being indexed: external-content FTS5 'delete' must supply exactly the values
+// that were indexed, and a delete for a never-indexed row corrupts the index
+// (it can surface as an integrity-check failure on every later write). Rows
+// reach the index only through triggers and the guarded backfill, so a row
+// absent from the shadow table was never indexed and must be skipped.
 func ftsIndexDeleteStmt(pred string) string {
 	return fmt.Sprintf(`INSERT INTO blocks_fts(blocks_fts, rowid, title, summary, category, app)
 	  SELECT 'delete', b.start_ts, %s, %s, %s, b.app
-	  FROM blocks b WHERE %s`,
+	  FROM blocks b WHERE %s
+	  AND EXISTS (SELECT 1 FROM blocks_fts_docsize WHERE rowid = b.start_ts)`,
 		ftsEffExpr("b", "title"), ftsEffExpr("b", "summary"), ftsEffExpr("b", "category"), pred)
 }
 
 // ftsIndexDeleteOldStmt un-indexes the effective OLD row — used by the blocks
 // AFTER UPDATE and AFTER DELETE triggers, where the content row no longer
-// holds the indexed base values.
+// holds the indexed base values. Guarded by the same _docsize existence
+// check as ftsIndexDeleteStmt: updating or deleting a row that was never
+// indexed must skip the un-index instead of feeding the index values it
+// never held.
 func ftsIndexDeleteOldStmt() string {
 	return fmt.Sprintf(`INSERT INTO blocks_fts(blocks_fts, rowid, title, summary, category, app)
-	  VALUES('delete', OLD.start_ts, %s, %s, %s, OLD.app)`,
+	  SELECT 'delete', OLD.start_ts, %s, %s, %s, OLD.app
+	  WHERE EXISTS (SELECT 1 FROM blocks_fts_docsize WHERE rowid = OLD.start_ts)`,
 		ftsEffExpr("OLD", "title"), ftsEffExpr("OLD", "summary"), ftsEffExpr("OLD", "category"))
 }
 
-// ftsBlocksTableDDL creates the external-content index over blocks.
+// ftsBlocksTableDDL creates the external-content index over blocks, with
+// secure-delete on: ordinary FTS5 delete markers leave the old tokens
+// recoverable from unmerged index data (or a copied db file) even after a
+// scrub removed them from MATCH results. Secure-delete zeroes the deleted
+// index data instead, so a scrubbed term is gone from the file, not just
+// from the query path.
 const ftsBlocksTableDDL = `CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
   title, summary, category, app,
   content='blocks', content_rowid='start_ts'
 );
+INSERT INTO blocks_fts(blocks_fts, rank) VALUES('secure-delete', 1);
 `
 
 // ftsTriggersDDL maintains blocks_fts. Two subtleties beyond the plain
@@ -254,22 +272,26 @@ func applyDerivedIndexMigrations(db *sql.DB) {
 // marker so an explicit reindex retries a failed v4 immediately, and stamps
 // the v4 migration row so the next open doesn't re-run it.
 //
-// The rebuild runs in three lock windows instead of one transaction so the
+// The rebuild runs in two lock windows plus a chunked backfill so the
 // capture daemon isn't starved by a full-table write lock:
-//  1. drop triggers + index, create the empty index (short tx);
+//  1. drop triggers + index, create the empty index, recreate the triggers
+//     (short tx) — the triggers are live for the whole backfill, so a block
+//     or edit written mid-rebuild is indexed by its trigger while the
+//     backfill itself skips it via the NOT IN _docsize guard;
 //  2. chunked backfill — reindexBatchRows rows per INSERT..SELECT, each its
 //     own implicit commit;
-//  3. recreate triggers + stamp v4 (short tx).
+//  3. stamp v4 (short tx).
 //
-// Trade-off: triggers are down for the duration of step 2, so a block or
-// edit written mid-rebuild is indexed only if the backfill hasn't passed
-// its start_ts yet — the index stays slightly stale until that row's next
-// update (or the next --reindex). A daemon-liveness warning was considered
-// and dropped: once each lock window is bounded to one batch, the
-// contention itself is fixed, not just reported. (Rebuild deliberately does
-// NOT use `INSERT INTO blocks_fts(blocks_fts) VALUES('rebuild')` — that
-// re-indexes the raw blocks columns, bypassing the block_edits effective-
-// text overlay the triggers maintain.)
+// The _docsize guards on the un-index statements (ftsIndexDeleteStmt,
+// ftsIndexDeleteOldStmt) are what make the live-trigger rebuild sound: a
+// mid-rebuild update of a row the backfill has not reached yet skips the
+// delete of values the index never held (which would corrupt it) and lets
+// the insert or the later backfill batch index the row exactly once. A
+// failed batch still leaves a working index with working triggers — only
+// coverage is partial until the next --reindex.
+// (Rebuild deliberately does NOT use `INSERT INTO blocks_fts(blocks_fts)
+// VALUES('rebuild')` — that re-indexes the raw blocks columns, bypassing
+// the block_edits effective-text overlay the triggers maintain.)
 func rebuildSearchIndex(db *sql.DB) error {
 	if _, err := db.Exec(`DELETE FROM meta WHERE k=?`, metaFTSFailedAt); err != nil {
 		return err
@@ -301,6 +323,13 @@ func rebuildSearchIndex(db *sql.DB) error {
 		tx.Rollback()
 		return err
 	}
+	// Recreate the triggers in the same transaction as the empty index: the
+	// backfill below then runs with live triggers, and its NOT IN _docsize
+	// guard skips exactly the rows those triggers already indexed.
+	if _, err := tx.Exec(ftsTriggersDDL); err != nil {
+		tx.Rollback()
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -309,13 +338,17 @@ func rebuildSearchIndex(db *sql.DB) error {
 	// daemon's writes interleave between batches instead of timing out
 	// behind one rebuild-length lock.
 	last := int64(-1) // start_ts values are unix seconds
+	// The same NOT IN _docsize guard as the v4 backfill: batches must skip
+	// rows a live trigger already indexed mid-rebuild (external-content FTS5
+	// does not dedupe rowids, and a re-run rebuild must not double-index).
+	const notIndexed = "b.start_ts NOT IN (SELECT rowid FROM blocks_fts_docsize)"
 	for {
 		var hi int64
 		err := db.QueryRow(`SELECT start_ts FROM blocks WHERE start_ts > ?
 		  ORDER BY start_ts LIMIT 1 OFFSET ?`, last, reindexBatchRows-1).Scan(&hi)
 		if err == sql.ErrNoRows {
 			// Final partial batch: everything above last.
-			if _, err := db.Exec(ftsIndexInsertStmt("b.start_ts > ?"), last); err != nil {
+			if _, err := db.Exec(ftsIndexInsertStmt("b.start_ts > ? AND "+notIndexed), last); err != nil {
 				return err
 			}
 			break
@@ -323,7 +356,7 @@ func rebuildSearchIndex(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		if _, err := db.Exec(ftsIndexInsertStmt("b.start_ts > ? AND b.start_ts <= ?"), last, hi); err != nil {
+		if _, err := db.Exec(ftsIndexInsertStmt("b.start_ts > ? AND b.start_ts <= ? AND "+notIndexed), last, hi); err != nil {
 			return err
 		}
 		last = hi
@@ -334,9 +367,6 @@ func rebuildSearchIndex(db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(ftsTriggersDDL); err != nil {
-		return err
-	}
 	// The rebuild produces exactly the state v4 stamps — record it so the
 	// next open doesn't re-run the migration over a populated index.
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(?, ?)`,
@@ -440,30 +470,77 @@ func searchBlocksLike(db *sql.DB, query string) ([]Block, error) {
 // search_journal, and chat's searchJournal tool.
 //
 // It prefers the FTS index; it falls back to LIKE when the index is absent
-// (pre-v4 or read-only DB, degraded migration), when MATCH rejects the query
-// (FTS5 syntax such as ':', '(' or unbalanced quotes errors where LIKE never
-// did — the query is first retried as a quoted phrase), or when MATCH simply
-// returns nothing (empty index, or substring text that never tokenizes to an
-// exact term — the LIKE floor keeps pre-FTS substring semantics).
+// (pre-v4 or read-only DB, degraded migration), or when MATCH rejects the
+// query (FTS5 syntax such as ':', '(' or unbalanced quotes errors where
+// LIKE never did — the query is first retried as a quoted phrase). When the
+// index does match, the LIKE substring floor still runs and its extra hits
+// are merged in (FTS matches exact tokens only — a search for `plan` must
+// keep finding `planning`), so results are the union: FTS relevance order
+// first, then substring-only hits by recency. Hits the LIKE path found in
+// raw columns that no longer appear in the effective post-edit text are
+// dropped, so renamed text stops matching (FTS already behaves that way —
+// it indexes the effective text).
 func searchBlocks(db *sql.DB, query string) ([]Block, error) {
-	var blocks []Block
-	var err error
+	var fts []Block
 	if ftsIndexPresent(db) && strings.TrimSpace(query) != "" {
-		blocks, err = ftsMatchBlocks(db, query)
+		var err error
+		fts, err = ftsMatchBlocks(db, query)
 		if err != nil {
 			if q := ftsTerms(query); q != "" {
-				blocks, err = ftsMatchBlocks(db, q)
+				fts, err = ftsMatchBlocks(db, q)
+			}
+			if err != nil {
+				fts = nil
 			}
 		}
-		if err == nil && len(blocks) > 0 {
-			return applyEditsToHits(db, blocks)
-		}
 	}
-	blocks, err = searchBlocksLike(db, query)
+	like, err := searchBlocksLike(db, query)
 	if err != nil {
 		return nil, err
 	}
-	return applyEditsToHits(db, blocks)
+	inFTS := make(map[int64]bool, len(fts))
+	seen := make(map[int64]bool, len(fts))
+	merged := fts
+	for _, b := range fts {
+		inFTS[b.StartTs] = true
+		seen[b.StartTs] = true
+	}
+	for _, b := range like {
+		if seen[b.StartTs] {
+			continue
+		}
+		seen[b.StartTs] = true
+		merged = append(merged, b)
+	}
+	blocks, err := applyEditsToHits(db, merged)
+	if err != nil {
+		return nil, err
+	}
+	// The LIKE path matched raw pre-edit columns; after the edit overlay is
+	// applied, a hit whose effective text no longer contains the query is a
+	// renamed block the user should not see for that term. FTS hits matched
+	// the effective text and are kept regardless of substring shape.
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return blocks, nil
+	}
+	out := make([]Block, 0, len(blocks))
+	for _, b := range blocks {
+		if inFTS[b.StartTs] || blockTextContains(b, q) {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
+// blockTextContains reports whether the block's effective text contains the
+// lowercased query — the substring half of the search floor, evaluated after
+// edits are applied.
+func blockTextContains(b Block, lowerQuery string) bool {
+	return strings.Contains(strings.ToLower(b.Title), lowerQuery) ||
+		strings.Contains(strings.ToLower(b.Summary), lowerQuery) ||
+		strings.Contains(strings.ToLower(b.Category), lowerQuery) ||
+		strings.Contains(strings.ToLower(b.App), lowerQuery)
 }
 
 // applyEditsToHits overlays block_edits on the result set so search output

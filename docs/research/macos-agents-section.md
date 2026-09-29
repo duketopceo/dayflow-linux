@@ -1,6 +1,6 @@
 # Research: macOS Dayflow "Agents" section vs the port's AgentsPane
 
-Date: 2026-09-30. Method: web research only (no upstream checkout on this
+Date: 2026-09-29. Method: web research only (no upstream checkout on this
 machine; upstream = `github.com/JerryZLiu/Dayflow`, SwiftUI, currently ~v2.2.x).
 
 ## Confidence
@@ -76,7 +76,12 @@ from token counts × bundled prices.
 
 ## Feature diff
 
-| Feature | Upstream (macOS) | Port | Verdict |
+The "AgentPlayback" column reflects the inferred macOS sibling app
+(AgentPlayback), not verified in-app Dayflow behavior — the exact Dayflow
+SwiftUI UI is unknown from research alone, so "present" there means
+"present in AgentPlayback's public surface".
+
+| Feature | AgentPlayback (macOS) | Port | Verdict |
 |---|---|---|---|
 | Session list w/ badge, project, times, msg count | present | present | parity |
 | Per-session LLM recap | present (Claude/Codex) | present, + worthiness/quality gates + opt-in + egress scrubbing | port better |

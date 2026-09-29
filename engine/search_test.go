@@ -56,6 +56,22 @@ func ftsCount(t *testing.T, db *sql.DB, term string) int {
 	return n
 }
 
+// ftsIndexedDocs counts real index entries via the _docsize shadow table
+// (one row per indexed document — a bare SELECT from blocks_fts scans the
+// *content* table and can never see duplicates) and asserts the index
+// passes FTS5's integrity-check.
+func ftsIndexedDocs(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO blocks_fts(blocks_fts) VALUES('integrity-check')`); err != nil {
+		t.Fatalf("fts integrity-check: %v", err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM blocks_fts_docsize`).Scan(&n); err != nil {
+		t.Fatalf("docsize count: %v", err)
+	}
+	return n
+}
+
 func TestFTSMigrationBackfill(t *testing.T) {
 	testEnv(t)
 	raw := writePreFTSDB(t)
@@ -257,6 +273,45 @@ func TestSearchBlocksFTSEditOverlay(t *testing.T) {
 	}
 	if blocks[0].Title != "Zebraplant redesign" {
 		t.Fatalf("result should show effective text, got %q", blocks[0].Title)
+	}
+	// The pre-edit term must not resurface through the LIKE floor: the raw
+	// column still says "Original planning doc", but the effective text is
+	// the renamed title, so a search for the old term finds nothing.
+	if blocks, err := searchBlocks(db, "planning"); err != nil || len(blocks) != 0 {
+		t.Fatalf("pre-edit term surfaced via LIKE floor: %v %v", blocks, err)
+	}
+}
+
+// TestSearchBlocksSubstringFloorMerged: FTS matches exact tokens only, so
+// a search for `plan` must still find `planning` titles — the LIKE
+// substring floor runs alongside FTS and its extra hits merge in rather
+// than being skipped whenever FTS returns anything.
+func TestSearchBlocksSubstringFloorMerged(t *testing.T) {
+	testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	start := time.Now().Add(-2 * time.Hour).Truncate(time.Minute)
+	seedBlock(t, db, start, "plan review meeting", "", "work", "docs", "done")
+	seedBlock(t, db, start.Add(time.Hour), "planning retro notes", "", "work", "nvim", "done")
+	if ftsCount(t, db, "plan") != 1 {
+		t.Fatal("seed not indexed as expected")
+	}
+	blocks, err := searchBlocks(db, "plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("substring floor not merged with FTS hits: %v", blocks)
+	}
+	titles := map[string]bool{}
+	for _, b := range blocks {
+		titles[b.Title] = true
+	}
+	if !titles["plan review meeting"] || !titles["planning retro notes"] {
+		t.Fatalf("merged results lost a hit: %v", titles)
 	}
 }
 
@@ -518,9 +573,8 @@ func TestFTSUpdateTriggerWhenClause(t *testing.T) {
 	if ftsCount(t, db, "uniqterm") != 1 {
 		t.Fatal("non-indexed UPDATE disturbed the FTS row")
 	}
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(1) FROM blocks_fts`).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("index rows=%d err=%v — non-indexed UPDATE duplicated or dropped the entry", n, err)
+	if n := ftsIndexedDocs(t, db); n != 1 {
+		t.Fatalf("index entries=%d — non-indexed UPDATE duplicated or dropped the entry", n)
 	}
 
 	// An indexed-column update still reindexes.
@@ -576,6 +630,42 @@ func TestSearchBlocksScrubDeletesEdits(t *testing.T) {
 	}
 	if blocks, err := searchBlocks(db, "zztop"); err != nil || len(blocks) != 0 {
 		t.Fatalf("edited ghost still searchable: %v %v", blocks, err)
+	}
+}
+
+// TestSearchBlocksScrubMatchesEditedText: the scrub predicate must cover
+// the edit overlay too. A term that exists only in block_edits.new_value —
+// the text the user actually sees and the index actually holds — must scrub
+// its block, not report zero deletions while the term stays visible and
+// searchable.
+func TestSearchBlocksScrubMatchesEditedText(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	start := time.Now().Add(-time.Hour).Truncate(time.Minute)
+	seedBlock(t, db, start, "innocuous title", "", "work", "docs", "done")
+
+	// The edit introduces the sensitive term: it exists only in
+	// block_edits.new_value and the FTS index, not in the raw columns.
+	if err := saveBlockEdit(db, cfg, start.Unix(), "title", "acmecorp contract"); err != nil {
+		t.Fatal(err)
+	}
+	if ftsCount(t, db, "acmecorp") != 1 {
+		t.Fatal("edited term not indexed")
+	}
+
+	// Scrub must find it through the edit overlay and delete the block.
+	if n, err := deleteBlocksLike(db, "acmecorp"); err != nil || n != 1 {
+		t.Fatalf("scrub of edited text deleted %d err=%v", n, err)
+	}
+	if ftsCount(t, db, "acmecorp") != 0 {
+		t.Fatal("scrubbed edited term still indexed")
+	}
+	if blocks, err := searchBlocks(db, "acmecorp"); err != nil || len(blocks) != 0 {
+		t.Fatalf("scrubbed edited term still searchable: %v %v", blocks, err)
 	}
 }
 
@@ -691,9 +781,8 @@ func TestSearchReindexChunked(t *testing.T) {
 	if err := rebuildSearchIndex(db); err != nil {
 		t.Fatal(err)
 	}
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(1) FROM blocks_fts`).Scan(&n); err != nil || n != 5 {
-		t.Fatalf("index rows=%d err=%v — chunked backfill missed or duplicated rows", n, err)
+	if n := ftsIndexedDocs(t, db); n != 5 {
+		t.Fatalf("index entries=%d — chunked backfill missed or duplicated rows", n)
 	}
 	for i := 0; i < 5; i++ {
 		if ftsCount(t, db, fmt.Sprintf("term%d", i)) != 1 {
