@@ -20,7 +20,8 @@ func trimToWindow(events []time.Time, now time.Time, window time.Duration) []tim
 	return out
 }
 
-// windowLabel renders the look-back window for the recap card header.
+// windowLabel renders the look-back window for the recap card header —
+// "day" for 24h windows, otherwise a compact hour count like "6h".
 func windowLabel(window time.Duration) string {
 	hours := int(window.Hours())
 	if hours == 24 {
