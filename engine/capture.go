@@ -64,11 +64,18 @@ func setPaused(p bool) {
 	}
 }
 
+// tickExecTimeout bounds the short status probes spawned on the daemon's
+// tick path (hyprctl, loginctl). A hung helper must not wedge the
+// single-goroutine capture loop — a var so tests can shrink it.
+var tickExecTimeout = 3 * time.Second
+
 // activeWindowClass returns the class of the focused window on Hyprland.
 // It falls back to the window title when no class is reported, and returns
 // "" when there is no focused window / not running under Hyprland.
 func activeWindowClass() string {
-	out, err := exec.Command("hyprctl", "activewindow", "-j").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), tickExecTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "hyprctl", "activewindow", "-j").Output()
 	if err != nil || len(out) == 0 {
 		return ""
 	}
@@ -112,7 +119,9 @@ func screenLocked() bool {
 	sessions := []string{os.Getenv("XDG_SESSION_ID")}
 	if sessions[0] == "" {
 		// Fall back to the active graphical session for the current user.
-		out, err := exec.Command("loginctl", "list-sessions", "--no-legend").Output()
+		ctx, cancel := context.WithTimeout(context.Background(), tickExecTimeout)
+		out, err := exec.CommandContext(ctx, "loginctl", "list-sessions", "--no-legend").Output()
+		cancel()
 		if err != nil {
 			return false
 		}
@@ -136,7 +145,9 @@ func screenLocked() bool {
 		if sid == "" {
 			continue
 		}
-		out, err := exec.Command("loginctl", "show-session", sid, "--property=LockedHint").Output()
+		ctx, cancel := context.WithTimeout(context.Background(), tickExecTimeout)
+		out, err := exec.CommandContext(ctx, "loginctl", "show-session", sid, "--property=LockedHint").Output()
+		cancel()
 		if err != nil || len(out) == 0 {
 			continue
 		}
@@ -188,9 +199,22 @@ func hamming(a, b frameHash) int {
 	return n
 }
 
+// grimArgv returns the grim command line for one grab. output "" captures
+// all outputs composited; a name passes it through as `grim -o <name>`.
+func grimArgv(cfg Config, output string) []string {
+	args := []string{"grim", "-t", "jpeg", "-q", fmt.Sprint(cfg.JPEGQuality)}
+	if output != "" {
+		args = append(args, "-o", output)
+	}
+	return append(args, "-")
+}
+
 // resolveCaptureCommand picks the screenshot tool. grim (wlroots: Hyprland,
 // sway, river, ...) is the only built-in backend; capture_command in config can
-// point at anything that writes a JPEG/PNG to stdout.
+// point at anything that writes a JPEG/PNG to stdout. For the grim backend a
+// literal output name bakes -o into the returned argv; "auto" returns the
+// composite argv — captureOnce re-resolves the focused output per tick, so a
+// dock/focus change can't pin capture to the start-time monitor.
 func resolveCaptureCommand(cfg Config) ([]string, error) {
 	if cfg.CaptureCommand != "" {
 		return strings.Fields(cfg.CaptureCommand), nil
@@ -198,11 +222,84 @@ func resolveCaptureCommand(cfg Config) ([]string, error) {
 	if _, err := exec.LookPath("grim"); err != nil {
 		return nil, fmt.Errorf("grim not found — install it (wlroots compositors) or set capture_command in %s", configPath())
 	}
-	args := []string{"grim", "-t", "jpeg", "-q", fmt.Sprint(cfg.JPEGQuality)}
-	if cfg.Output != "" {
-		args = append(args, "-o", cfg.Output)
+	output := cfg.Output
+	if output == "auto" {
+		output = "" // resolved per tick by autoOutput
 	}
-	return append(args, "-"), nil
+	return grimArgv(cfg, output), nil
+}
+
+// focusFailCeiling negative-caches focus resolution: after this many
+// consecutive `hyprctl monitors` failures the daemon stops spawning hyprctl
+// for the rest of the run — on non-Hyprland systems output=auto would
+// otherwise pay a dead exec every tick forever.
+const focusFailCeiling = 5
+
+var (
+	focusFails     int    // consecutive hyprctl monitors failures
+	focusDisabled  bool   // negative cache: focus resolution switched off
+	lastAutoOutput string // last recorded -o target ("composite" when none)
+)
+
+// focusedOutput asks Hyprland which output currently holds focus
+// (`hyprctl monitors -j`, focused:true). It returns "" — composite
+// capture — when no output is focused or the focused output is a
+// HEADLESS-* node (grim can't -o those). Errors count toward the
+// negative cache in autoOutput.
+func focusedOutput() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), tickExecTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "hyprctl", "monitors", "-j").Output()
+	if err != nil {
+		return "", err
+	}
+	var mons []struct {
+		Name    string `json:"name"`
+		Focused bool   `json:"focused"`
+	}
+	if err := json.Unmarshal(out, &mons); err != nil {
+		return "", fmt.Errorf("hyprctl monitors: %w", err)
+	}
+	for _, m := range mons {
+		if m.Focused && !strings.HasPrefix(m.Name, "HEADLESS-") {
+			return m.Name, nil
+		}
+	}
+	return "", nil
+}
+
+// autoOutput resolves the grim -o target for one tick under output=auto:
+// the focused output's name, or "" for a composite grab. Consecutive
+// hyprctl failures negative-cache the lookup for the rest of the run
+// (one event, not per-tick spam); the resolved target is logged only
+// when it changes so mixed-resolution frame streams stay attributable.
+func autoOutput(db *sql.DB, cfg Config) string {
+	if focusDisabled {
+		return ""
+	}
+	name, err := focusedOutput()
+	if err != nil {
+		focusFails++
+		if focusFails >= focusFailCeiling {
+			focusDisabled = true
+			logEvent(db, "capture_output_disabled",
+				fmt.Sprintf("hyprctl monitors failing: %v", err))
+			debugf(cfg, "capture: output=auto disabled after %d consecutive hyprctl failures: %v",
+				focusFails, err)
+		}
+	} else {
+		focusFails = 0
+	}
+	resolved := name
+	if resolved == "" {
+		resolved = "composite"
+	}
+	if resolved != lastAutoOutput {
+		logEvent(db, "capture_output", resolved)
+		debugf(cfg, "capture: output %s", resolved)
+		lastAutoOutput = resolved
+	}
+	return name
 }
 
 // grabFrameTimeout bounds one capture_command run — a hung screenshot tool
@@ -279,7 +376,26 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) 
 		debugf(cfg, "capture: ignored app %s", cls)
 		return lastHash, false, nil
 	}
-	raw, err := grabFrame(cmdArgs)
+	// output=auto re-resolves the focused monitor every tick and injects
+	// -o into a freshly built grim argv. The injection is grim-path only —
+	// a custom capture_command is used verbatim and auto is ignored there.
+	args := cmdArgs
+	var composite []string
+	if cfg.CaptureCommand == "" && cfg.Output == "auto" &&
+		len(args) > 0 && filepath.Base(args[0]) == "grim" {
+		if name := autoOutput(db, cfg); name != "" {
+			composite = grimArgv(cfg, "")
+			args = grimArgv(cfg, name)
+		}
+	}
+	raw, err := grabFrame(args)
+	if err != nil && composite != nil {
+		// resolve→exec race (e.g. the output was unplugged between
+		// `hyprctl monitors` and `grim -o`, or a dock transition): one
+		// composite retry this tick before the failure counts.
+		debugf(cfg, "capture: grim -o failed (%v); retrying composite", err)
+		raw, err = grabFrame(composite)
+	}
 	if err != nil {
 		// Logging is the caller's job — it streak-throttles so a dead-session
 		// window doesn't flood every sink each interval.
