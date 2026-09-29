@@ -19,8 +19,8 @@ Flickable {
   property string modelSlug: "google/gemma-4-31b-it"
   property var catPicks: ({})
   // Set only by the explicit "Enable recaps" click on the consent step —
-  // every skip/back path leaves this false so the patch never carries
-  // agent_recaps: true unless the user opted in.
+  // the "Not now" and Back handlers clear it explicitly, so the patch
+  // never carries agent_recaps: true unless the user opted in.
   property bool recapsOptIn: false
   property string testResult: ""
   property bool testing: false
@@ -59,8 +59,14 @@ Flickable {
     onStarted: { write(pendingPatch + "\n"); pendingPatch = ""; applyProc.didStart = true }
     onExited: function(exitCode) {
       if (exitCode === 0) {
+        if (root.applyQueued) {
+          root.applyQueued = false
+          root.applyPatch()
+          return
+        }
         testProc.running = true
       } else {
+        root.applyQueued = false
         root.testResult = "config write failed"
         root.testing = false
       }
@@ -143,6 +149,10 @@ Flickable {
   }
 
   property bool keyInPatch: false
+  // Set when apply() is re-invoked while a config write is in flight —
+  // applyProc re-enters applyPatch on exit so the latest patch (e.g.
+  // recapsOptIn flipped on the consent step) is never dropped.
+  property bool applyQueued: false
 
   function apply() {
     if (dayflow) dayflow.uilog("onboarding apply " + root.mode)
@@ -159,6 +169,14 @@ Flickable {
   }
 
   function applyPatch() {
+    // Process.running = true is a no-op while the process is running, so
+    // a re-apply during an in-flight write must queue instead. The patch
+    // is built from live state when it actually sends, so the queued
+    // write always carries the newest picks.
+    if (applyProc.running) {
+      root.applyQueued = true
+      return
+    }
     var patch = { model: root.modelSlug }
     if (root.mode === "openrouter") {
       patch.provider = "openrouter"
@@ -463,7 +481,19 @@ Flickable {
             color: root.dayflow ? root.dayflow.foreground : Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
-          MouseArea { anchors.fill: parent; onClicked: root.step = 3 }
+          // Continue writes the config now — dismissing on the consent
+          // step must not discard provider/model/key. The patch omits
+          // agent_recaps unless recapsOptIn, so writing here is not a
+          // consent leak; step 3's buttons just re-apply.
+          MouseArea { anchors.fill: parent; onClicked: {
+            root.apply()
+            var agents = root.detected.agents || {}
+            var anyAgent = false
+            for (var k in agents) {
+              if (agents[k]) { anyAgent = true; break }
+            }
+            root.step = anyAgent ? 3 : 4
+          } }
         }
         Text {
           anchors.verticalCenter: parent.verticalCenter
@@ -478,9 +508,11 @@ Flickable {
     }
 
     // ---- step 3: agent-session recaps opt-in ----
-    // Consent gate before the config is written: Enable is the only control
-    // that sets recapsOptIn; "Not now", Back, and dismissing the wizard
-    // never write agent_recaps: true.
+    // The base config was already written by step 2's Continue (the patch
+    // omits agent_recaps unless recapsOptIn), so this step only decides
+    // whether a follow-up patch turns recaps on: Enable sets recapsOptIn
+    // and re-applies; "Not now" re-applies unchanged; Back clears the flag
+    // and returns. Shown only when detect saw an agent store.
     Column {
       visible: root.step === 3
       width: parent.width
@@ -503,7 +535,7 @@ Flickable {
       }
       Text {
         width: parent.width
-        text: "When recaps are on, a bounded, scrubbed transcript excerpt leaves your machine — to your configured chat provider, which writes the recap, and to the decisions endpoint used for judging which sessions are worth summarizing. Recaps are off by default; nothing extra is sent unless you enable them here or later in Settings."
+        text: "When recaps are on, a bounded, scrubbed transcript excerpt leaves your machine — to your configured chat provider, which writes the recap, and to OpenRouter's decisions endpoint, which judges which sessions are worth summarizing. Recaps are off by default; nothing extra is sent unless you enable them here or later in Settings."
         color: root.dayflow ? root.dayflow.dim : Color.muted
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
@@ -534,7 +566,7 @@ Flickable {
             color: root.dayflow ? root.dayflow.foreground : Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body }
-          MouseArea { id: offMa; anchors.fill: parent; hoverEnabled: true; onClicked: { root.apply(); root.step = 4 } }
+          MouseArea { id: offMa; anchors.fill: parent; hoverEnabled: true; onClicked: { root.recapsOptIn = false; root.apply(); root.step = 4 } }
         }
         Text {
           anchors.verticalCenter: parent.verticalCenter
@@ -543,7 +575,7 @@ Flickable {
           font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
           font.underline: true
-          MouseArea { anchors.fill: parent; onClicked: root.step = 2 }
+          MouseArea { anchors.fill: parent; onClicked: { root.recapsOptIn = false; root.step = 2 } }
         }
       }
     }

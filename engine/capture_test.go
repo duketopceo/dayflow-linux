@@ -9,8 +9,10 @@ import (
 	"image/jpeg"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -746,8 +748,10 @@ func writeBin(t *testing.T, dir, name, body string) {
 // cache is process-global, not per-daemon, so each test starts clean.
 func resetFocusState(t *testing.T) {
 	t.Helper()
-	focusFails, focusDisabled, lastAutoOutput = 0, false, ""
-	t.Cleanup(func() { focusFails, focusDisabled, lastAutoOutput = 0, false, "" })
+	focusFails, focusDisabled, focusDisabledAt, lastAutoOutput = 0, false, time.Time{}, ""
+	t.Cleanup(func() {
+		focusFails, focusDisabled, focusDisabledAt, lastAutoOutput = 0, false, time.Time{}, ""
+	})
 }
 
 // fakeGrim installs a `grim` stub into dir that appends its argv to
@@ -1037,6 +1041,79 @@ func TestAutoOutputNegativeCache(t *testing.T) {
 	}
 }
 
+// The negative cache is time-boxed: once focusRetryBackoff elapses the
+// daemon spends a single probe — a daemon started while the compositor was
+// still coming up must recover instead of staying composite-only forever.
+func TestAutoOutputFocusRetryBackoff(t *testing.T) {
+	cfg := testEnv(t)
+	cfg.Output = "auto"
+	resetFocusState(t)
+	bin := t.TempDir()
+	calls, _ := fakeHyprctl(t, bin, "", true) // monitors always fails
+	argvLog := fakeGrim(t, bin, frameFixture(t), false)
+	t.Setenv("PATH", bin)
+
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cmdArgs, err := resolveCaptureCommand(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < focusFailCeiling; i++ {
+		if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+	}
+	if !focusDisabled {
+		t.Fatal("focus resolution should latch off after the fail ceiling")
+	}
+	probes := countCalls(t, calls, "monitors")
+
+	// Within the backoff window the latch holds — no probe.
+	if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCalls(t, calls, "monitors"); got != probes {
+		t.Fatalf("latched cache probed hyprctl: %d -> %d", probes, got)
+	}
+
+	// Backoff elapsed → exactly one re-probe; still failing → re-armed.
+	focusDisabledAt = time.Now().Add(-2 * focusRetryBackoff)
+	if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCalls(t, calls, "monitors"); got != probes+1 {
+		t.Fatalf("expired backoff should spend one re-probe: got %d, want %d", got, probes+1)
+	}
+	if !focusDisabled {
+		t.Fatal("a failed re-probe should re-arm the latch")
+	}
+
+	// hyprctl recovers and the backoff expires again → the latch clears and
+	// -o targeting resumes.
+	writeBin(t, bin, "hyprctl",
+		"if [ \"$1\" = monitors ]; then\n  echo '[{\"name\":\"DP-3\",\"focused\":true}]'\nelse\n  echo '{}'\nfi\n")
+	focusDisabledAt = time.Now().Add(-2 * focusRetryBackoff)
+	if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+		t.Fatal(err)
+	}
+	if focusDisabled {
+		t.Fatal("a successful re-probe should clear the latch")
+	}
+	lines := argvLines(t, argvLog)
+	if !strings.Contains(lines[len(lines)-1], "-o DP-3") {
+		t.Fatalf("re-enabled focus should restore -o targeting: %q", lines[len(lines)-1])
+	}
+	var ev int
+	db.QueryRow(`SELECT COUNT(1) FROM events WHERE type='capture_output_enabled'`).Scan(&ev)
+	if ev != 1 {
+		t.Fatalf("capture_output_enabled events=%d, want 1", ev)
+	}
+}
+
 func TestFocusedOutputTimeout(t *testing.T) {
 	// A hung hyprctl must degrade to composite, not wedge the tick.
 	old := tickExecTimeout
@@ -1199,5 +1276,77 @@ func TestConfigSetOutput(t *testing.T) {
 	cfg, _ = loadConfig()
 	if cfg.Output != "" {
 		t.Fatalf("output=%q after clear", cfg.Output)
+	}
+}
+
+// An intentional stop (systemctl stop → SIGTERM) must record a terminal
+// daemon_stop event — without it the stall detector reads the silence as a
+// wedged daemon forever. Also asserts the daemon writes the meta heartbeat
+// the detector uses once events-table rows are trimmed.
+func TestDaemonStopWritesTerminalEvent(t *testing.T) {
+	cfg := notifyTestCfg(t, notifyClassStall)
+	cfg.CaptureCommand = "/bin/cat " + frameFixture(t) // no grim needed
+	cfg.AutoPauseLocked = false                        // keep loginctl out of the loop
+	bin := t.TempDir()
+	marker := fakeNotifySend(t, bin)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Catch the signal on a test-owned channel too — it must never reach
+	// the default action and kill the test binary, even if it arrives
+	// while runDaemon's own Notify is still registering.
+	testSig := make(chan os.Signal, 1)
+	signal.Notify(testSig, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(testSig)
+
+	done := make(chan error, 1)
+	go func() { done <- runDaemon(cfg) }()
+
+	// The daemon is up once its first tick wrote the meta heartbeat.
+	deadline := time.Now().Add(10 * time.Second)
+	for metaGet(db, metaCaptureHeartbeat) == "" {
+		if time.Now().After(deadline) {
+			t.Fatal("daemon never wrote its capture heartbeat meta key")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// SIGTERM may race the handler inside runDaemon — resend until the
+	// terminal event lands.
+	for {
+		var n int
+		db.QueryRow(`SELECT COUNT(1) FROM events WHERE type='daemon_stop'`).Scan(&n)
+		if n > 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("runDaemon exited before daemon_stop: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("daemon did not record daemon_stop after SIGTERM")
+		}
+		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runDaemon: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDaemon did not return after SIGTERM")
+	}
+
+	// The stall detector reads the terminal event as known-quiet.
+	checkCaptureStall(db, cfg)
+	if lines := notifyMarkerLines(t, marker); len(lines) != 0 {
+		t.Fatalf("intentional stop should not alert: %v", lines)
 	}
 }

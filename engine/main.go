@@ -442,14 +442,8 @@ func main() {
 	case "usage":
 		// usage [--days N] [--json] — N bounds the window to the last N
 		// local days; omitted = all retained rows.
-		days := 0
-		if v := flagValue(args, "--days"); v != "" {
-			n, err := strconv.Atoi(v)
-			if err != nil || n < 1 {
-				fatal(fmt.Errorf("--days must be a positive integer"))
-			}
-			days = n
-		}
+		days, err := usageDays(args)
+		fatal(err)
 		printUsage(cfg, jsonOut, days)
 
 	case "stats":
@@ -1366,6 +1360,29 @@ func printReindex(asJSON bool) {
 		return
 	}
 	fmt.Println("search index rebuilt")
+}
+
+// usageDays parses the `usage --days` flag: absent = 0 (all retained rows),
+// a bare `--days`/`--days=` or a non-positive/non-numeric value is a hard
+// error — silently widening to full history would misreport exactly the
+// window the user asked to bound.
+func usageDays(args []string) (int, error) {
+	if v := flagValue(args, "--days"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("--days must be a positive integer")
+		}
+		return n, nil
+	}
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "--days" || strings.HasPrefix(a, "--days=") {
+			return 0, fmt.Errorf("--days requires a positive integer (e.g. --days 7)")
+		}
+	}
+	return 0, nil
 }
 
 func printUsage(cfg Config, asJSON bool, days int) {

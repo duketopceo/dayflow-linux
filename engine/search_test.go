@@ -2,6 +2,8 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -88,8 +90,9 @@ func TestFTSMigrationBackfill(t *testing.T) {
 }
 
 // TestFTSMigrationFailureDegrades: an FTS migration failure must not wedge
-// openDB — the index is derived state. The DB opens without it (unstamped so
-// the next open retries), an event is logged, and search falls back to LIKE.
+// openDB — the index is derived state. The DB opens without it (v4 stays
+// unstamped so a later open retries), an event is logged, and search falls
+// back to LIKE. Later derived-index migrations (v5) still apply.
 func TestFTSMigrationFailureDegrades(t *testing.T) {
 	testEnv(t)
 	raw := writePreFTSDB(t)
@@ -109,8 +112,18 @@ func TestFTSMigrationFailureDegrades(t *testing.T) {
 		t.Fatalf("openDB must not fail on a derived-index migration error: %v", err)
 	}
 	defer db.Close()
-	if v := dbSchemaVersion(db); v != schemaVersionFTS-1 {
-		t.Fatalf("schema version = %d, want %d (unstamped)", v, schemaVersionFTS-1)
+	if v := dbSchemaVersion(db); v != schemaVersion {
+		t.Fatalf("schema version = %d, want %d (v5 cleanup still stamps)", v, schemaVersion)
+	}
+	var stamped int
+	db.QueryRow(`SELECT COUNT(1) FROM schema_migrations WHERE version=?`, schemaVersionFTS).Scan(&stamped)
+	if stamped != 0 {
+		t.Fatal("v4 stamped despite the failed migration")
+	}
+	// A squatter table is not an index — the LIKE path must not pay a
+	// failing MATCH + phrase retry first.
+	if ftsIndexPresent(db) {
+		t.Fatal("plain-table squatter counted as the FTS index")
 	}
 	var detail string
 	if err := db.QueryRow(`SELECT detail FROM events WHERE type='fts_error'`).Scan(&detail); err != nil || detail == "" {
@@ -119,6 +132,83 @@ func TestFTSMigrationFailureDegrades(t *testing.T) {
 	blocks, err := searchBlocks(db, "alpha")
 	if err != nil || len(blocks) != 1 {
 		t.Fatalf("LIKE fallback: %v %v", blocks, err)
+	}
+}
+
+// TestFTSMigrationBackoff: a persistent v4 failure must not re-run the
+// CREATE+backfill on every open — the fts_migration_failed_at meta marker
+// backs retries off for ftsRetryBackoff, a stale marker retries, and
+// `search --reindex` clears the marker and repairs the squatter.
+func TestFTSMigrationBackoff(t *testing.T) {
+	testEnv(t)
+	raw := writePreFTSDB(t)
+	if _, err := raw.Exec(`INSERT INTO blocks(start_ts,end_ts,title,summary,category,app,status,created_at)
+	  VALUES(1000,1900,'backoff alpha block','','coding','nvim','done',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE blocks_fts(x TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	ftsErrCount := func(db *sql.DB) int {
+		var n int
+		db.QueryRow(`SELECT COUNT(1) FROM events WHERE type='fts_error'`).Scan(&n)
+		return n
+	}
+
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ftsErrCount(db) != 1 {
+		t.Fatalf("first open should log one fts_error, got %d", ftsErrCount(db))
+	}
+	if metaGet(db, metaFTSFailedAt) == "" {
+		t.Fatal("failed migration did not record the backoff marker")
+	}
+	db.Close()
+
+	// A fresh open inside the backoff window must not retry — still one
+	// fts_error, no second CREATE+backfill pass.
+	db, err = openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := ftsErrCount(db); n != 1 {
+		t.Fatalf("backoff open retried the migration (fts_error count=%d)", n)
+	}
+	// A stale marker retries on the next open.
+	metaSet(db, metaFTSFailedAt, strconv.FormatInt(time.Now().Add(-2*ftsRetryBackoff).Unix(), 10))
+	db.Close()
+	db, err = openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if n := ftsErrCount(db); n != 2 {
+		t.Fatalf("stale marker should retry once (fts_error count=%d)", n)
+	}
+
+	// --reindex clears the marker and repairs in place: it drops the
+	// squatter, builds the real index, and stamps v4.
+	if err := rebuildSearchIndex(db); err != nil {
+		t.Fatal(err)
+	}
+	if metaGet(db, metaFTSFailedAt) != "" {
+		t.Fatal("reindex did not clear the backoff marker")
+	}
+	if !ftsIndexPresent(db) {
+		t.Fatal("reindex did not replace the squatter with a real index")
+	}
+	var stamped int
+	db.QueryRow(`SELECT COUNT(1) FROM schema_migrations WHERE version=?`, schemaVersionFTS).Scan(&stamped)
+	if stamped != 1 {
+		t.Fatal("reindex did not stamp v4")
+	}
+	blocks, err := searchBlocks(db, "alpha")
+	if err != nil || len(blocks) != 1 {
+		t.Fatalf("repaired index search: %v %v", blocks, err)
 	}
 }
 
@@ -398,38 +488,216 @@ func TestSearchCallSiteParity(t *testing.T) {
 	}
 }
 
-func TestStandupFTS(t *testing.T) {
+// TestFTSUpdateTriggerWhenClause: the blocks_fts_au WHEN clause skips
+// updates that can't change the indexed text (attempts, triaged, status
+// churn during summarize passes) — the row stays indexed, untouched. An
+// update that does change an indexed column still reindexes.
+func TestFTSUpdateTriggerWhenClause(t *testing.T) {
 	testEnv(t)
 	db, err := openDB()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := saveStandupDraft(db, "2026-09-28", "shipped wobblegate fix", "- tasks", "", ""); err != nil {
-		t.Fatal(err)
+	start := time.Now().Add(-time.Hour).Truncate(time.Minute)
+	seedBlock(t, db, start, "whenclause uniqterm block", "s", "coding", "nvim", "done")
+	if ftsCount(t, db, "uniqterm") != 1 {
+		t.Fatal("seed not indexed")
 	}
-	count := func(term string) int {
-		var n int
-		if err := db.QueryRow(`SELECT COUNT(1) FROM standup_fts WHERE standup_fts MATCH ?`, term).Scan(&n); err != nil {
-			t.Fatalf("standup MATCH %q: %v", term, err)
+
+	// Non-indexed-column churn must leave the FTS row alone.
+	for _, stmt := range []string{
+		`UPDATE blocks SET attempts=3, triaged=1 WHERE start_ts=?`,
+		`UPDATE blocks SET status='dead' WHERE start_ts=?`,
+		`UPDATE blocks SET category_confidence=0.5, quality_confidence=0.5 WHERE start_ts=?`,
+	} {
+		if _, err := db.Exec(stmt, start.Unix()); err != nil {
+			t.Fatal(err)
 		}
-		return n
 	}
-	if count("wobblegate") != 1 {
-		t.Fatal("standup draft not indexed")
+	if ftsCount(t, db, "uniqterm") != 1 {
+		t.Fatal("non-indexed UPDATE disturbed the FTS row")
 	}
-	// upsert updates the index
-	if err := saveStandupDraft(db, "2026-09-28", "other pivotnotes", "", "", ""); err != nil {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM blocks_fts`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("index rows=%d err=%v — non-indexed UPDATE duplicated or dropped the entry", n, err)
+	}
+
+	// An indexed-column update still reindexes.
+	if _, err := db.Exec(`UPDATE blocks SET title='whenclause renamed zztop' WHERE start_ts=?`, start.Unix()); err != nil {
 		t.Fatal(err)
 	}
-	if count("wobblegate") != 0 || count("pivotnotes") != 1 {
-		t.Fatal("standup update not reflected in index")
+	if ftsCount(t, db, "uniqterm") != 0 || ftsCount(t, db, "zztop") != 1 {
+		t.Fatal("indexed-column UPDATE did not reindex")
 	}
-	// delete removes it
-	if _, err := db.Exec(`DELETE FROM standup_drafts WHERE date='2026-09-28'`); err != nil {
+}
+
+// TestSearchBlocksScrubDeletesEdits is the privacy regression test at the
+// edit overlay: scrub must remove the block's block_edits too — their
+// old_value/new_value retain the scrubbed text — and the delete ordering
+// (blocks first, edits second) is what lets the blocks_fts_ad trigger
+// un-index the *effective* text rather than the raw columns.
+func TestSearchBlocksScrubDeletesEdits(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if count("pivotnotes") != 0 {
-		t.Fatal("deleted standup draft left an FTS ghost")
+	defer db.Close()
+	start := time.Now().Add(-time.Hour).Truncate(time.Minute)
+	seedBlock(t, db, start, "acmecorp contract review", "sensitive", "work", "docs", "done")
+
+	// The edit changes the indexed text — after the edit the index holds
+	// "zztop", not the raw title.
+	if err := saveBlockEdit(db, cfg, start.Unix(), "title", "zztop renamed"); err != nil {
+		t.Fatal(err)
+	}
+	if ftsCount(t, db, "zztop") != 1 || ftsCount(t, db, "acmecorp") != 0 {
+		t.Fatal("edit overlay not reflected in index")
+	}
+
+	// Scrub still matches the raw title and must leave no ghost of either
+	// the raw or the edited text.
+	if n, err := deleteBlocksLike(db, "acmecorp"); err != nil || n != 1 {
+		t.Fatalf("scrub deleted %d err=%v", n, err)
+	}
+	if ftsCount(t, db, "zztop") != 0 {
+		t.Fatal("edited text ghosted in the index — edits were deleted before the unindex read them")
+	}
+	if ftsCount(t, db, "acmecorp") != 0 {
+		t.Fatal("scrubbed term still indexed")
+	}
+	var edits int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM block_edits WHERE start_ts=?`, start.Unix()).Scan(&edits); err != nil {
+		t.Fatal(err)
+	}
+	if edits != 0 {
+		t.Fatalf("scrub left %d block_edits rows retaining the scrubbed text", edits)
+	}
+	if blocks, err := searchBlocks(db, "zztop"); err != nil || len(blocks) != 0 {
+		t.Fatalf("edited ghost still searchable: %v %v", blocks, err)
+	}
+}
+
+// TestRetryDeletesBlockEdits: an edit can exist on a failed block (the edit
+// path doesn't check status), and retry deletes those rows — otherwise the
+// orphaned overlay would re-apply to the re-summarized block at the same
+// start_ts.
+func TestRetryDeletesBlockEdits(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	start := time.Now().Add(-time.Hour).Truncate(time.Minute)
+	seedBlock(t, db, start, "retryedit uniqterm", "", "", "", "failed")
+	if err := saveBlockEdit(db, cfg, start.Unix(), "title", "user override zztop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resetFailedBlocks(db); err != nil {
+		t.Fatal(err)
+	}
+	var edits int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM block_edits WHERE start_ts=?`, start.Unix()).Scan(&edits); err != nil {
+		t.Fatal(err)
+	}
+	if edits != 0 {
+		t.Fatalf("retry left %d orphaned block_edits rows", edits)
+	}
+	if ftsCount(t, db, "uniqterm") != 0 || ftsCount(t, db, "zztop") != 0 {
+		t.Fatal("retry left an FTS ghost")
+	}
+}
+
+// TestUsageProviderBucketsCLI: summarize logs api_calls.model as
+// 'cli:<command>' for a cli vision provider — those rows belong in a 'cli'
+// provider bucket, not folded under 'openrouter'.
+func TestUsageProviderBucketsCLI(t *testing.T) {
+	testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now()
+	seedAPICall(t, db, now, "cli:/usr/bin/mysummarizer", 100, 10, 50, "ok")
+	seedAPICall(t, db, now, "openai/gpt-5", 200, 20, 100, "ok")
+	seedLLMCall(t, db, now, "chat", "mylocal", "m1", 50, 5, 10, "ok")
+
+	sum, err := usageSummaryWindow(db, 0, defaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byProvider := sum["breakdown"].(map[string]any)["by_provider"].(map[string]usageRow)
+	if byProvider["cli"].Calls != 1 {
+		t.Fatalf("cli: model should bucket under 'cli': %+v", byProvider)
+	}
+	if byProvider["openrouter"].Calls != 1 {
+		t.Fatalf("non-cli api_call should bucket under 'openrouter': %+v", byProvider)
+	}
+	if byProvider["mylocal"].Calls != 1 {
+		t.Fatalf("llm_calls provider grouping: %+v", byProvider)
+	}
+}
+
+// TestUsageDaysFlag: a bare or invalid --days must error instead of silently
+// reporting the full history.
+func TestUsageDaysFlag(t *testing.T) {
+	for _, tc := range []struct {
+		args    []string
+		want    int
+		wantErr bool
+	}{
+		{[]string{"--json"}, 0, false},
+		{[]string{"--days", "7"}, 7, false},
+		{[]string{"--days=3"}, 3, false},
+		{[]string{"--days"}, 0, true},
+		{[]string{"--days="}, 0, true},
+		{[]string{"--days", "abc"}, 0, true},
+		{[]string{"--days", "0"}, 0, true},
+		{[]string{"--days", "-2"}, 0, true},
+		{[]string{"--days", "--json"}, 0, true}, // flag in value position
+		{[]string{"--", "--days"}, 0, false},    // after -- it's positional
+	} {
+		got, err := usageDays(tc.args)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("usageDays(%v): err=%v wantErr=%v", tc.args, err, tc.wantErr)
+		}
+		if err == nil && got != tc.want {
+			t.Fatalf("usageDays(%v) = %d, want %d", tc.args, got, tc.want)
+		}
+	}
+}
+
+// TestSearchReindexChunked exercises the bounded-commit backfill: with the
+// batch size forced small, a rebuild over several blocks still indexes them
+// all exactly once.
+func TestSearchReindexChunked(t *testing.T) {
+	testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	old := reindexBatchRows
+	reindexBatchRows = 2
+	t.Cleanup(func() { reindexBatchRows = old })
+
+	for i := 0; i < 5; i++ {
+		seedBlock(t, db, time.Now().Add(-time.Duration(i+1)*time.Hour),
+			fmt.Sprintf("chunked block term%d", i), "", "coding", "", "done")
+	}
+	if err := rebuildSearchIndex(db); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM blocks_fts`).Scan(&n); err != nil || n != 5 {
+		t.Fatalf("index rows=%d err=%v — chunked backfill missed or duplicated rows", n, err)
+	}
+	for i := 0; i < 5; i++ {
+		if ftsCount(t, db, fmt.Sprintf("term%d", i)) != 1 {
+			t.Fatalf("term%d not indexed", i)
+		}
 	}
 }

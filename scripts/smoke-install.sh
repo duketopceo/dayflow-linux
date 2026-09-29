@@ -62,12 +62,23 @@ leaks() {
            "$REAL_HOME/.config/dayflow" \
            "$REAL_HOME/.local/share/dayflow"; do
     [ -d "$d" ] || continue
-    out+=$(find "$d" -name 'dayflow*' -newer "$MARKER" 2>/dev/null)
+    # No -name filter: a leak is any write into these dirs, not just
+    # dayflow-named files (e.g. config.json, or .dayflow-* temp files —
+    # find includes dotfiles either way).
+    out+=$(find "$d" -newer "$MARKER" 2>/dev/null)
   done
   echo "$out"
 }
-REAL_HOME=$(getent passwd "${USER:-$(id -un)}" | cut -d: -f6)
-[ -d "$REAL_HOME" ] || REAL_HOME="/nonexistent"
+# Resolve the real home dir, failing hard: an empty REAL_HOME would make
+# the leak check silently inspect nothing.
+if ! REAL_HOME=$(getent passwd "${USER:-$(id -un)}" | cut -d: -f6); then
+  echo "smoke: getent could not resolve the real user's home dir" >&2
+  exit 1
+fi
+if [ -z "$REAL_HOME" ] || [ ! -d "$REAL_HOME" ]; then
+  echo "smoke: resolved home ${REAL_HOME:-<empty>} is not a directory" >&2
+  exit 1
+fi
 
 echo "== install =="
 "$BIN" install > "$SANDBOX/install.out" 2>&1 && ok "dayflow install exits 0" \

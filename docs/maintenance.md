@@ -72,15 +72,22 @@ Commit `.sql`/`.jsonl` text fixtures only — **never** a binary `.db`
 
 ### Doctor-side check (setup.go, sibling change)
 
-The `agent stores` doctor check opens each store through `openStoreProbe`
-(`engine/fixtures.go`) — `mode=ro`+`immutable`, **not** `openROStore`,
-whose WAL temp-copy fallback would duplicate hundreds of MB on Cursor's
-`state.vscdb`. `agentStoreDBs()` (same file) resolves each DB-backed
-source's path(s) including test overrides; `agentStoresDetected()`
-(setup.go) covers presence for all five sources. Extraction is asserted by
-running the source's `agentSource.Scan` over the real path and reporting
-through the existing scan-note vocabulary (`empty` / `unavailable` /
-`drift`) — one drift vocabulary shared with runtime scans.
+The per-source `agent store <name>` doctor checks open each present store
+through `openStoreProbe` (`engine/fixtures.go`) — `mode=ro`+`immutable`,
+**not** `openROStore`, whose WAL temp-copy fallback would duplicate
+hundreds of MB on Cursor's `state.vscdb`. `agentStoreDBs()` (same file)
+resolves each DB-backed source's path(s) including test overrides;
+`agentStoresDetected()` (setup.go) covers presence for all five sources
+and feeds the `agents` map in `detect --json`. Each probe
+(`probeAgentStoreExtraction`, setup.go) runs the adapter's extraction
+reads over a bounded tail of the store — `probeTailRows` newest rows —
+because Devin's `message_nodes` has no `created_at` index and Cursor's
+`cursorDiskKV`/`composerHeaders` values are large blobs, so the full
+windowed extraction is too expensive for doctor. Results use the doctor
+check vocabulary: `info` when no store file exists (an uninstalled tool
+is not drift), `ok` when the probe reads cleanly, and `warn` carrying the
+query error when it doesn't. Agent-store checks never count toward
+`failures` — upstream drift is a warning, not a broken install.
 
 ## Dependency cadence
 
@@ -107,8 +114,9 @@ Run after upgrading the plugin/engine on a live machine:
      `~/.config/omarchy/plugins/io.github.duketopceo.dayflow/manifest.json`
      version. `engine-only install` (info) is fine; a version gap = a
      half-applied upgrade — fix before continuing.
-   - `agent stores` check (when landed): `ok`/`empty` per source;
-     `unavailable`/`drift` = store shape moved — see drift-watch above.
+   - `agent store <source>` checks: `ok` = store readable, `info` = the
+     tool isn't installed; `warn` = the extraction probe errored — the
+     store shape moved or the DB is unreadable, see drift-watch above.
 4. `systemctl --user restart dayflow-capture.service` then
    `systemctl --user status dayflow-capture.service`.
 5. Frames flowing: `dayflow status` shows captures advancing;

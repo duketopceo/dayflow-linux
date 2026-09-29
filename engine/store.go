@@ -14,7 +14,9 @@ import (
 
 // schemaVersion is the highest migration this binary knows how to apply.
 // Bump it and add an applyMigration case when the schema changes.
-const schemaVersion = 4
+// Derived-index versions (schemaVersionFTS, schemaVersionFTSCleanup) are
+// applied by applyDerivedIndexMigrations, not the linear chain in migrate.
+const schemaVersion = 5
 
 // schema is the base (v1) schema: capture and journal tables only.
 const schema = `
@@ -254,11 +256,34 @@ func applyMigration(db *sql.DB, v int) error {
 			return err
 		}
 	case 4:
-		// FTS5 search index: virtual tables + maintenance triggers +
+		// FTS5 search index: virtual table + maintenance triggers +
 		// backfill, all in this transaction — a killed mid-backfill can
-		// never leave a stamped-but-empty index.
+		// never leave a stamped-but-empty index. The backfill is idempotent
+		// (NOT IN) so a retry over an index a `search --reindex` already
+		// populated is a no-op rather than a double-indexing pass.
 		if _, err := tx.Exec(schemaV4); err != nil {
 			return err
+		}
+		if _, err := tx.Exec(ftsBackfillStmt); err != nil {
+			return err
+		}
+		// A successful build clears the failure marker inside the same
+		// commit so the backoff can't outlive the index it was throttling.
+		if _, err := tx.Exec(`DELETE FROM meta WHERE k=?`, metaFTSFailedAt); err != nil {
+			return err
+		}
+	case 5:
+		if _, err := tx.Exec(schemaV5); err != nil {
+			return err
+		}
+		// Upgrade v4-era trigger bodies in place — but only when a real FTS
+		// index is present. A degraded v4 leaves no blocks_fts (or a plain
+		// squatter table), and triggers pointing at a missing index would
+		// fail every blocks write.
+		if ftsIndexPresentTx(tx) {
+			if _, err := tx.Exec(schemaV5TriggerRefresh); err != nil {
+				return err
+			}
 		}
 	default:
 		return fmt.Errorf("no migration defined for schema version %d", v)
@@ -300,18 +325,19 @@ func migrate(db *sql.DB) error {
 		cur = 1
 	}
 	for v := cur + 1; v <= schemaVersion; v++ {
+		if v == schemaVersionFTS || v == schemaVersionFTSCleanup {
+			continue // derived-index state; applyDerivedIndexMigrations runs it
+		}
 		if err := applyMigration(db, v); err != nil {
-			if v == schemaVersionFTS {
-				// The FTS index is derived state — a failure here must not
-				// wedge openDB for every command (doctor included). Log and
-				// open without the index; search falls back to LIKE. The
-				// version stays unstamped so the next open retries.
-				logEvent(db, "fts_error", fmt.Sprintf("search index migration failed: %v", err))
-				continue
-			}
 			return fmt.Errorf("migration to schema v%d: %w", v, err)
 		}
 	}
+	// The FTS index is derived state: it applies outside the linear chain so
+	// a failure degrades to LIKE fallback instead of wedging openDB — and so
+	// its retry bookkeeping doesn't ride on MAX(version), which a later
+	// migration may already have stamped. Unapplied versions stay unstamped;
+	// a recorded failure backs the retry off for ftsRetryBackoff.
+	applyDerivedIndexMigrations(db)
 	return nil
 }
 
@@ -484,12 +510,66 @@ func blockAttempts(db *sql.DB, start time.Time) int {
 	return n
 }
 
+// resetFailedBlocks deletes failed/dead blocks so they re-summarize — and
+// deletes their block_edits rows too, otherwise an edit made on a failed
+// block would overlay whatever the retry summarizes at the same start_ts.
+// The match set is snapshotted first because the same WHERE can't re-derive
+// it once the blocks are gone, and the edits delete must run second: the
+// blocks_fts_ad trigger reads block_edits to un-index the effective OLD
+// text.
 func resetFailedBlocks(db *sql.DB) (int64, error) {
-	res, err := db.Exec(`DELETE FROM blocks WHERE status IN ('failed','dead')`)
+	return deleteBlocksWhere(db, `status IN ('failed','dead')`)
+}
+
+// deleteBlocksWhere deletes blocks rows matching pred (plus their
+// block_edits overlay rows) in one transaction. blocks go first — the
+// blocks_fts_ad trigger's unindex must still see the edits — and the
+// explicit edits delete also covers a degraded database where the index
+// (and therefore the cascade inside the trigger) doesn't exist.
+func deleteBlocksWhere(db *sql.DB, pred string, args ...any) (int64, error) {
+	tx, err := db.Begin()
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT start_ts FROM blocks WHERE `+pred, args...)
+	if err != nil {
+		return 0, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	var total int64
+	for i := 0; i < len(ids); i += 500 {
+		j := min(i+500, len(ids))
+		ph := strings.TrimSuffix(strings.Repeat("?,", j-i), ",")
+		chunk := make([]any, 0, j-i)
+		for _, id := range ids[i:j] {
+			chunk = append(chunk, id)
+		}
+		r, err := tx.Exec(`DELETE FROM blocks WHERE start_ts IN (`+ph+`)`, chunk...)
+		if err != nil {
+			return 0, err
+		}
+		if n, err := r.RowsAffected(); err == nil {
+			total += n
+		}
+		if _, err := tx.Exec(`DELETE FROM block_edits WHERE start_ts IN (`+ph+`)`, chunk...); err != nil {
+			return 0, err
+		}
+	}
+	return total, tx.Commit()
 }
 
 type Activity struct {
@@ -777,11 +857,19 @@ func usageSummaryWindow(db *sql.DB, days int, cfg Config) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
-	if calls > 0 {
-		r := byProvider["openrouter"]
-		r.add(apiRow)
+	// api_calls has no provider column — derive the bucket from the model
+	// label summarize logged: 'cli:<command|id>' means a cli vision provider
+	// (summarize.go), anything else went over OpenRouter.
+	const apiProviderExpr = `CASE WHEN model LIKE 'cli:%' THEN 'cli' ELSE 'openrouter' END`
+	apiProviders, err := usageGroup(db, fmt.Sprintf(usageGroupSelect, apiProviderExpr, "api_calls", where, apiProviderExpr), args...)
+	if err != nil {
+		return nil, err
+	}
+	for k, gr := range apiProviders {
+		r := byProvider[k]
+		r.add(gr)
 		r.finalize()
-		byProvider["openrouter"] = r
+		byProvider[k] = r
 	}
 	byModel := map[string]usageRow{}
 	byDay := map[string]usageRow{}
@@ -875,23 +963,21 @@ func framesBefore(db *sql.DB, cutoff time.Time) ([]string, error) {
 }
 
 // deleteBlocksLike removes done/failed blocks whose title or summary matches
-// the case-insensitive LIKE pattern. It returns the number of rows deleted.
+// the case-insensitive LIKE pattern — and their block_edits overlay rows,
+// whose old_value/new_value would otherwise keep the scrubbed text forever.
+// It returns the number of blocks rows deleted.
 func deleteBlocksLike(db *sql.DB, pattern string) (int64, error) {
 	like := "%" + pattern + "%"
-	r, err := db.Exec(`DELETE FROM blocks
-	  WHERE status IN ('done','failed') AND
-	        (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))`, like, like)
-	if err != nil {
-		return 0, err
-	}
-	return r.RowsAffected()
+	return deleteBlocksWhere(db, `status IN ('done','failed') AND
+	  (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))`, like, like)
 }
 
 func pruneOldEvents(db *sql.DB, cutoff time.Time) {
 	db.Exec(`DELETE FROM events WHERE ts < ?`, cutoff.Unix())
 	db.Exec(`DELETE FROM api_calls WHERE ts < ?`, cutoff.Unix())
 	// llm_calls joins the retention window (U5): the cost ledger must not
-	// silently outlive the journal rows it accounts. The 2000-row cap in
-	// trimLogTables (capture.go) still covers events/api_calls only.
+	// silently outlive the journal rows it accounts. trimLogTables
+	// (capture.go) also caps it at the newest 2000 rows alongside
+	// events/api_calls.
 	db.Exec(`DELETE FROM llm_calls WHERE ts < ?`, cutoff.Unix())
 }
