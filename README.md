@@ -14,7 +14,7 @@
 
 Dayflow captures a lightweight screenshot every 10 seconds, deduplicates unchanged frames, and every 15 minutes asks a vision model to write a plain-language summary. The result: a timeline you can skim, search, chat with, and export — plus standup drafts, agent-session recaps, and a next-day forecast.
 
-- **Local-first** — frames and the SQLite journal live in `~/.local/share/dayflow/`. Nothing leaves your machine except sampled frames sent for summarization (or a fully local model — Ollama/LM Studio supported).
+- **Local-first** — frames and the SQLite journal live in `~/.local/share/dayflow/`. Nothing leaves your machine except what you enable: sampled frames sent for summarization (or a fully local model — Ollama/LM Studio supported), small per-block descriptors for Jev classification, and — only if you opt in — scrubbed agent-transcript excerpts for session recaps (see the privacy model below).
 - **Cheap** — ~30 JPEG frames per block, `google/gemma-4-31b-it` by default (~$0.09/M tokens). Any OpenRouter vision model, OpenAI-compatible endpoint, MCP tool, or agent CLI (`cursor-agent`, `opencode`) works.
 - **Light** — one static Go binary, ~25 MB RAM, sub-1% CPU. No Electron.
 - **Controllable** — pause toggle, per-app ignore list, automatic frame deletion, retention pruning, `dayflow scrub`.
@@ -133,7 +133,7 @@ All query commands accept `--json`.
 | `notifications` | `{enabled:true, classes:{stall:true}}` | desktop notifications; `classes` gates `stall`/`paused`/`recovered`/`standup`/`goal` via `config patch` |
 | `pricing` | `{}` | model slug → USD/1M tok; `usage` renders `$` only for configured models. E.g. `dayflow config patch '{"pricing":{"google/gemma-4-31b-it":0.09}}'` |
 | `openrouter_api_key` | `""` | API key (or `OPENROUTER_API_KEY` env, or `~/.config/openrouter/keys.json`) |
-| `jev_classification` | `true` | Jev calibrated judgments — category, merge, quality, triage, forecast. Egresses small descriptors to OpenRouter's decisions endpoint; `false` = fully local |
+| `jev_classification` | `true` | Jev calibrated judgments — category, merge, quality, triage, forecast. Egresses small descriptors to OpenRouter's decisions endpoint; `false` disables Jev classification (summarization still uses your configured chat provider unless that provider is local) |
 | `agent_recaps` | `false` | opt-in: recap generation egresses a bounded, scrubbed excerpt to the chat provider + decisions endpoint |
 | `classification_model` | `typesafe/jev-1.13` | Jev model slug |
 | `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
@@ -196,9 +196,9 @@ preview.png        # marketplace preview
 ## Development
 
 ```sh
-cd engine && go test ./...       # unit + end-to-end tests with stubbed providers
-scripts/smoke-install.sh       # sandboxed install smoke (scoped dirs, stubbed systemctl)
-scripts/stress.sh              # live stress against a sandboxed data dir
+cd engine && go test ./...     # unit + end-to-end tests with stubbed providers
+cd .. && scripts/smoke-install.sh   # sandboxed install smoke (scoped dirs, stubbed systemctl)
+cd .. && scripts/stress.sh          # live stress against a sandboxed data dir
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/maintenance.md](docs/maintenance.md) (drift-watch + upgrade safety), and [docs/research/](docs/research/) for the audio-capture spike and macOS Agents-section analysis.

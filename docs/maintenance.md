@@ -78,7 +78,7 @@ through `openStoreProbe` (`engine/fixtures.go`) — `mode=ro`+`immutable`,
 hundreds of MB on Cursor's `state.vscdb`. `agentStoreDBs()` (same file)
 resolves each DB-backed source's path(s) including test overrides
 (`opencode`, `devin`, `cursor` only — Claude and Codex use JSONL
-transcript stores, so their drift is surfaced through `dayflow agents'
+transcript stores, so their drift is surfaced through `dayflow agents`
 source status, not through this SQLite probe);
 `agentStoresDetected()` (setup.go) covers presence for all five sources
 and feeds the `agents` map in `detect --json`. Each probe

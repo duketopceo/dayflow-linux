@@ -6,7 +6,7 @@
 cd engine
 go build .                 # module root is engine/
 go test -count=1 .         # full suite — stubbed providers, no network
-scripts/smoke-install.sh   # sandboxed install smoke (from repo root)
+cd .. && scripts/smoke-install.sh   # sandboxed install smoke (from repo root)
 ```
 
 ## Layout
