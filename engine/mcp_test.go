@@ -216,3 +216,32 @@ func TestMCPReadOnlyNoJudgeEgress(t *testing.T) {
 		t.Fatalf("read-only MCP egressed to the decisions endpoint %d times", hits)
 	}
 }
+
+// A mistyped argument must error, not silently coerce to a zero value and
+// answer a different question — e.g. {"date":{"nested":true}} used to
+// default get_timeline to today.
+func TestMCPArgTypeValidation(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := mcpCall(db, cfg, true, "get_timeline", map[string]any{
+		"date": map[string]any{"nested": true},
+	}); err == nil || !strings.Contains(err.Error(), `want string`) {
+		t.Fatalf("mistyped date must error, got %v", err)
+	}
+	if _, err := mcpCall(db, cfg, true, "get_events", map[string]any{
+		"limit": "lots",
+	}); err == nil || !strings.Contains(err.Error(), `want integer`) {
+		t.Fatalf("mistyped limit must error, got %v", err)
+	}
+	// Correctly-typed and unknown args still pass.
+	if _, err := mcpCall(db, cfg, true, "get_timeline", map[string]any{
+		"date": "2026-09-15", "surprise": 42,
+	}); err != nil {
+		t.Fatalf("valid args rejected: %v", err)
+	}
+}

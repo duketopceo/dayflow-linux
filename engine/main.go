@@ -16,12 +16,15 @@ import (
 
 const version = "1.4.0"
 
-// positionalArgs returns non-flag argv entries; an empty arg is not a flag
-// and is skipped (a[0] on "" panics).
+// positionalArgs drops --flags but keeps single-dash args — every real
+// flag here is long-form, so `-1` is a typo'd positional (a bad date),
+// not a flag, and must surface as an error rather than silently
+// defaulting to today. An empty arg is skipped (HasPrefix on "" is safe
+// but a bare "" is never a positional either).
 func positionalArgs(args []string) []string {
 	var out []string
 	for _, a := range args {
-		if a != "" && a[0] != '-' {
+		if a != "" && !strings.HasPrefix(a, "--") {
 			out = append(out, a)
 		}
 	}
