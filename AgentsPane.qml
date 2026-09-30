@@ -70,15 +70,18 @@ Column {
     dayflow: pane.dayflow
   }
 
-  // Legend + refresh — visible only once a briefing exists.
+  // Legend + refresh — refresh stays available whenever the pane is hosted
+  // so empty and error days can be retried; the legend itself still needs
+  // a briefing to describe.
   Item {
     width: parent.width
-    height: legendRow.implicitHeight
-    visible: pane.workstreams.length > 0
+    height: Math.max(legendRow.implicitHeight, refreshText.implicitHeight)
+    visible: pane.host !== null
 
     Row {
       id: legendRow
       spacing: Style.space(10)
+      visible: pane.workstreams.length > 0
 
       Repeater {
         model: ["inProgress", "reviewReady", "blocked", "completed"]
@@ -104,8 +107,9 @@ Column {
     }
 
     Text {
+      id: refreshText
       anchors.right: parent.right
-      anchors.verticalCenter: legendRow.verticalCenter
+      anchors.verticalCenter: parent.verticalCenter
       text: "refresh"
       textFormat: Text.PlainText
       color: refreshMa.containsMouse
@@ -413,8 +417,16 @@ Column {
                           anchors.fill: parent
                           hoverEnabled: true
                           cursorShape: Qt.PointingHandCursor
-                          onClicked: Qt.openUrlExternally(
-                            "file://" + turnRow.modelData.artifact_path)
+                          // Open the containing directory, not the file —
+                          // transcript-derived paths could point at
+                          // executables/.desktop files. Engine stores
+                          // absolute paths only.
+                          onClicked: {
+                            var p = turnRow.modelData.artifact_path || ""
+                            if (p[0] !== "/") return
+                            var dir = p.substring(0, p.lastIndexOf("/")) || "/"
+                            Qt.openUrlExternally("file://" + encodeURI(dir))
+                          }
                         }
                       }
                       Rectangle {

@@ -96,10 +96,23 @@ const (
 	maxBriefingHighlights = 3
 )
 
-// isGroundedPath requires an artifact path to actually look like a path —
-// bare substrings like "the" or "/" can't ground a model-invented artifact.
+// isGroundedPath requires an artifact path to be path-shaped: absolute or
+// home-relative (turn text is scrubbed, so $HOME paths surface as "~/").
+// Bare substrings like "the" or "/" can't ground a model-invented artifact.
 func isGroundedPath(p string) bool {
-	return len(p) >= 4 && strings.Contains(p, "/")
+	return len(p) >= 4 &&
+		(strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~/"))
+}
+
+// expandArtifactPath turns a grounded "~/x" back into a real path for
+// storage — the pane opens it as file:// without needing $HOME itself.
+func expandArtifactPath(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return home + p[1:]
+		}
+	}
+	return p
 }
 
 // briefingActiveWindow marks a session "in progress" when its last activity
@@ -126,8 +139,11 @@ func deriveStatus(sess AgentSession, turns []sessionTurn, now time.Time) string 
 }
 
 // turnText bounds one condensed turn's text for display and egress.
+// Scrubbed here — at condense time, not only on the model path — so the
+// text persisted to agent_briefings, printed by --json, and shipped in
+// backups carries no pasted secrets either.
 func turnText(s string) string {
-	return truncate(strings.Join(strings.Fields(stripCtl(s)), " "), 160)
+	return truncate(strings.Join(strings.Fields(stripCtl(scrubText(s))), " "), 160)
 }
 
 // condenseTurns folds a session's raw turns into the capped narrative:
@@ -508,7 +524,7 @@ func applyBriefingPolish(b *agentBriefing, raw string) bool {
 						continue
 					}
 					tn.ArtifactName = sanitizeRecap(pth.ArtifactName)
-					tn.ArtifactPath = path
+					tn.ArtifactPath = expandArtifactPath(path)
 					changed = true
 					break
 				}
@@ -518,22 +534,48 @@ func applyBriefingPolish(b *agentBriefing, raw string) bool {
 	return changed
 }
 
+// polishDeadline bounds the whole polish call — retries and backoff
+// included — well under the pane's 75s watchdog, so a slow provider serves
+// the deterministic briefing instead of a killed process.
+const polishDeadline = 55 * time.Second
+
 // polishBriefing runs the one batched chat call that rewrites briefing
 // prose. Gated exactly like attachRecaps: off when agent_recaps is unset,
 // DisableJudges is set, or the chat provider is a minutes-scale CLI.
-func polishBriefing(db *sql.DB, cfg Config, b *agentBriefing) {
+// polishKey records the attempt in meta so a failed polish for a given
+// day+fingerprint isn't retried on every view.
+func polishBriefing(db *sql.DB, cfg Config, b *agentBriefing, polishKey string) {
 	if db == nil {
 		return
 	}
 	if _, ok := chatEgressOK(cfg); !ok {
 		return
 	}
+	if polishKey != "" {
+		db.Exec(`INSERT INTO meta(k, v) VALUES(?, '1') ON CONFLICT(k) DO NOTHING`, polishKey)
+	}
 	messages := []orMessage{
 		{Role: "system", Content: []orContent{{Type: "text", Text: briefingPrompt}}},
 		{Role: "user", Content: []orContent{{Type: "text", Text: briefingModelPayload(b)}}},
 	}
-	text, _, _, err := callChatModel(db, cfg, "agent_briefing", messages)
-	if err != nil || strings.TrimSpace(text) == "" {
+	type result struct {
+		text string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		text, _, _, err := callChatModel(db, cfg, "agent_briefing", messages)
+		done <- result{text, err}
+	}()
+	var text string
+	select {
+	case r := <-done:
+		if r.err != nil || strings.TrimSpace(r.text) == "" {
+			return
+		}
+		text = r.text
+	case <-time.After(polishDeadline):
+		debugf(cfg, "agent briefing polish exceeded %s — serving fallback", polishDeadline)
 		return
 	}
 	// The model may wrap JSON in fences — strip to the outermost braces.
@@ -603,9 +645,13 @@ func agentBriefingFor(db *sql.DB, cfg Config, d time.Time, refresh bool) agentBr
 			// Recaps came on after a fallback was cached — polish the
 			// cached skeleton directly; same fingerprint means the
 			// deterministic input is unchanged, so a rebuild would
-			// produce identical turns.
-			if cfg.AgentRecaps && !cfg.DisableJudges {
-				polishBriefing(db, cfg, b)
+			// produce identical turns. The meta stamp records the attempt
+			// so a failed polish isn't retried on every view.
+			polishKey := "briefing_polish:" + day + ":" + fp
+			var tried string
+			db.QueryRow(`SELECT v FROM meta WHERE k=?`, polishKey).Scan(&tried)
+			if cfg.AgentRecaps && !cfg.DisableJudges && tried != "1" {
+				polishBriefing(db, cfg, b, polishKey)
 				storeBriefing(db, fp, *b)
 			}
 			return *b
@@ -614,7 +660,7 @@ func agentBriefingFor(db *sql.DB, cfg Config, d time.Time, refresh bool) agentBr
 	b := buildBriefing(d, sessions, statuses, srcs)
 	b.RecapsEnabled = cfg.AgentRecaps
 	if len(sessions) > 0 {
-		polishBriefing(db, cfg, &b)
+		polishBriefing(db, cfg, &b, "")
 	}
 	if db != nil && fp != "" {
 		storeBriefing(db, fp, b)
