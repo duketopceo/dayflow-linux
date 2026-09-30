@@ -1027,10 +1027,19 @@ func runDaemon(cfg Config) error {
 			capture()
 		case <-retentionTick.C:
 			runRetention(db, cfg)
-			if n, err := ingestAgentChats(db); err != nil {
-				debugf(cfg, "agent chat ingest failed: %v", err)
-			} else if n > 0 {
-				debugf(cfg, "agent chat ingest: %d turns", n)
+			// Ingest off-loop: a decode pass can take minutes, and a
+			// synchronous call here would drop capture ticks (missed
+			// frames + false capture-stall heartbeats). ingestMu shared
+			// with the lazy search path so passes never stack.
+			if ingestMu.TryLock() {
+				go func() {
+					defer ingestMu.Unlock()
+					if n, err := ingestAgentChats(db); err != nil {
+						debugf(cfg, "agent chat ingest failed: %v", err)
+					} else if n > 0 {
+						debugf(cfg, "agent chat ingest: %d turns", n)
+					}
+				}()
 			}
 			debugf(cfg, "retention run complete; data dir %s", humanBytes(dataDirSize()))
 		case <-lockTick.C:

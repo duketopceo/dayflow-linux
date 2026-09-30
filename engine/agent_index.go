@@ -24,9 +24,9 @@ import (
 //     so the index carries no secrets either.
 //   - agent_ingest is the dedup tracker — sha(source|session|turn|ts) —
 //     so re-running a day costs a scan but zero writes.
-//   - meta agent_ingest_day is the watermark: the oldest unscanned day.
-//     Each pass covers watermark..today (first run backfills the discovery
-//     window); today and yesterday always re-scan since sessions grow.
+//   - meta agent_ingest_day is the watermark: the newest scanned day.
+//     Each pass covers watermark..today (first run backfills ~30 days);
+//     the watermark day always re-scans since sessions grow in place.
 //   - ensureAgentIndex runs lazily like the derived FTS migrations —
 //     a failure degrades search to "no index" rather than wedging.
 
@@ -35,7 +35,7 @@ USING fts5(text, source UNINDEXED, session UNINDEXED, project UNINDEXED,
            role UNINDEXED, ts UNINDEXED)`
 
 const agentIngestDDL = `CREATE TABLE IF NOT EXISTS agent_ingest (
-  k TEXT PRIMARY KEY
+  k TEXT PRIMARY KEY, sess TEXT NOT NULL
 )`
 
 // agent_sess_fp remembers each indexed session's adapter fingerprint so a
@@ -49,7 +49,8 @@ const agentSessFPDDL = `CREATE TABLE IF NOT EXISTS agent_sess_fp (
 // the adapters' own discovery depth.
 const agentIngestBackfillDays = 30
 
-// metaAgentIngestDay marks the oldest day not yet fully scanned.
+// metaAgentIngestDay records the newest day fully scanned; the next pass
+// resumes from it (re-scanning catches sessions still in flight).
 const metaAgentIngestDay = "agent_ingest_day"
 
 // ingestMu serializes lazy ingest passes — a second search while one runs
@@ -63,8 +64,64 @@ func ensureAgentIndex(db *sql.DB) error {
 	if _, err := db.Exec(agentIngestDDL); err != nil {
 		return err
 	}
+	// The dedup table gained a sess column (per-session delete on
+	// fingerprint change); a pre-column table is derived state — drop and
+	// rebuild rather than migrate.
+	if !tableHasColumn(db, "agent_ingest", "sess") {
+		if _, err := db.Exec(`DROP TABLE agent_ingest`); err != nil {
+			return err
+		}
+		if _, err := db.Exec(agentIngestDDL); err != nil {
+			return err
+		}
+		db.Exec(`DELETE FROM agent_msgs_fts`)
+		db.Exec(`DELETE FROM agent_sess_fp`)
+		metaSet(db, metaAgentIngestDay, "")
+		return nil
+	}
 	_, err := db.Exec(agentSessFPDDL)
 	return err
+}
+
+// agentIndexPresent reports whether the FTS table exists — on a read-only
+// handle this lets search degrade to empty hits instead of failing the
+// CREATE DDL.
+func agentIndexPresent(db *sql.DB) bool {
+	var name string
+	return db.QueryRow(`SELECT name FROM sqlite_master
+	  WHERE type='table' AND name='agent_msgs_fts'`).Scan(&name) == nil
+}
+
+// dbReadOnly reports whether the connection is a query_only (mode=ro)
+// handle — ingest and DDL are skipped rather than noisily failing.
+func dbReadOnly(db *sql.DB) bool {
+	var v int
+	return db.QueryRow(`PRAGMA query_only`).Scan(&v) == nil && v == 1
+}
+
+func tableHasColumn(db *sql.DB, table, col string) bool {
+	var name string
+	return db.QueryRow(`SELECT name FROM pragma_table_info(?)
+	  WHERE name=?`, table, col).Scan(&name) == nil
+}
+
+// resetAgentIndex wipes the derived agent index so `ingest --reindex`
+// rebuilds from scratch — repair path for corruption or bulk removal.
+func resetAgentIndex(db *sql.DB) error {
+	if err := ensureAgentIndex(db); err != nil {
+		return err
+	}
+	for _, q := range []string{
+		`DELETE FROM agent_msgs_fts`,
+		`DELETE FROM agent_ingest`,
+		`DELETE FROM agent_sess_fp`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			return err
+		}
+	}
+	metaSet(db, metaAgentIngestDay, "")
+	return nil
 }
 
 // ingestKey is one turn's stable dedup identity.
@@ -87,7 +144,9 @@ func ingestAgentChats(db *sql.DB) (int, error) {
 
 	watermark := today.AddDate(0, 0, -agentIngestBackfillDays)
 	if v := metaGet(db, metaAgentIngestDay); v != "" {
-		if d, err := time.ParseInLocation("2006-01-02", v, time.Local); err == nil && d.Before(today) {
+		// Resume from the last fully-scanned day (re-scanning it catches
+		// sessions that were still in flight); never scan the future.
+		if d, err := time.ParseInLocation("2006-01-02", v, time.Local); err == nil && !d.After(today) {
 			watermark = d
 		}
 	}
@@ -125,13 +184,20 @@ func ingestAgentDay(db *sql.DB, d time.Time) (int, error) {
 		sessKey := ingestKey(sess.Source, sess.File, -1, 0)
 		var sessFP string
 		fpOK := false
+		fpChanged := false
 		if fp, ok := src.Fingerprint(sess); ok {
 			sessFP = fmt.Sprintf("%d:%d", fp.Mtime, fp.Size)
 			fpOK = true
 			var prev string
-			if db.QueryRow(`SELECT fp FROM agent_sess_fp WHERE k=?`, sessKey).Scan(&prev) == nil && prev == sessFP {
+			prevErr := db.QueryRow(`SELECT fp FROM agent_sess_fp WHERE k=?`, sessKey).Scan(&prev)
+			if prevErr == nil && prev == sessFP {
 				continue
 			}
+			// Fingerprint moved (or is new): an edited session's old
+			// turns are deleted before re-insert so stale text can't
+			// linger in the index (fp change on a previously-ingested
+			// session only — a new session has nothing to delete).
+			fpChanged = prevErr == nil
 		}
 		// Decode + normalize first, write after — keeps the tx short.
 		var pending []agentIndexRow
@@ -146,22 +212,40 @@ func ingestAgentDay(db *sql.DB, d time.Time) (int, error) {
 			// stays constant. Scrub still runs before storage so the
 			// index retains no pasted secrets.
 			text := truncate(strings.Join(strings.Fields(
-				stripCtl(scrubText(truncate(t.text, 8000)))), " "), 4000)
+				stripCtl(scrubText(boundForScrub(t.text, 8000)))), " "), 4000)
 			if text == "" {
 				continue
 			}
 			pending = append(pending, agentIndexRow{ingestKey(sess.Source, sess.File, i, t.unixTs), text, role, t.unixTs})
 		}
-		if len(pending) == 0 && !fpOK {
+		// No usable turns and no fingerprint to stamp: nothing to record.
+		// An empty decode deliberately gets NO fp row — Turns returns nil
+		// on transient read failure as well as genuine emptiness, and
+		// stamping would seal a failed decode until the file next grows.
+		if len(pending) == 0 {
 			continue
 		}
-		n, err := writeAgentSessionRows(db, pending, sessKey, sessFP, fpOK, sess)
+		n, err := writeAgentSessionRows(db, pending, sessKey, sessFP, fpOK, fpChanged, sess)
 		if err != nil {
 			return inserted, err
 		}
 		inserted += n
 	}
 	return inserted, nil
+}
+
+// boundForScrub caps text before the scrub regexes run. When the cap cuts
+// mid-token the trailing fragment is dropped — a severed credential prefix
+// would neither match the patterns nor be useful content.
+func boundForScrub(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := truncate(s, n)
+	if i := strings.LastIndexAny(strings.TrimRight(cut, "."), " \t\n"); i > 0 {
+		cut = cut[:i]
+	}
+	return cut
 }
 
 // agentIndexRow is one normalized turn pending insertion.
@@ -173,7 +257,7 @@ type agentIndexRow struct {
 // writeAgentSessionRows commits one session's normalized turns plus its
 // fingerprint watermark in a single short transaction, retried once on a
 // busy snapshot from a concurrent daemon write.
-func writeAgentSessionRows(db *sql.DB, pending []agentIndexRow, sessKey, sessFP string, fpOK bool, sess AgentSession) (int, error) {
+func writeAgentSessionRows(db *sql.DB, pending []agentIndexRow, sessKey, sessFP string, fpOK, fpChanged bool, sess AgentSession) (int, error) {
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		inserted, err := func() (int, error) {
@@ -182,9 +266,20 @@ func writeAgentSessionRows(db *sql.DB, pending []agentIndexRow, sessKey, sessFP 
 				return 0, err
 			}
 			defer tx.Rollback()
+			if fpChanged {
+				// Session was edited in place: drop its previously
+				// indexed turns and dedup keys so new text fully
+				// replaces old.
+				if _, err := tx.Exec(`DELETE FROM agent_msgs_fts WHERE session=?`, sess.File); err != nil {
+					return 0, err
+				}
+				if _, err := tx.Exec(`DELETE FROM agent_ingest WHERE sess=?`, sessKey); err != nil {
+					return 0, err
+				}
+			}
 			inserted := 0
 			for _, r := range pending {
-				res, err := tx.Exec(`INSERT OR IGNORE INTO agent_ingest(k) VALUES(?)`, r.key)
+				res, err := tx.Exec(`INSERT OR IGNORE INTO agent_ingest(k, sess) VALUES(?,?)`, r.key, sessKey)
 				if err != nil {
 					return inserted, err
 				}
@@ -233,7 +328,9 @@ const (
 )
 
 // ftsQuery turns free text into a safe FTS5 expression: each word becomes
-// a double-quoted term so MATCH syntax in user input can't break the parse.
+// a double-quoted term (so MATCH syntax in user input can't break the
+// parse), joined with explicit AND — adjacent quoted strings would parse
+// as a phrase, requiring word adjacency the user never asked for.
 func ftsQuery(q string) string {
 	var terms []string
 	for _, w := range strings.Fields(q) {
@@ -242,7 +339,7 @@ func ftsQuery(q string) string {
 			terms = append(terms, `"`+w+`"`)
 		}
 	}
-	return strings.Join(terms, " ")
+	return strings.Join(terms, ` AND `)
 }
 
 // searchAgentSessions answers "what did my agents do/say" queries: FTS
@@ -257,14 +354,21 @@ func searchAgentSessions(db *sql.DB, cfg Config, query string) ([]agentSearchHit
 	if q == "" {
 		return nil, fmt.Errorf("searchAgentSessions requires a query")
 	}
-	if err := ensureAgentIndex(db); err != nil {
+	// Read-only handles (MCP --read-only) never create the index or
+	// ingest — absent tables degrade to empty hits, matching the
+	// derived-index "no index" posture rather than erroring.
+	if dbReadOnly(db) {
+		if !agentIndexPresent(db) {
+			return nil, nil
+		}
+	} else if err := ensureAgentIndex(db); err != nil {
 		return nil, err
 	}
 	// Lazy freshness: a stale watermark kicks off a background ingest and
 	// search proceeds on what exists — a synchronous refresh would block
 	// a chat turn for minutes while transcripts decode. TryLock keeps
 	// concurrent searchers from piling up ingest passes.
-	if v := metaGet(db, metaAgentIngestDay); v != todayStr(time.Now()) && ingestMu.TryLock() {
+	if v := metaGet(db, metaAgentIngestDay); v != todayStr(time.Now()) && !dbReadOnly(db) && ingestMu.TryLock() {
 		go func() {
 			defer ingestMu.Unlock()
 			if _, err := ingestAgentChats(db); err != nil {
@@ -287,7 +391,10 @@ func searchAgentSessions(db *sql.DB, cfg Config, query string) ([]agentSearchHit
 		if err := rows.Scan(&h.Session, &h.Source, &h.Project, &h.Role, &h.Ts, &h.Snippet); err != nil {
 			return hits, err
 		}
+		// Citation fields are raw session paths/project names — scrub
+		// before they can reach CLI output or a provider request.
 		if seen[h.Session] {
+			h.Session, h.Project = scrubText(h.Session), scrubText(h.Project)
 			hits = append(hits, h)
 			continue
 		}
@@ -295,6 +402,7 @@ func searchAgentSessions(db *sql.DB, cfg Config, query string) ([]agentSearchHit
 			break
 		}
 		seen[h.Session] = true
+		h.Session, h.Project = scrubText(h.Session), scrubText(h.Project)
 		hits = append(hits, h)
 	}
 	return hits, rows.Err()

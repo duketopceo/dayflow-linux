@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,6 +71,86 @@ func TestAgentIndexIngestSearchDedup(t *testing.T) {
 	// FTS-syntax-shaped user input must not break the query.
 	if _, err := searchAgentSessions(db, cfg, `what's "unclosed`); err != nil {
 		t.Fatalf("query with quote should be sanitized: %v", err)
+	}
+}
+
+// A read-only (mode=ro, query_only) handle must degrade to empty hits
+// when the index was never built — never error on the CREATE DDL.
+func TestAgentIndexReadOnlyDegrades(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	ro, err := openDBReadOnly()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if !dbReadOnly(ro) {
+		t.Fatal("expected query_only handle")
+	}
+	hits, err := searchAgentSessions(ro, cfg, "anything")
+	if err != nil {
+		t.Fatalf("read-only search must degrade, got: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("unindexed read-only db must return no hits: %+v", hits)
+	}
+}
+
+// An in-place session rewrite (fingerprint change) replaces the indexed
+// turns — stale text must not linger.
+func TestAgentIndexSessionEditReplaces(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	now := time.Now()
+	dbPath := filepath.Join(dir, "opencode.db")
+	writeOpencodeDB(t, dbPath, ocFixtureSession{
+		id: "ses_e", title: "edit me", dir: "/home/x/dayflow",
+		msgs: []ocFixtureMsg{{id: "m1", typ: "user", seq: 1, text: "original wording here",
+			created: ms(now), updated: ms(now)}},
+	})
+	if _, err := ingestAgentChats(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rewrite the session in place — new text, new fingerprint.
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	writeOpencodeDB(t, dbPath, ocFixtureSession{
+		id: "ses_e", title: "edit me", dir: "/home/x/dayflow",
+		msgs: []ocFixtureMsg{{id: "m1", typ: "user", seq: 1, text: "completely replaced wording",
+			created: ms(now), updated: ms(now.Add(time.Minute))}},
+	})
+	if _, err := ingestAgentChats(db); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := searchAgentSessions(db, cfg, "original wording")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hits {
+		if h.Source == "opencode" {
+			t.Fatalf("stale turn survived session edit: %+v", h)
+		}
+	}
+	hits, err = searchAgentSessions(db, cfg, "replaced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("edited session's new text was not indexed")
 	}
 }
 

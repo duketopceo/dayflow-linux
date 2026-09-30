@@ -147,7 +147,7 @@ func turnText(s string) string {
 	// data URI) would otherwise send the secret regexes' backtracker
 	// spinning for minutes on a single turn.
 	return truncate(strings.Join(strings.Fields(
-		stripCtl(scrubText(truncate(s, 2000)))), " "), 160)
+		stripCtl(scrubText(boundForScrub(s, 2000)))), " "), 160)
 }
 
 // condenseTurns folds a session's raw turns into the capped narrative:

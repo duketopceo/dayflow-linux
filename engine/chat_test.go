@@ -178,6 +178,50 @@ func TestChatWithJournalFetchTimeline(t *testing.T) {
 	}
 }
 
+// A persisted "tool" message must replay to the provider as user text —
+// role:"tool" without a tool_call_id is rejected by OpenAI-spec providers.
+func TestChatToolResultReplaysAsUser(t *testing.T) {
+	srv, bodies := chatTestServer([]string{
+		`{"tool":"getStandup"}`,
+		"Here is your standup.",
+		"A follow-up answer.",
+	})
+	defer srv.Close()
+	cfg := chatTestConfig(t, srv)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	res, err := chatWithJournal(db, cfg, 0, "standup please")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chatWithJournal(db, cfg, res.ConversationID, "follow up"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*bodies) < 3 {
+		t.Fatalf("expected ≥3 provider calls, got %d", len(*bodies))
+	}
+	var req orRequest
+	if err := json.Unmarshal([]byte((*bodies)[2]), &req); err != nil {
+		t.Fatal(err)
+	}
+	foundToolResult := false
+	for _, m := range req.Messages {
+		if m.Role == "tool" {
+			t.Fatalf("tool-role message replayed to provider: %s", (*bodies)[2])
+		}
+		if m.Role == "user" && strings.Contains(m.Content[0].Text, "Tool result") {
+			foundToolResult = true
+		}
+	}
+	if !foundToolResult {
+		t.Fatalf("persisted tool result missing from replay: %s", (*bodies)[2])
+	}
+}
+
 func TestChatSearchJournalTool(t *testing.T) {
 	srv, _ := chatTestServer([]string{
 		`{"tool":"searchJournal","query":"Refactor"}`,

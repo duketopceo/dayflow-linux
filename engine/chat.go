@@ -195,11 +195,19 @@ func buildChatMessages(cfg Config, conv Conversation, userMessage string) []orMe
 			continue
 		}
 		text := m.Content
+		role := m.Role
 		if m.Role == "assistant" && m.ToolCalls != "" {
 			text = m.ToolCalls
 		}
+		if m.Role == "tool" {
+			// Persisted tool results replay as user text — role:"tool"
+			// without a tool_call_id is rejected by providers
+			// implementing the OpenAI tool spec.
+			role = "user"
+			text = "Tool result:\n" + text
+		}
 		messages = append(messages, orMessage{
-			Role:    m.Role,
+			Role:    role,
 			Content: []orContent{{Type: "text", Text: text}},
 		})
 	}
