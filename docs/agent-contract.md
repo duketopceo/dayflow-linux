@@ -172,17 +172,21 @@ Notes:
   `blocked`. With `agent_recaps` off (or no provider configured) the
   payload is fully populated by the deterministic fallback — `mode` is
   `"fallback"` and no transcript content leaves the machine; with recaps
-  on, one bounded scrubbed skeleton (per-thread condensed turns, ids and
-  status signals only) goes to the configured provider and rewrites prose
-  fields (`name`/`summary`/`bullets`/`title`/`latest_outcome`, turn
-  `highlight`, artifact picks) — ids, ordering, and statuses are
-  engine-owned and survive malformed model output. Results are cached in
-  `agent_briefings` keyed on day + content fingerprint; a cached
-  `"fallback"` briefing is regenerated when consent is enabled later.
-  `--refresh` bypasses the cache. An empty day returns `workstreams: []`
-  with `sources` still populated. `artifact_path`/`artifact_name` are
-  accepted from the model only when the path literally appears in the
-  source turn text — the model cannot fabricate files.
+  on, one bounded scrubbed skeleton goes to the configured provider —
+  containing the day, workstream `id`+`name`, and per-thread `id`,
+  `source`, `status`, `title` (transcript-derived first message), and
+  condensed turn `role`+`text`. `session_path` and absolute project paths
+  are never sent. The model rewrites prose fields (`name`/`summary`/
+  `bullets`/`title`/`latest_outcome`, turn `highlight`, artifact picks) —
+  ids, ordering, and statuses are engine-owned and survive malformed model
+  output. Results are cached in `agent_briefings` keyed on day + content
+  fingerprint; a cached `"fallback"` briefing is regenerated when consent
+  is enabled later, and a cached `inProgress` status re-derives against
+  the clock on every serve. `--refresh` bypasses the cache. An empty day
+  returns `workstreams: []` with `sources` still populated.
+  `artifact_path`/`artifact_name` are accepted from the model only when
+  the path is path-shaped and literally appears in the source turn text —
+  the model cannot fabricate files.
 - `dayflow goal --json`: `streak` = `{current, best, total}` consecutive-day
   completion counts. Viewed day pending → `current` counts back from
   yesterday; any past day without a completed goal breaks a run.

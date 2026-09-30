@@ -180,8 +180,13 @@ func TestApplyBriefingPolish(t *testing.T) {
 	if th.Turns[1].Highlight != "" {
 		t.Fatal("bogus highlight kind must be rejected")
 	}
-	if th.Turns[1].ArtifactPath != "/tmp/out.md" {
-		t.Fatalf("grounded artifact not applied: %+v", th.Turns[1])
+	// The artifact attaches to the turn that mentions the path (turn 0),
+	// not blindly to the last turn.
+	if th.Turns[0].ArtifactPath != "/tmp/out.md" || th.Turns[0].ArtifactName != "Report" {
+		t.Fatalf("grounded artifact not applied to mentioning turn: %+v", th.Turns[0])
+	}
+	if th.Turns[1].ArtifactPath != "" {
+		t.Fatal("artifact must not land on a turn that didn't mention it")
 	}
 	// blocked thread: review_ready can't downgrade/upgrade it (KTD3).
 	if ws.Threads[1].Status != statusBlocked {
@@ -206,10 +211,71 @@ func TestApplyBriefingPolishArtifactGuard(t *testing.T) {
 	if b.Workstreams[0].Threads[0].Turns[0].ArtifactPath != "" {
 		t.Fatal("invented artifact path must be dropped")
 	}
+	// Bare substrings can't ground a path even when present in turn text.
+	applyBriefingPolish(&b, `{"workstreams":[{"id":"w","threads":[{"id":"t",
+	  "artifact_name":"X","artifact_path":"all"}]}]}`)
+	if b.Workstreams[0].Threads[0].Turns[0].ArtifactPath != "" {
+		t.Fatal("non-path substring must not ground an artifact")
+	}
 	// Malformed JSON sinks nothing.
 	applyBriefingPolish(&b, `{"workstreams":[{broken`)
 	if b.Workstreams[0].Threads[0].Status != statusCompleted {
 		t.Fatal("malformed polish must not mutate")
+	}
+}
+
+// A valid model response that changes nothing must report changed=false —
+// mode stays "fallback" instead of misreporting deterministic output as
+// model-authored.
+func TestApplyBriefingPolishNoop(t *testing.T) {
+	b := agentBriefing{Workstreams: []briefingWorkstream{{
+		ID: "w", Name: "proj", Summary: "1 session",
+		Threads: []briefingThread{
+			{ID: "t", Title: "ask", Status: statusCompleted,
+				Turns: []briefingTurn{{Role: "user", Text: "hi"}}},
+		},
+	}}}
+	if applyBriefingPolish(&b, `{"workstreams":[{"id":"w","name":"proj",
+	  "summary":"1 session","threads":[{"id":"t","title":"ask"}]}]}`) {
+		t.Fatal("echo response must not count as a change")
+	}
+	if applyBriefingPolish(&b, `{"workstreams":[{"id":"ws-a"}]}`) {
+		t.Fatal("response for unknown ids must not count as a change")
+	}
+	if applyBriefingPolish(&b, `{"workstreams":[]}`) {
+		t.Fatal("empty response must not count as a change")
+	}
+}
+
+// Cached inProgress is wall-clock state — re-derive on serve so a session
+// that went quiet isn't replayed as live forever.
+func TestRefreshStaleStatuses(t *testing.T) {
+	now := time.Now()
+	b := agentBriefing{Workstreams: []briefingWorkstream{{
+		ID: "w", Name: "w", Threads: []briefingThread{
+			{ID: "stale-blocked", Status: statusInProgress, EndedAt: now.Add(-time.Hour).Unix(),
+				Turns: []briefingTurn{{Role: "agent", Text: "ok"}, {Role: "user", Text: "more?"}}},
+			{ID: "stale-done", Status: statusInProgress, EndedAt: now.Add(-time.Hour).Unix(),
+				Turns: []briefingTurn{{Role: "agent", Text: "shipped"}}},
+			{ID: "live", Status: statusInProgress, EndedAt: now.Add(-time.Minute).Unix(),
+				Turns: []briefingTurn{{Role: "agent", Text: "working"}}},
+			{ID: "done", Status: statusCompleted, EndedAt: now.Add(-time.Hour).Unix(),
+				Turns: []briefingTurn{{Role: "agent", Text: "x"}}},
+		},
+	}}}
+	refreshStaleStatuses(&b, now)
+	ths := b.Workstreams[0].Threads
+	if ths[0].Status != statusBlocked {
+		t.Fatalf("stale inProgress ending on user ask → blocked, got %s", ths[0].Status)
+	}
+	if ths[1].Status != statusCompleted {
+		t.Fatalf("stale inProgress ending on agent → completed, got %s", ths[1].Status)
+	}
+	if ths[2].Status != statusInProgress {
+		t.Fatal("still-live thread must keep inProgress")
+	}
+	if ths[3].Status != statusCompleted {
+		t.Fatal("non-inProgress status untouched")
 	}
 }
 
@@ -339,5 +405,69 @@ func TestBriefingModelPayloadScrubbed(t *testing.T) {
 	var js map[string]any
 	if json.Unmarshal([]byte(p), &js) != nil {
 		t.Fatalf("payload must be valid JSON: %v", p)
+	}
+}
+
+// Empty day: workstreams marshals as [] (never null), all five sources
+// still report status, and nothing is cached that could go stale.
+func TestBriefingEmptyDay(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	setAgentDirs(t, t.TempDir())
+	b := agentBriefingFor(db, cfg, time.Date(2026, 9, 20, 0, 0, 0, 0, time.Local), false)
+	if b.Workstreams == nil || len(b.Workstreams) != 0 {
+		t.Fatalf("empty day must give empty non-nil workstreams: %+v", b.Workstreams)
+	}
+	if len(b.Sources) == 0 {
+		t.Fatal("empty day must still report source statuses")
+	}
+	raw, _ := json.Marshal(b)
+	if !strings.Contains(string(raw), `"workstreams":[]`) {
+		t.Fatalf("workstreams must serialize as []: %s", raw)
+	}
+	// Second call must not resurrect anything stale.
+	b2 := agentBriefingFor(db, cfg, time.Date(2026, 9, 20, 0, 0, 0, 0, time.Local), false)
+	if len(b2.Workstreams) != 0 {
+		t.Fatal("empty-day cache poisoned")
+	}
+}
+
+// DisableJudges is the read-only/no-egress flag — with recaps on it must
+// still produce a fallback briefing with zero provider calls.
+func TestBriefingDisableJudgesNoEgress(t *testing.T) {
+	cfg := testEnv(t)
+	cfg.AgentRecaps = true
+	cfg.DisableJudges = true
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 20, 0, 0, 0, 0, time.Local)
+	writeOpencodeDB(t, filepath.Join(dir, "opencode.db"), ocFixtureSession{
+		id: "ses_1", title: "Work", dir: "/home/x/proj",
+		msgs: []ocFixtureMsg{
+			{id: "m1", typ: "user", seq: 1, text: "do it",
+				created: ms(day.Add(10 * time.Hour)), updated: ms(day.Add(10 * time.Hour))},
+			{id: "m2", typ: "assistant", seq: 2, text: "done",
+				created: ms(day.Add(10*time.Hour + time.Minute)), updated: ms(day.Add(10*time.Hour + time.Minute))},
+		},
+	})
+	b := agentBriefingFor(db, cfg, day, false)
+	if b.Mode != modeFallback {
+		t.Fatalf("DisableJudges must force fallback, got %s", b.Mode)
+	}
+	var n int
+	db.QueryRow(`SELECT COUNT(1) FROM llm_calls WHERE task='agent_briefing'`).Scan(&n)
+	if n != 0 {
+		t.Fatal("DisableJudges must not call the provider")
 	}
 }

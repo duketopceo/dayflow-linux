@@ -93,6 +93,9 @@ FloatingWindow {
         root.agentsLoading = false
         try {
           var d = JSON.parse(text)
+          // Day changed mid-run — this payload is for the old day; the
+          // queued reload (drained on exit) owns state now.
+          if (root.dayflow && d.day !== root.dayflow.viewDateStr()) return
           root.agentBriefing = d
           root.agentSources = d.sources || []
           root.agentRecapsEnabled = d.recaps_enabled !== false
@@ -108,7 +111,7 @@ FloatingWindow {
       if (agentsProc.runId !== root.agentsRun) {
         // A previous process's exit — never touch the new run's state, but
         // still service the queued reload it was waiting on.
-        root.agentsDrainPending()
+        Qt.callLater(root.agentsDrainPending)
         return
       }
       root.agentsLoading = false
@@ -117,18 +120,30 @@ FloatingWindow {
         root.agentSources = []
         root.agentsError = "agent briefing failed"
       }
-      root.agentsDrainPending()
+      // Defer the drain until every callback for this dead run has fired —
+      // restarting here would restamp runId and let the old run's remaining
+      // callbacks (exited/runningChanged/streamFinished) misattribute to it.
+      Qt.callLater(root.agentsDrainPending)
     }
     // FailedToStart emits neither exited nor streamFinished — clear the
     // flag and drain the queue so the bar never sticks.
     onRunningChanged: {
       if (!agentsProc.running) {
         if (agentsProc.runId !== root.agentsRun) {
-          root.agentsDrainPending()
+          Qt.callLater(root.agentsDrainPending)
           return
         }
         root.agentsLoading = false
-        root.agentsDrainPending()
+        // If neither exited nor streamFinished ran (FailedToStart — e.g.
+        // dayflow missing from PATH), no callback sets an error: check
+        // after they settle so the pane reports failure, not blank.
+        Qt.callLater(function() {
+          if (agentsProc.runId === root.agentsRun && !agentsProc.running
+              && root.agentBriefing === null && root.agentsError === ""
+              && root.agentsPending === "")
+            root.agentsError = "agent briefing failed"
+        })
+        Qt.callLater(root.agentsDrainPending)
       }
     }
   }
@@ -145,7 +160,7 @@ FloatingWindow {
     running: agentsProc.running
     repeat: false
     onTriggered: {
-      root.dayflow.uilog("agents watchdog: killing hung agentsProc")
+      if (root.dayflow) root.dayflow.uilog("agents watchdog: killing hung agentsProc")
       root.agentsPending = ""
       root.agentsTimedOut = true
       agentsProc.running = false
@@ -472,6 +487,14 @@ FloatingWindow {
       root.tlPlaying = false
       root.agentBriefing = null
       root.agentSources = []
+      root.agentsError = ""
+      // Invalidate any in-flight briefing run — its payload is for the old
+      // day. Queue a reload so fresh data is ready whichever section the
+      // user lands on; the run's exit drains this.
+      if (root.agentsLoading) {
+        root.agentsRun = root.agentsRun + 1
+        if (root.agentsPending !== "refresh") root.agentsPending = "load"
+      }
       if (root.section === "timelapse") root.tlLoad()
       if (root.section === "agents") root.agentsLoad(false)
     }

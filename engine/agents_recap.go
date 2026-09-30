@@ -189,9 +189,20 @@ func excerptFromTurns(turns []sessionTurn) string {
 }
 
 // isEnvelopeText filters tool-injected envelopes out of excerpt text.
+// Covers Claude's injected user rows (slash-command echoes, system
+// reminders, caveat preambles, local-command stdout) so a session that
+// ends on one doesn't report "blocked — unanswered user ask".
 func isEnvelopeText(text string) bool {
-	return strings.HasPrefix(text, "<environment_context>") ||
-		strings.HasPrefix(text, "<user_instructions>")
+	for _, p := range []string{
+		"<environment_context>", "<user_instructions>",
+		"<command-name>", "<local-command-", "<system-reminder>",
+		"Caveat:",
+	} {
+		if strings.HasPrefix(text, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildExcerpt renders the bounded excerpt layout shared by file-backed and

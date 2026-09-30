@@ -192,7 +192,9 @@ Column {
 
   Flickable {
     width: parent.width
-    height: parent.height - Style.space(110)
+    // Size from space actually consumed above (nav, legend, error, notes)
+    // rather than a constant — optional rows vary in count and wrap.
+    height: Math.max(0, parent.height - y)
     contentHeight: wsCol.implicitHeight
     clip: true
 
@@ -280,6 +282,7 @@ Column {
                       height: Style.space(18)
                       width: badgeText.implicitWidth + Style.space(12)
                       radius: Style.cornerRadius
+                      anchors.verticalCenter: parent.verticalCenter
                       color: threadCard.modelData.source === "claude"
                         ? Qt.rgba(0.85, 0.55, 0.25, 0.2)
                         : Qt.rgba(0.30, 0.65, 0.85, 0.2)
@@ -384,9 +387,8 @@ Column {
                       Text {
                         width: parent.width - Style.space(34)
                              - (hlPill.visible ? hlPill.width + Style.space(6) : 0)
-                        text: turnRow.modelData.text +
-                              (turnRow.modelData.artifact_name
-                                ? "  ·  " + turnRow.modelData.artifact_name : "")
+                             - (artifactLink.visible ? artifactLink.width + Style.space(6) : 0)
+                        text: turnRow.modelData.text
                         textFormat: Text.PlainText
                         wrapMode: Text.WordWrap
                         color: turnRow.modelData.role === "user"
@@ -395,9 +397,29 @@ Column {
                         font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
                         font.pixelSize: Style.font.caption
                       }
+                      Text {
+                        id: artifactLink
+                        visible: !!turnRow.modelData.artifact_path
+                        anchors.top: parent.top
+                        text: turnRow.modelData.artifact_name
+                              || turnRow.modelData.artifact_path || ""
+                        textFormat: Text.PlainText
+                        color: pane.dayflow ? pane.dayflow.dim : "gray"
+                        font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+                        font.pixelSize: Style.font.caption
+                        font.underline: artifactMouse.containsMouse
+                        MouseArea {
+                          id: artifactMouse
+                          anchors.fill: parent
+                          hoverEnabled: true
+                          cursorShape: Qt.PointingHandCursor
+                          onClicked: Qt.openUrlExternally(
+                            "file://" + turnRow.modelData.artifact_path)
+                        }
+                      }
                       Rectangle {
                         id: hlPill
-                        visible: !!turnRow.modelData.highlight
+                        visible: !!pane.highlightMeta[turnRow.modelData.highlight]
                         height: Style.space(16)
                         width: hlText.implicitWidth + Style.space(8)
                         radius: Style.cornerRadius

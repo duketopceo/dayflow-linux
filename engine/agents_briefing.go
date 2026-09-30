@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,6 +89,19 @@ const (
 // maxBriefingTurns caps the condensed narrative per thread (upstream uses 12).
 const maxBriefingTurns = 12
 
+// maxBriefingBullets / maxBriefingHighlights bound what the model pass can
+// attach — prompt says 2-5 bullets and ≤3 highlights; enforce both.
+const (
+	maxBriefingBullets    = 5
+	maxBriefingHighlights = 3
+)
+
+// isGroundedPath requires an artifact path to actually look like a path —
+// bare substrings like "the" or "/" can't ground a model-invented artifact.
+func isGroundedPath(p string) bool {
+	return len(p) >= 4 && strings.Contains(p, "/")
+}
+
 // briefingActiveWindow marks a session "in progress" when its last activity
 // is this recent — same 15-minute rule the upstream recap prompt uses.
 const briefingActiveWindow = 15 * time.Minute
@@ -120,7 +134,7 @@ func turnText(s string) string {
 // usable user turns and non-empty assistant turns only, consecutive
 // same-role turns merged, edge turns always preserved (KTD4).
 func condenseTurns(turns []sessionTurn) []briefingTurn {
-	var out []briefingTurn
+	out := []briefingTurn{}
 	for _, t := range turns {
 		role := turnRole(t)
 		if role == "" {
@@ -174,6 +188,20 @@ func kebab(s string) string {
 	return strings.Trim(s, "-")
 }
 
+// uniqueWSID keeps workstream ids unique when distinct project names kebab
+// to the same slug ("Foo Bar" vs "foo-bar") — a colliding or empty slug
+// gets a numeric suffix so one polish entry can't rewrite two workstreams.
+func uniqueWSID(base string, used map[string]int) string {
+	if base == "" {
+		base = "ws"
+	}
+	used[base]++
+	if used[base] == 1 {
+		return base
+	}
+	return fmt.Sprintf("%s-%d", base, used[base])
+}
+
 // groupWorkstreams buckets threads by project (upstream groups by project +
 // purpose; the model pass may rename but deterministic grouping is by
 // project). Workstreams order by most recent thread end; within one,
@@ -192,6 +220,7 @@ func groupWorkstreams(threads []briefingThread) []briefingWorkstream {
 		groups[name] = append(groups[name], th)
 	}
 	ws := make([]briefingWorkstream, 0, len(groups))
+	usedIDs := map[string]int{}
 	for _, name := range order {
 		ths := groups[name]
 		summary := "1 session"
@@ -205,7 +234,7 @@ func groupWorkstreams(threads []briefingThread) []briefingWorkstream {
 			}
 		}
 		ws = append(ws, briefingWorkstream{
-			ID:      kebab(name),
+			ID:      uniqueWSID(kebab(name), usedIDs),
 			Name:    name,
 			Summary: summary,
 			Threads: ths,
@@ -412,10 +441,12 @@ func applyBriefingPolish(b *agentBriefing, raw string) bool {
 		if !ok {
 			continue
 		}
-		if s := sanitizeRecap(pws.Name); s != "" {
+		// Compare before assigning: an echo of the existing value doesn't
+		// count as model-authored change.
+		if s := sanitizeRecap(pws.Name); s != "" && s != ws.Name {
 			ws.Name, changed = s, true
 		}
-		if s := sanitizeRecap(pws.Summary); s != "" {
+		if s := sanitizeRecap(pws.Summary); s != "" && s != ws.Summary {
 			ws.Summary, changed = s, true
 		}
 		if len(pws.Bullets) > 0 {
@@ -425,7 +456,10 @@ func applyBriefingPolish(b *agentBriefing, raw string) bool {
 					bs = append(bs, s)
 				}
 			}
-			if len(bs) > 0 {
+			if len(bs) > maxBriefingBullets {
+				bs = bs[:maxBriefingBullets]
+			}
+			if len(bs) > 0 && !slices.Equal(bs, ws.Bullets) {
 				ws.Bullets, changed = bs, true
 			}
 		}
@@ -439,33 +473,44 @@ func applyBriefingPolish(b *agentBriefing, raw string) bool {
 			if !ok {
 				continue
 			}
-			if s := sanitizeRecap(pth.Title); s != "" {
+			if s := sanitizeRecap(pth.Title); s != "" && s != th.Title {
 				th.Title, changed = s, true
 			}
-			if s := sanitizeRecap(pth.LatestOutcome); s != "" {
+			if s := sanitizeRecap(pth.LatestOutcome); s != "" && s != th.LatestOutcome {
 				th.LatestOutcome, changed = s, true
 			}
 			// KTD3: model upgrades completed → reviewReady only.
 			if pth.ReviewReady && th.Status == statusCompleted {
 				th.Status, changed = statusReviewReady, true
 			}
+			highlights := 0
 			for _, h := range pth.Highlights {
+				if highlights >= maxBriefingHighlights {
+					break
+				}
 				if !validHighlight[h.Kind] || h.Turn < 0 || h.Turn >= len(th.Turns) {
 					continue
 				}
+				if th.Turns[h.Turn].Highlight == h.Kind {
+					continue
+				}
 				th.Turns[h.Turn].Highlight, changed = h.Kind, true
+				highlights++
 			}
-			// Artifacts must be grounded: the path must appear
-			// verbatim in a source turn, else the model invented it.
-			if pth.ArtifactPath != "" && pth.ArtifactName != "" {
-				for _, tn := range th.Turns {
-					if strings.Contains(tn.Text, pth.ArtifactPath) {
-						last := &th.Turns[len(th.Turns)-1]
-						last.ArtifactName = sanitizeRecap(pth.ArtifactName)
-						last.ArtifactPath = pth.ArtifactPath
-						changed = true
-						break
+			// Artifacts must be grounded: the path must be path-shaped and
+			// appear verbatim in a real turn's text, else the model invented
+			// it. The artifact attaches to the turn that mentions it.
+			path := sanitizeRecap(pth.ArtifactPath)
+			if isGroundedPath(path) && pth.ArtifactName != "" {
+				for i := range th.Turns {
+					tn := &th.Turns[i]
+					if tn.ArtifactPath != "" || !strings.Contains(tn.Text, path) {
+						continue
 					}
+					tn.ArtifactName = sanitizeRecap(pth.ArtifactName)
+					tn.ArtifactPath = path
+					changed = true
+					break
 				}
 			}
 		}
@@ -548,6 +593,10 @@ func agentBriefingFor(db *sql.DB, cfg Config, d time.Time, refresh bool) agentBr
 		if b, ok := loadBriefing(db, fp, day); ok {
 			b.Sources = statuses
 			b.RecapsEnabled = cfg.AgentRecaps
+			// inProgress is wall-clock, not content — the fingerprint
+			// can't invalidate it, so a cached "live" session whose End
+			// has aged out re-derives here instead of replaying forever.
+			refreshStaleStatuses(b, time.Now())
 			if b.Mode == modeModel {
 				return *b
 			}
@@ -571,6 +620,31 @@ func agentBriefingFor(db *sql.DB, cfg Config, d time.Time, refresh bool) agentBr
 		storeBriefing(db, fp, b)
 	}
 	return b
+}
+
+// refreshStaleStatuses re-derives any cached inProgress thread whose last
+// activity has aged past the active window — blocked when the last usable
+// turn is an unanswered user ask, completed otherwise.
+func refreshStaleStatuses(b *agentBriefing, now time.Time) {
+	cutoff := now.Add(-briefingActiveWindow).Unix()
+	for wi := range b.Workstreams {
+		for ti := range b.Workstreams[wi].Threads {
+			th := &b.Workstreams[wi].Threads[ti]
+			if th.Status != statusInProgress || th.EndedAt >= cutoff {
+				continue
+			}
+			th.Status = statusCompleted
+			for i := len(th.Turns) - 1; i >= 0; i-- {
+				if th.Turns[i].Role == "user" {
+					th.Status = statusBlocked
+					break
+				}
+				if th.Turns[i].Role == "agent" {
+					break
+				}
+			}
+		}
+	}
 }
 
 // printBriefing renders the briefing as JSON or a compact text digest.

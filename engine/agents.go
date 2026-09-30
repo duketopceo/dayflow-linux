@@ -602,6 +602,12 @@ func projectName(cwd, file string) string {
 	if cwd != "" {
 		return filepath.Base(cwd)
 	}
+	// Scheme-keyed files (opencode://db/<session-id>) have no usable
+	// basename — leave the project empty so it folds into Miscellaneous
+	// instead of a per-session opaque workstream name.
+	if strings.Contains(file, "://") {
+		return ""
+	}
 	return strings.TrimSuffix(filepath.Base(file), ".jsonl")
 }
 
