@@ -72,6 +72,9 @@ Query:
                           (Claude Code, Codex, OpenCode, Devin, Cursor)
   briefing [YYYY-MM-DD] [--json] [--refresh] Day briefing: sessions grouped into
                           workstreams with condensed turns + status
+  ingest [--json]     Index agent-chat turns into the local FTS store
+  search-agents <q> [--json]   Full-text search indexed agent conversations
+  ask <question> [--json]   One-shot chat over journal + agent history
   forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
                           (default: tomorrow)
   playback [on|off|status] [--json]   Opt-in frame retention for timelapse
@@ -306,6 +309,65 @@ func main() {
 			defer db.Close()
 		}
 		printBriefing(db, cfg, d, jsonOut, hasFlag(args, "--refresh"))
+
+	case "ingest":
+		db := openDBLenient("ingest")
+		if db == nil {
+			os.Exit(1)
+		}
+		defer db.Close()
+		n, err := ingestAgentChats(db)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(map[string]any{"indexed": n})
+		} else {
+			fmt.Printf("indexed %d agent turn(s)\n", n)
+		}
+
+	case "search-agents":
+		db := openDBLenient("search-agents")
+		if db == nil {
+			os.Exit(1)
+		}
+		defer db.Close()
+		var q string
+		for i := 0; i < len(args); i++ {
+			if args[i] == "--json" {
+				continue
+			}
+			q = strings.Join(args[i:], " ")
+			break
+		}
+		if q == "" {
+			usage()
+		}
+		printAgentSearch(db, cfg, q, jsonOut)
+
+	case "ask":
+		// ask <question> [--json] — one-shot journal+agent-history chat;
+		// same engine as `dayflow chat`, no conversation flag needed.
+		db := openDBLenient("ask")
+		if db == nil {
+			os.Exit(1)
+		}
+		defer db.Close()
+		var msgParts []string
+		for i := 0; i < len(args); i++ {
+			if a := args[i]; a != "" && a[0] != '-' {
+				msgParts = append(msgParts, a)
+			}
+		}
+		msg := strings.Join(msgParts, " ")
+		if msg == "" {
+			usage()
+		}
+		res, err := chatWithJournal(db, cfg, 0, msg)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(res)
+		} else {
+			fmt.Println(res.Reply)
+		}
 
 	case "forecast":
 		// forecast [YYYY-MM-DD] [--json] — predict a day's category mix from

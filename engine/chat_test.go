@@ -150,7 +150,9 @@ func TestChatWithJournalFetchTimeline(t *testing.T) {
 	if len(*bodies) != 2 {
 		t.Fatalf("expected 2 provider calls, got %d", len(*bodies))
 	}
-	// The second request should include a tool result message.
+	// The second request should include the tool result — sent as user
+	// text because role:"tool" without a tool_call_id is rejected by
+	// providers implementing the OpenAI tool spec.
 	var req orRequest
 	if err := json.Unmarshal([]byte((*bodies)[1]), &req); err != nil {
 		t.Fatalf("second request was not valid JSON: %v", err)
@@ -158,11 +160,14 @@ func TestChatWithJournalFetchTimeline(t *testing.T) {
 	hasTool := false
 	hasUser := false
 	for _, m := range req.Messages {
-		if m.Role == "tool" && strings.Contains(m.Content[0].Text, "Refactor engine") {
-			hasTool = true
+		if m.Role == "tool" {
+			t.Fatalf("tool-role message without tool_call_id must not be sent: %s", (*bodies)[1])
 		}
 		if m.Role == "user" {
 			hasUser = true
+			if strings.Contains(m.Content[0].Text, "Tool result") && strings.Contains(m.Content[0].Text, "Refactor engine") {
+				hasTool = true
+			}
 		}
 	}
 	if !hasTool {

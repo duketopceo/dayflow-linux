@@ -43,6 +43,9 @@ var mcpTools = []map[string]any{
 	{"name": "search_journal", "description": "Search block titles/summaries for a substring (e.g. an app, file, or topic). Returns matching blocks.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
+	{"name": "search_agent_sessions", "description": "Full-text search over indexed coding-agent conversations (Claude Code, Codex, OpenCode, Devin, Cursor). Returns bounded snippets with source/session/ts citation. Local-only; no egress.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
 	{"name": "get_events", "description": "Recent engine event log (captures, dedup skips, errors).",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"limit": map[string]any{"type": "integer"}}}},
@@ -171,6 +174,17 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 			})
 		}
 		return map[string]any{"matches": out}, nil
+
+	case "search_agent_sessions":
+		q, _ := args["query"].(string)
+		if q == "" {
+			return nil, fmt.Errorf("query required")
+		}
+		hits, err := searchAgentSessions(db, cfg, q)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"hits": hits}, nil
 
 	case "get_events":
 		limit := 20.0

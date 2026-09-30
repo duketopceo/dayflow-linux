@@ -214,7 +214,7 @@ func buildExcerpt(firstUser, lastUser, lastAssistant string) string {
 		if s == "" {
 			return
 		}
-		s = boundState(scrubText(s), 600)
+		s = scrubText(boundState(s, 600))
 		b.WriteString(label + ": " + s + "\n")
 	}
 	write("first user message", firstUser)

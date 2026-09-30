@@ -20,6 +20,7 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 | `get_timeline` | blocks | — |
 | `get_status` | frames, blocks, pause flag | — |
 | `search_journal` | blocks | — |
+| `search_agent_sessions` | `agent_msgs_fts` index of all five agent stores (may lazily ingest new turns into the index) | — |
 | `get_events` | events (may include local paths, provider error strings) | — |
 | `get_log` | debug.log tail (UI actions, debug lines) | — |
 | `get_frames` | frames index + frame file existence | — |
@@ -187,6 +188,23 @@ Notes:
   `artifact_path`/`artifact_name` are accepted from the model only when
   the path is path-shaped and literally appears in the source turn text —
   the model cannot fabricate files.
+- **Agent chat index** (`dayflow ingest`, `dayflow search-agents <q>`,
+  `dayflow ask <q>`, MCP `search_agent_sessions`, chat tool
+  `searchAgentSessions`): every usable turn (real user input + assistant
+  replies) from all five harnesses is scrubbed, bounded (4 KB), and stored
+  in a content-stored FTS5 table `agent_msgs_fts` with `source`, `session`
+  (the stable `file` key), `project`, `role`, `ts` citation columns.
+  `agent_ingest` deduplicates turns by `sha(source|session|idx|ts)`;
+  `agent_sess_fp` skips sessions whose adapter fingerprint is unchanged so
+  unchanged transcripts are never re-decoded. `meta.agent_ingest_day` is
+  the rolling watermark — first `ingest` backfills ~30 days, later runs
+  cover watermark..today. Ingestion is fully local (no provider calls) and
+  runs on demand, on `searchAgentSessions` when the watermark is stale,
+  and hourly alongside daemon retention; indexed rows prune with
+  `retention_days`. FTS retrieval is local-only — `hits` are
+  `{session, source, project, role, ts, snippet}` (max 20 matches, 8
+  sessions, snippet() ellipsized) — only the already-scrubbed snippets can
+  reach a provider, via the normal consent-gated chat path.
 - `dayflow goal --json`: `streak` = `{current, best, total}` consecutive-day
   completion counts. Viewed day pending → `current` counts back from
   yesterday; any past day without a completed goal breaks a run.

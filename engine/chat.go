@@ -161,11 +161,13 @@ You have access to these tools. When a tool is needed, reply with exactly one JS
 {"tool":"getStandup"}
 {"tool":"getInsights","range":"week"}
 {"tool":"searchJournal","query":"<search terms>"}
+{"tool":"searchAgentSessions","query":"<search terms>"}
 
 Tool argument reference:
 - fetchTimeline: date can be today, yesterday, week, month, or YYYY-MM-DD.
 - getInsights: range can be day, week, or month.
 - searchJournal: query is free text searched in titles, summaries, and app names.
+- searchAgentSessions: searches the indexed text of the user's coding-agent conversations (Claude Code, Codex, OpenCode, Devin, Cursor). Returns bounded snippets with source/session/ts so you can cite them. Use when the question is about what an agent did, decided, or was asked.
 
 Rules:
 - If the user asks a question that can be answered from what you already know, answer in plain text. Do not call a tool.
@@ -263,6 +265,16 @@ func executeTool(db *sql.DB, cfg Config, name string, args map[string]any) (any,
 			return nil, err
 		}
 		return map[string]any{"matches": blocks}, nil
+	case "searchAgentSessions":
+		q := ""
+		if v, ok := args["query"].(string); ok {
+			q = v
+		}
+		hits, err := searchAgentSessions(db, cfg, q)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"hits": hits}, nil
 	}
 	return nil, fmt.Errorf("unknown tool %q", name)
 }
@@ -375,9 +387,13 @@ func chatWithJournal(db *sql.DB, cfg Config, conversationID int64, userMessage s
 		if _, err := saveMessage(db, conversationID, "tool", string(resJSON), ""); err != nil {
 			return nil, err
 		}
+		// The tool loop is a text protocol — the model emits JSON in a
+		// normal assistant turn — so results ride back as user text.
+		// role:"tool" without a tool_call_id is rejected by providers
+		// implementing the OpenAI tool spec.
 		messages = append(messages,
 			orMessage{Role: "assistant", Content: []orContent{{Type: "text", Text: raw}}},
-			orMessage{Role: "tool", Content: []orContent{{Type: "text", Text: string(resJSON)}}},
+			orMessage{Role: "user", Content: []orContent{{Type: "text", Text: "Tool result (" + tool + "):\n" + string(resJSON)}}},
 		)
 		// If the model used a tool on the last allowed turn, prompt it once more
 		// for a plain-text answer instead of surfacing the tool-call JSON.
