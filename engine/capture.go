@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	_ "image/png"
 	"log"
 	"math"
 	"os"
@@ -429,7 +430,7 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) 
 		// window doesn't flood every sink each interval.
 		return lastHash, true, fmt.Errorf("capture: %w", err)
 	}
-	img, _, err := image.Decode(bytes.NewReader(raw))
+	img, format, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		return lastHash, true, fmt.Errorf("decode: %w", err)
 	}
@@ -440,7 +441,7 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) 
 		return lastHash, true, nil // screen unchanged
 	}
 
-	stored := storedFrame(img, raw, cfg)
+	stored := storedFrame(img, raw, format, cfg)
 	now := time.Now()
 	dayDir := filepath.Join(framesDir(), now.Format("2006-01-02"))
 	if err := os.MkdirAll(dayDir, 0o700); err != nil {
@@ -460,34 +461,38 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) 
 }
 
 // storedFrame returns the bytes to persist for a frame that survived dedup.
-// When frame_max_dim is set and the frame's longer edge exceeds it, the
-// decoded image is downscaled with its aspect ratio preserved and
-// re-encoded at jpeg_quality; anything already under the cap — or the cap
-// disabled with 0 — keeps the capture command's original bytes, so
+// Frames are always stored as JPEG: files carry .jpg names and summarize
+// labels them data:image/jpeg, so a non-JPEG capture source (a custom
+// capture_command that emits PNG) is re-encoded even when no resize is
+// needed. When frame_max_dim is set and the frame's longer edge exceeds
+// it, the decoded image is downscaled with its aspect ratio preserved;
+// anything already under the cap — or the cap disabled with 0 — keeps the
+// capture command's original bytes when they are already JPEG, so
 // normalization costs nothing on frames that don't need it. grim emits an
 // all-outputs composite, so the cap bounds the composite's long edge, not
 // any single display.
-func storedFrame(img image.Image, raw []byte, cfg Config) []byte {
-	if cfg.FrameMaxDim <= 0 {
-		return raw
-	}
+func storedFrame(img image.Image, raw []byte, format string, cfg Config) []byte {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
 	long := w
 	if h > w {
 		long = h
 	}
-	if long <= cfg.FrameMaxDim {
+	resize := cfg.FrameMaxDim > 0 && long > cfg.FrameMaxDim
+	if format == "jpeg" && !resize {
 		return raw
 	}
-	scale := float64(cfg.FrameMaxDim) / float64(long)
-	dw := int(math.Round(float64(w) * scale))
-	dh := int(math.Round(float64(h) * scale))
-	if dw < 1 {
-		dw = 1
-	}
-	if dh < 1 {
-		dh = 1
+	dw, dh := w, h
+	if resize {
+		scale := float64(cfg.FrameMaxDim) / float64(long)
+		dw = int(math.Round(float64(w) * scale))
+		dh = int(math.Round(float64(h) * scale))
+		if dw < 1 {
+			dw = 1
+		}
+		if dh < 1 {
+			dh = 1
+		}
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
 	xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, b, xdraw.Over, nil)

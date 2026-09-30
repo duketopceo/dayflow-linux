@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"image/png"
 	"net"
 	"os"
 	"os/signal"
@@ -537,6 +538,61 @@ func TestFrameNormalizationPassthrough(t *testing.T) {
 	}
 	if !bytes.Equal(got, small) {
 		t.Fatal("under-cap frame should keep its original bytes")
+	}
+}
+
+func TestCapturePNGSourceStoredAsJPEG(t *testing.T) {
+	// A custom capture_command may emit PNG (spectacle, import png:-) —
+	// frames are always stored as JPEG so the .jpg filename and the
+	// data:image/jpeg label in summarize stay true.
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, sizedImage(640, 480)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := captureJPEG(t, db, cfg, buf.Bytes(), nil); err != nil {
+		t.Fatalf("PNG frame rejected: %v", err)
+	}
+	var p string
+	if err := db.QueryRow(`SELECT path FROM frames ORDER BY rowid DESC LIMIT 1`).Scan(&p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) < 2 || got[0] != 0xff || got[1] != 0xd8 {
+		t.Fatal("PNG source stored non-JPEG bytes")
+	}
+	if _, err := jpeg.Decode(bytes.NewReader(got)); err != nil {
+		t.Fatalf("stored frame not JPEG-decodable: %v", err)
+	}
+
+	// PNG passthrough is rejected even with normalization off — stored
+	// bytes still must be JPEG.
+	cfg.FrameMaxDim = 0
+	buf.Reset()
+	if err := png.Encode(&buf, sizedImage(320, 240)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := captureJPEG(t, db, cfg, buf.Bytes(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT path FROM frames ORDER BY rowid DESC LIMIT 1`).Scan(&p); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) < 2 || got[0] != 0xff || got[1] != 0xd8 {
+		t.Fatal("frame_max_dim=0 stored non-JPEG bytes from a PNG source")
 	}
 }
 
