@@ -75,8 +75,8 @@ FloatingWindow {
   // was mid-flight. A queued refresh outranks a queued load.
   function agentsDrainPending() {
     var pending = root.agentsPending
-    root.agentsPending = false
-    if (pending !== false) root.agentsLoad(pending === "refresh")
+    root.agentsPending = ""
+    if (pending !== "") root.agentsLoad(pending === "refresh")
   }
 
   Process {
@@ -146,7 +146,7 @@ FloatingWindow {
     repeat: false
     onTriggered: {
       root.dayflow.uilog("agents watchdog: killing hung agentsProc")
-      root.agentsPending = false
+      root.agentsPending = ""
       root.agentsTimedOut = true
       agentsProc.running = false
       root.agentsLoading = false
@@ -186,7 +186,7 @@ FloatingWindow {
   property string tlError: ""
 
   property bool tlPending: false
-  property var agentsPending: false
+  property string agentsPending: ""
   property bool agentsTimedOut: false
   property int agentsRun: 0
 

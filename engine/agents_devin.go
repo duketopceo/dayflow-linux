@@ -306,9 +306,7 @@ func parseDevinTranscript(path string) ([]devinMessage, string, bool) {
 	msgs := make([]devinMessage, 0, len(tr.Steps))
 	for _, st := range tr.Steps {
 		m := devinMessage{id: "step-" + strconv.Itoa(st.StepID)}
-		if t, err := time.Parse(time.RFC3339Nano, st.Timestamp); err == nil {
-			m.created = t.Unix()
-		}
+		m.created = unixTs(st.Timestamp)
 		switch st.Source {
 		case "user":
 			// Transcript user steps are real typed input — the ATIF
@@ -453,11 +451,7 @@ func (d *devinSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 // rendered through the shared excerpt builder so the egress shape is
 // identical to the other sources.
 func (d *devinSource) Excerpt(sess AgentSession) string {
-	msgs, ok := d.messages(sess, true)
-	if !ok {
-		return ""
-	}
-	return excerptFromTurns(devinTurns(msgs))
+	return excerptFromTurns(d.Turns(sess))
 }
 
 // Turns returns the session's full normalized turn list for the briefing —

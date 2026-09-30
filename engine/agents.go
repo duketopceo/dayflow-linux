@@ -143,18 +143,11 @@ func (j jsonlSource) Turns(sess AgentSession) []sessionTurn {
 	if j.lineTurn == nil {
 		return nil
 	}
-	f, err := os.Open(sess.File)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
 	var turns []sessionTurn
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		role, text, ts := j.lineTurn(sc.Bytes())
+	ok := eachJSONLLine(sess.File, func(line []byte) {
+		role, text, ts := j.lineTurn(line)
 		if role == "" {
-			continue
+			return
 		}
 		turns = append(turns, sessionTurn{
 			role:       role,
@@ -162,9 +155,9 @@ func (j jsonlSource) Turns(sess AgentSession) []sessionTurn {
 			unixTs:     ts,
 			usableUser: role == "user" && text != "" && !isEnvelopeText(text),
 		})
-	}
-	if sc.Err() != nil {
-		return nil // truncated parse — parity with scanJSONL/sessionExcerpt
+	})
+	if !ok {
+		return nil
 	}
 	return turns
 }
@@ -379,6 +372,62 @@ func scanAgentSources(d time.Time, srcs ...agentSource) ([]AgentSession, []sourc
 	return out, statuses
 }
 
+// agentSourceNamed resolves a session's source name to its adapter —
+// shared by every "find the adapter that owns this session" site.
+func agentSourceNamed(srcs []agentSource, name string) agentSource {
+	for _, s := range srcs {
+		if s != nil && s.Name() == name {
+			return s
+		}
+	}
+	return nil
+}
+
+// scanAgentDay runs one day's store scan: returns source handles (caller
+// must closeAgentSources), the session list, and per-source statuses, and
+// records drift bookkeeping.
+func scanAgentDay(db *sql.DB, d time.Time) ([]agentSource, []AgentSession, []sourceScanStatus) {
+	srcs := agentSources()
+	sessions, statuses := scanAgentSources(d, srcs...)
+	recordAgentSourceScans(db, statuses)
+	return srcs, sessions, statuses
+}
+
+// eachJSONLLine streams a transcript's raw lines to fn; false on open or
+// scan error (e.g. a >1MB line) so callers can drop partial data — parity
+// across scanJSONL, sessionExcerpt, and jsonlSource.Turns.
+func eachJSONLLine(path string, fn func([]byte)) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		fn(sc.Bytes())
+	}
+	return sc.Err() == nil
+}
+
+// unixTs parses an RFC3339Nano timestamp to Unix seconds (0 on failure).
+func unixTs(s string) int64 {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t.Unix()
+	}
+	return 0
+}
+
+// printDriftNotes warns when a previously-productive store scanned empty —
+// an empty day caused by a moved/broken store must not read as a quiet day.
+func printDriftNotes(statuses []sourceScanStatus) {
+	for _, st := range statuses {
+		if st.Drift {
+			fmt.Printf("note: %s produced sessions before but none today — its store may have drifted\n", st.Source)
+		}
+	}
+}
+
 // closeAgentSources releases every adapter's lazily-opened store handles.
 // The owner of a passed-in adapter set calls it once when the pass ends.
 func closeAgentSources(srcs []agentSource) {
@@ -425,20 +474,9 @@ func scanJSONL(root, source string, s, e time.Time, parse func([]byte, *AgentSes
 	out := []AgentSession{}
 	for _, p := range jsonlFiles(root, s) {
 		sess := AgentSession{Source: source, File: p}
-		f, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 1<<20), 1<<20)
-		for sc.Scan() {
-			parse(sc.Bytes(), &sess)
-		}
 		// A scan error (e.g. a line over the 1MB buffer) means the session
 		// data is truncated — skip it rather than report partials.
-		scanErr := sc.Err()
-		f.Close()
-		if scanErr != nil || sess.Start == 0 {
+		if !eachJSONLLine(p, func(line []byte) { parse(line, &sess) }) || sess.Start == 0 {
 			continue
 		}
 		// Buckets are message timestamps, not mtime: keep the session only
@@ -454,17 +492,15 @@ func scanJSONL(root, source string, s, e time.Time, parse func([]byte, *AgentSes
 }
 
 func trackRange(sess *AgentSession, ts string) {
-	if ts == "" {
+	u := unixTs(ts)
+	if u == 0 {
 		return
 	}
-	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-		u := t.Unix()
-		if sess.Start == 0 || u < sess.Start {
-			sess.Start = u
-		}
-		if u > sess.End {
-			sess.End = u
-		}
+	if sess.Start == 0 || u < sess.Start {
+		sess.Start = u
+	}
+	if u > sess.End {
+		sess.End = u
 	}
 }
 
@@ -609,10 +645,8 @@ func recordAgentSourceScans(db *sql.DB, statuses []sourceScanStatus) {
 }
 
 func printAgentSessions(db *sql.DB, cfg Config, d time.Time, jsonOut, recaps bool) {
-	srcs := agentSources()
+	srcs, sessions, statuses := scanAgentDay(db, d)
 	defer closeAgentSources(srcs)
-	sessions, statuses := scanAgentSources(d, srcs...)
-	recordAgentSourceScans(db, statuses)
 	if recaps {
 		// Reuse the scan's adapters so DB-backed stores (and any WAL temp
 		// copies) open once per pass, not once per phase.
@@ -645,9 +679,5 @@ func printAgentSessions(db *sql.DB, cfg Config, d time.Time, jsonOut, recaps boo
 		fmt.Println("note: agent_recaps is off — `dayflow config set agent_recaps true` enables recap generation" +
 			" (sends a bounded, scrubbed excerpt to your chat provider)")
 	}
-	for _, st := range statuses {
-		if st.Drift {
-			fmt.Printf("note: %s produced sessions before but none today — its store may have drifted\n", st.Source)
-		}
-	}
+	printDriftNotes(statuses)
 }

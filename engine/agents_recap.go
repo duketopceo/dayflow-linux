@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
@@ -127,19 +126,11 @@ func sessionExcerpt(path string, lineRoleText func([]byte) (role, text string)) 
 	if lineRoleText == nil {
 		return ""
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-
 	var firstUser, lastUser, lastAssistant string
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		role, text := lineRoleText(sc.Bytes())
+	ok := eachJSONLLine(path, func(line []byte) {
+		role, text := lineRoleText(line)
 		if text == "" || isEnvelopeText(text) {
-			continue // injected envelopes, not user intent
+			return // injected envelopes, not user intent
 		}
 		switch role {
 		case "user":
@@ -150,34 +141,48 @@ func sessionExcerpt(path string, lineRoleText func([]byte) (role, text string)) 
 		case "assistant":
 			lastAssistant = text
 		}
-	}
-	if sc.Err() != nil {
-		return "" // scan error (e.g. >1MB line) — parity with scanJSONL
+	})
+	if !ok {
+		return ""
 	}
 	return buildExcerpt(firstUser, lastUser, lastAssistant)
 }
 
+// turnRole is the shared "is this turn usable" classifier: "user" for real
+// user intent, "agent" for non-empty assistant output, "" to skip. usableUser
+// folds in each source's own predicate (real typed input for Devin, non-empty
+// text for Cursor); envelopes never count regardless.
+func turnRole(t sessionTurn) string {
+	text := strings.TrimSpace(t.text)
+	if text == "" {
+		return ""
+	}
+	switch t.role {
+	case "user":
+		if t.usableUser && !isEnvelopeText(text) {
+			return "user"
+		}
+	case "assistant":
+		return "agent"
+	}
+	return ""
+}
+
 // excerptFromTurns accumulates the excerpt inputs shared by every DB-backed
 // adapter — first/last usable user text and last assistant text — and
-// renders them through buildExcerpt. usableUser folds in each source's own
-// predicate (real typed input for Devin, non-empty text for Cursor).
+// renders them through buildExcerpt.
 func excerptFromTurns(turns []sessionTurn) string {
 	var firstUser, lastUser, lastAssistant string
 	for _, t := range turns {
 		text := strings.TrimSpace(t.text)
-		switch t.role {
+		switch turnRole(t) {
 		case "user":
-			if !t.usableUser || text == "" || isEnvelopeText(text) {
-				continue
-			}
 			if firstUser == "" {
 				firstUser = text
 			}
 			lastUser = text
-		case "assistant":
-			if text != "" {
-				lastAssistant = text
-			}
+		case "agent":
+			lastAssistant = text
 		}
 	}
 	return buildExcerpt(firstUser, lastUser, lastAssistant)
@@ -250,11 +255,7 @@ func claudeLineTurn(raw []byte) (string, string, int64) {
 	if json.Unmarshal(line.Message, &msg) != nil {
 		return "", "", 0
 	}
-	var ts int64
-	if t, err := time.Parse(time.RFC3339Nano, line.Timestamp); err == nil {
-		ts = t.Unix()
-	}
-	return line.Type, strings.TrimSpace(contentText(msg.Content)), ts
+	return line.Type, strings.TrimSpace(contentText(msg.Content)), unixTs(line.Timestamp)
 }
 
 func claudeLineRoleText(raw []byte) (string, string) {
@@ -274,11 +275,7 @@ func codexLineTurn(raw []byte) (string, string, int64) {
 	if p.Role != "user" && p.Role != "assistant" {
 		return "", "", 0
 	}
-	var ts int64
-	if t, err := time.Parse(time.RFC3339Nano, line.Timestamp); err == nil {
-		ts = t.Unix()
-	}
-	return p.Role, strings.TrimSpace(contentText(p.Content)), ts
+	return p.Role, strings.TrimSpace(contentText(p.Content)), unixTs(line.Timestamp)
 }
 
 func codexLineRoleText(raw []byte) (string, string) {
@@ -406,6 +403,23 @@ const maxNewRecaps = 8
 // optional share): DB-backed sources keep one lazily-opened store handle —
 // and at most one WAL temp copy — across the whole pass. With no adapters
 // passed, attachRecaps builds its own set and releases it before returning.
+
+// chatEgressOK gates every agent-transcript egress path (session recaps and
+// the briefing polish): off under DisableJudges (read-only MCP), under the
+// durable agent_recaps opt-out, and when the chat provider is a minutes-scale
+// cli — one exec could stall the whole view, so the pass degrades to
+// cache/deterministic-only rather than starve on a hanging subprocess.
+func chatEgressOK(cfg Config) (Provider, bool) {
+	if cfg.DisableJudges || !cfg.AgentRecaps {
+		return Provider{}, false
+	}
+	chatP, err := providerForTask(cfg, "chat")
+	if err != nil || chatP.Kind == "cli" {
+		return chatP, false
+	}
+	return chatP, true
+}
+
 func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession, srcs ...agentSource) {
 	if db == nil {
 		return
@@ -413,14 +427,6 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession, srcs ...agent
 	if len(srcs) == 0 {
 		srcs = agentSources()
 		defer closeAgentSources(srcs)
-	}
-	srcFor := func(name string) agentSource {
-		for _, s := range srcs {
-			if s != nil && s.Name() == name {
-				return s
-			}
-		}
-		return nil
 	}
 	// Cache hits first (any order), then generate for the largest uncached
 	// sessions within the cap. Fingerprint/excerpt come from the session's
@@ -433,7 +439,7 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession, srcs ...agent
 	cached := cachedRecaps(db, paths)
 	order := make([]int, 0, len(sessions))
 	for i := range sessions {
-		src := srcFor(sessions[i].Source)
+		src := agentSourceNamed(srcs, sessions[i].Source)
 		if src == nil {
 			continue
 		}
@@ -448,16 +454,10 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession, srcs ...agent
 		}
 		order = append(order, i)
 	}
-	if cfg.DisableJudges || !cfg.AgentRecaps {
-		return // no-egress contexts and the durable opt-out serve cache only
-	}
-	// Resolve the chat route once per pass. A cli provider runs at
-	// minutes-scale while the 45s deadline is only checked between
-	// sessions — one exec could stall the whole view and starve every
-	// recap, so the pass degrades to cache-only like DisableJudges.
-	chatP, _ := providerForTask(cfg, "chat")
-	if chatP.Kind == "cli" {
-		debugf(cfg, "agent recaps: chat provider %q is cli (minutes-scale); serving cached only", chatP.ID)
+	// no-egress contexts, the durable opt-out, and minutes-scale cli
+	// providers serve cache only.
+	chatP, ok := chatEgressOK(cfg)
+	if !ok {
 		return
 	}
 	sort.Slice(order, func(a, b int) bool {
@@ -472,7 +472,7 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession, srcs ...agent
 		if generated >= maxNewRecaps || time.Now().After(deadline) {
 			break
 		}
-		src := srcFor(sessions[i].Source)
+		src := agentSourceNamed(srcs, sessions[i].Source)
 		if src == nil {
 			continue
 		}

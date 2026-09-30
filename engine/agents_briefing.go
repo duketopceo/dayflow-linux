@@ -41,6 +41,9 @@ type briefingWorkstream struct {
 	Summary string           `json:"summary,omitempty"`
 	Bullets []string         `json:"bullets,omitempty"`
 	Threads []briefingThread `json:"threads"`
+	// lastEnd is the sort key (max thread EndedAt) — kept on the struct so
+	// it travels with the element during SliceStable's swaps.
+	lastEnd int64
 }
 
 type briefingThread struct {
@@ -75,6 +78,13 @@ const (
 	statusCompleted   = "completed"
 )
 
+// briefing modes: "model" when the prose polish pass ran, "fallback" when
+// the payload is the deterministic skeleton alone.
+const (
+	modeModel    = "model"
+	modeFallback = "fallback"
+)
+
 // maxBriefingTurns caps the condensed narrative per thread (upstream uses 12).
 const maxBriefingTurns = 12
 
@@ -86,20 +96,17 @@ const briefingActiveWindow = 15 * time.Minute
 // recent activity → inProgress; ending on an unanswered user ask → blocked;
 // otherwise completed (the model pass may upgrade to reviewReady).
 func deriveStatus(sess AgentSession, turns []sessionTurn, now time.Time) string {
-	if sess.End >= now.Unix()-int64(briefingActiveWindow/time.Second) {
+	if sess.End >= now.Add(-briefingActiveWindow).Unix() {
 		return statusInProgress
 	}
-	last := ""
-	for _, t := range turns {
-		if t.role == "assistant" && strings.TrimSpace(t.text) != "" {
-			last = "assistant"
+	// Only the last usable turn decides — scan backwards and stop.
+	for i := len(turns) - 1; i >= 0; i-- {
+		switch turnRole(turns[i]) {
+		case "user":
+			return statusBlocked
+		case "agent":
+			return statusCompleted
 		}
-		if t.role == "user" && t.usableUser {
-			last = "user"
-		}
-	}
-	if last == "user" {
-		return statusBlocked
 	}
 	return statusCompleted
 }
@@ -115,13 +122,8 @@ func turnText(s string) string {
 func condenseTurns(turns []sessionTurn) []briefingTurn {
 	var out []briefingTurn
 	for _, t := range turns {
-		var role string
-		switch {
-		case t.role == "user" && t.usableUser:
-			role = "user"
-		case t.role == "assistant" && strings.TrimSpace(t.text) != "":
-			role = "agent"
-		default:
+		role := turnRole(t)
+		if role == "" {
 			continue
 		}
 		text := turnText(t.text)
@@ -153,9 +155,9 @@ func condenseTurns(turns []sessionTurn) []briefingTurn {
 		Role: "agent",
 		Text: fmt.Sprintf("(%d earlier exchanges condensed)", mid),
 	}
-	out = append(append(append([]briefingTurn{}, out[:head]...),
-		marker), out[len(out)-tail:]...)
-	return out
+	capped := append([]briefingTurn{}, out[:head]...)
+	capped = append(capped, marker)
+	return append(capped, out[len(out)-tail:]...)
 }
 
 // briefingThreadID is a stable, content-derived thread key the model pass
@@ -196,44 +198,30 @@ func groupWorkstreams(threads []briefingThread) []briefingWorkstream {
 		if len(ths) > 1 {
 			summary = fmt.Sprintf("%d sessions", len(ths))
 		}
+		var lastEnd int64
+		for _, th := range ths {
+			if th.EndedAt > lastEnd {
+				lastEnd = th.EndedAt
+			}
+		}
 		ws = append(ws, briefingWorkstream{
 			ID:      kebab(name),
 			Name:    name,
 			Summary: summary,
 			Threads: ths,
+			lastEnd: lastEnd,
 		})
 	}
-	sort.SliceStable(ws, func(i, j int) bool {
-		var ei, ej int64
-		for _, th := range ws[i].Threads {
-			if th.EndedAt > ei {
-				ei = th.EndedAt
-			}
-		}
-		for _, th := range ws[j].Threads {
-			if th.EndedAt > ej {
-				ej = th.EndedAt
-			}
-		}
-		return ei > ej
-	})
+	sort.SliceStable(ws, func(i, j int) bool { return ws[i].lastEnd > ws[j].lastEnd })
 	return ws
 }
 
 // briefingFingerprint folds every session's adapter fingerprint into one
 // day key — any transcript growth invalidates the cached briefing.
 func briefingFingerprint(sessions []AgentSession, srcs []agentSource) string {
-	srcFor := func(name string) agentSource {
-		for _, s := range srcs {
-			if s != nil && s.Name() == name {
-				return s
-			}
-		}
-		return nil
-	}
 	var parts []string
 	for _, sess := range sessions {
-		src := srcFor(sess.Source)
+		src := agentSourceNamed(srcs, sess.Source)
 		if src == nil {
 			continue
 		}
@@ -252,19 +240,11 @@ func briefingFingerprint(sessions []AgentSession, srcs []agentSource) string {
 // buildBriefing produces the deterministic skeleton: threads with condensed
 // turns and derived status, grouped into project workstreams.
 func buildBriefing(d time.Time, sessions []AgentSession, statuses []sourceScanStatus, srcs []agentSource) agentBriefing {
-	srcFor := func(name string) agentSource {
-		for _, s := range srcs {
-			if s != nil && s.Name() == name {
-				return s
-			}
-		}
-		return nil
-	}
 	now := time.Now()
 	threads := make([]briefingThread, 0, len(sessions))
 	for _, sess := range sessions {
 		var turns []sessionTurn
-		if src := srcFor(sess.Source); src != nil {
+		if src := agentSourceNamed(srcs, sess.Source); src != nil {
 			turns = src.Turns(sess)
 		}
 		th := briefingThread{
@@ -290,7 +270,7 @@ func buildBriefing(d time.Time, sessions []AgentSession, statuses []sourceScanSt
 	return agentBriefing{
 		Day:         d.Local().Format("2006-01-02"),
 		GeneratedAt: now.Format(time.RFC3339),
-		Mode:        "fallback",
+		Mode:        modeFallback,
 		Workstreams: groupWorkstreams(threads),
 		Sources:     statuses,
 	}
@@ -320,145 +300,187 @@ Rules: mark review_ready only when the thread produced a finished deliverable aw
 // briefingPolishResult is the leniently-decoded model response — every field
 // optional, applied by id over the skeleton.
 type briefingPolishResult struct {
-	Workstreams []struct {
-		ID      string   `json:"id"`
-		Name    string   `json:"name"`
-		Summary string   `json:"summary"`
-		Bullets []string `json:"bullets"`
-		Threads []struct {
-			ID            string `json:"id"`
-			Title         string `json:"title"`
-			LatestOutcome string `json:"latest_outcome"`
-			ReviewReady   bool   `json:"review_ready"`
-			Highlights    []struct {
-				Turn int    `json:"turn"`
-				Kind string `json:"kind"`
-			} `json:"turn_highlights"`
-			ArtifactName string `json:"artifact_name"`
-			ArtifactPath string `json:"artifact_path"`
-		} `json:"threads"`
-	} `json:"workstreams"`
+	Workstreams []polishWorkstream `json:"workstreams"`
+}
+type polishWorkstream struct {
+	ID      string         `json:"id"`
+	Name    string         `json:"name"`
+	Summary string         `json:"summary"`
+	Bullets []string       `json:"bullets"`
+	Threads []polishThread `json:"threads"`
+}
+type polishThread struct {
+	ID            string            `json:"id"`
+	Title         string            `json:"title"`
+	LatestOutcome string            `json:"latest_outcome"`
+	ReviewReady   bool              `json:"review_ready"`
+	Highlights    []polishHighlight `json:"turn_highlights"`
+	ArtifactName  string            `json:"artifact_name"`
+	ArtifactPath  string            `json:"artifact_path"`
+}
+type polishHighlight struct {
+	Turn int    `json:"turn"`
+	Kind string `json:"kind"`
 }
 
 // briefingModelPayload renders the bounded, scrubbed skeleton the model
 // sees: no raw transcript text beyond the already-condensed turns, each
-// field capped, whole payload under maxBriefingPayload.
+// field capped. The payload stays under maxBriefingPayload by dropping
+// trailing threads/workstreams before marshaling — never mid-JSON.
 const maxBriefingPayload = 8000
 
-func briefingModelPayload(b *agentBriefing) string {
-	var sb strings.Builder
-	sb.WriteString(`{"day":` + strconv.Quote(b.Day) + `,"workstreams":[`)
-	for i, ws := range b.Workstreams {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(`{"id":` + strconv.Quote(ws.ID) + `,"name":` + strconv.Quote(scrubText(ws.Name)) + `,"threads":[`)
-		for j, th := range ws.Threads {
-			if j > 0 {
-				sb.WriteByte(',')
-			}
-			sb.WriteString(`{"id":` + strconv.Quote(th.ID) +
-				`,"source":` + strconv.Quote(th.Source) +
-				`,"status":` + strconv.Quote(th.Status) +
-				`,"title":` + strconv.Quote(scrubText(th.Title)) + `,"turns":[`)
-			for k, tn := range th.Turns {
-				if k > 0 {
-					sb.WriteByte(',')
-				}
-				sb.WriteString(`{"role":` + strconv.Quote(tn.Role) +
-					`,"text":` + strconv.Quote(scrubText(tn.Text)) + `}`)
-			}
-			sb.WriteString(`]}`)
-		}
-		sb.WriteString(`]}`)
-		if sb.Len() > maxBriefingPayload {
-			break
-		}
-	}
-	sb.WriteString(`]}`)
-	return truncate(sb.String(), maxBriefingPayload)
+// Polished-field skeleton — the model sees only these fields, each already
+// scrubbed by the callers upstream (scrubText on name/title/text).
+type briefingModelDoc struct {
+	Day         string                `json:"day"`
+	Workstreams []briefingModelStream `json:"workstreams"`
+}
+type briefingModelStream struct {
+	ID      string                `json:"id"`
+	Name    string                `json:"name"`
+	Threads []briefingModelThread `json:"threads"`
+}
+type briefingModelThread struct {
+	ID     string              `json:"id"`
+	Source string              `json:"source"`
+	Status string              `json:"status"`
+	Title  string              `json:"title"`
+	Turns  []briefingModelTurn `json:"turns"`
+}
+type briefingModelTurn struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
 }
 
-// applyBriefingPolish folds the model's prose onto the skeleton by id.
-// Every field is independently optional; a malformed entry degrades without
-// sinking the briefing.
-func applyBriefingPolish(b *agentBriefing, raw string) {
+func briefingModelPayload(b *agentBriefing) string {
+	doc := briefingModelDoc{Day: b.Day}
+	for _, ws := range b.Workstreams {
+		mws := briefingModelStream{ID: ws.ID, Name: scrubText(ws.Name)}
+		for _, th := range ws.Threads {
+			mth := briefingModelThread{
+				ID: th.ID, Source: th.Source, Status: th.Status,
+				Title: scrubText(th.Title),
+			}
+			for _, tn := range th.Turns {
+				mth.Turns = append(mth.Turns, briefingModelTurn{Role: tn.Role, Text: scrubText(tn.Text)})
+			}
+			mws.Threads = append(mws.Threads, mth)
+		}
+		doc.Workstreams = append(doc.Workstreams, mws)
+	}
+	// Shrink to fit: drop trailing threads then whole workstreams until the
+	// marshaled payload is under the cap. Dropping before marshal keeps the
+	// JSON valid — truncating the string after would not.
+	for len(doc.Workstreams) > 0 {
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			return ""
+		}
+		if len(raw) <= maxBriefingPayload {
+			return string(raw)
+		}
+		last := &doc.Workstreams[len(doc.Workstreams)-1]
+		if len(last.Threads) > 1 {
+			last.Threads = last.Threads[:len(last.Threads)-1]
+		} else {
+			doc.Workstreams = doc.Workstreams[:len(doc.Workstreams)-1]
+		}
+	}
+	return `{"day":` + strconv.Quote(b.Day) + `,"workstreams":[]}`
+}
+
+// applyBriefingPolish overlays the model's prose edits onto the skeleton by
+// id. Every field is independently optional; a malformed entry degrades
+// without sinking the briefing. Returns whether anything changed — a
+// response that parses but mutates nothing doesn't count as model-authored.
+func applyBriefingPolish(b *agentBriefing, raw string) bool {
 	var res briefingPolishResult
 	if err := json.Unmarshal([]byte(raw), &res); err != nil {
-		return
+		return false
+	}
+	pwsByID := map[string]*polishWorkstream{}
+	for i := range res.Workstreams {
+		pwsByID[res.Workstreams[i].ID] = &res.Workstreams[i]
 	}
 	validHighlight := map[string]bool{
 		"keyDecision": true, "keyInfo": true, "readyForReview": true,
 	}
+	changed := false
 	for wi := range b.Workstreams {
 		ws := &b.Workstreams[wi]
-		for _, pws := range res.Workstreams {
-			if pws.ID != ws.ID {
+		pws, ok := pwsByID[ws.ID]
+		if !ok {
+			continue
+		}
+		if s := sanitizeRecap(pws.Name); s != "" {
+			ws.Name, changed = s, true
+		}
+		if s := sanitizeRecap(pws.Summary); s != "" {
+			ws.Summary, changed = s, true
+		}
+		if len(pws.Bullets) > 0 {
+			var bs []string
+			for _, bl := range pws.Bullets {
+				if s := sanitizeRecap(bl); s != "" {
+					bs = append(bs, s)
+				}
+			}
+			if len(bs) > 0 {
+				ws.Bullets, changed = bs, true
+			}
+		}
+		pthByID := map[string]*polishThread{}
+		for i := range pws.Threads {
+			pthByID[pws.Threads[i].ID] = &pws.Threads[i]
+		}
+		for ti := range ws.Threads {
+			th := &ws.Threads[ti]
+			pth, ok := pthByID[th.ID]
+			if !ok {
 				continue
 			}
-			if s := sanitizeRecap(pws.Name); s != "" {
-				ws.Name = s
+			if s := sanitizeRecap(pth.Title); s != "" {
+				th.Title, changed = s, true
 			}
-			if s := sanitizeRecap(pws.Summary); s != "" {
-				ws.Summary = s
+			if s := sanitizeRecap(pth.LatestOutcome); s != "" {
+				th.LatestOutcome, changed = s, true
 			}
-			if len(pws.Bullets) > 0 {
-				var bs []string
-				for _, bl := range pws.Bullets {
-					if s := sanitizeRecap(bl); s != "" {
-						bs = append(bs, s)
-					}
+			// KTD3: model upgrades completed → reviewReady only.
+			if pth.ReviewReady && th.Status == statusCompleted {
+				th.Status, changed = statusReviewReady, true
+			}
+			for _, h := range pth.Highlights {
+				if !validHighlight[h.Kind] || h.Turn < 0 || h.Turn >= len(th.Turns) {
+					continue
 				}
-				ws.Bullets = bs
+				th.Turns[h.Turn].Highlight, changed = h.Kind, true
 			}
-			for ti := range ws.Threads {
-				th := &ws.Threads[ti]
-				for _, pth := range pws.Threads {
-					if pth.ID != th.ID {
-						continue
-					}
-					if s := sanitizeRecap(pth.Title); s != "" {
-						th.Title = s
-					}
-					if s := sanitizeRecap(pth.LatestOutcome); s != "" {
-						th.LatestOutcome = s
-					}
-					// KTD3: model upgrades completed → reviewReady only.
-					if pth.ReviewReady && th.Status == statusCompleted {
-						th.Status = statusReviewReady
-					}
-					for _, h := range pth.Highlights {
-						if !validHighlight[h.Kind] || h.Turn < 0 || h.Turn >= len(th.Turns) {
-							continue
-						}
-						th.Turns[h.Turn].Highlight = h.Kind
-					}
-					// Artifacts must be grounded: the path must appear
-					// verbatim in a source turn, else the model invented it.
-					if pth.ArtifactPath != "" && pth.ArtifactName != "" {
-						for _, tn := range th.Turns {
-							if strings.Contains(tn.Text, pth.ArtifactPath) {
-								th.Turns[len(th.Turns)-1].ArtifactName = sanitizeRecap(pth.ArtifactName)
-								th.Turns[len(th.Turns)-1].ArtifactPath = pth.ArtifactPath
-								break
-							}
-						}
+			// Artifacts must be grounded: the path must appear
+			// verbatim in a source turn, else the model invented it.
+			if pth.ArtifactPath != "" && pth.ArtifactName != "" {
+				for _, tn := range th.Turns {
+					if strings.Contains(tn.Text, pth.ArtifactPath) {
+						last := &th.Turns[len(th.Turns)-1]
+						last.ArtifactName = sanitizeRecap(pth.ArtifactName)
+						last.ArtifactPath = pth.ArtifactPath
+						changed = true
+						break
 					}
 				}
 			}
 		}
 	}
+	return changed
 }
 
 // polishBriefing runs the one batched chat call that rewrites briefing
 // prose. Gated exactly like attachRecaps: off when agent_recaps is unset,
 // DisableJudges is set, or the chat provider is a minutes-scale CLI.
 func polishBriefing(db *sql.DB, cfg Config, b *agentBriefing) {
-	if db == nil || cfg.DisableJudges || !cfg.AgentRecaps {
+	if db == nil {
 		return
 	}
-	chatP, err := providerForTask(cfg, "chat")
-	if err != nil || chatP.Kind == "cli" {
+	if _, ok := chatEgressOK(cfg); !ok {
 		return
 	}
 	messages := []orMessage{
@@ -473,15 +495,10 @@ func polishBriefing(db *sql.DB, cfg Config, b *agentBriefing) {
 	if i, j := strings.Index(text, "{"), strings.LastIndex(text, "}"); i >= 0 && j > i {
 		text = text[i : j+1]
 	}
-	// Snapshot before applying: Workstreams mutates in place, so a shallow
-	// struct copy can't detect the change.
-	before, _ := json.Marshal(b.Workstreams)
-	applyBriefingPolish(b, text)
 	// A response that changed nothing still counts as "model ran" only if it
-	// parsed — otherwise the fallback mode honestly reports no polish.
-	after, _ := json.Marshal(b.Workstreams)
-	if string(before) != string(after) {
-		b.Mode = "model"
+	// mutated the briefing — otherwise fallback mode honestly reports no polish.
+	if applyBriefingPolish(b, text) {
+		b.Mode = modeModel
 	}
 }
 
@@ -519,10 +536,8 @@ func storeBriefing(db *sql.DB, fp string, b agentBriefing) {
 // or rebuild → polish → persist. Sources refresh every call so drift
 // reporting stays live even when the payload is cached.
 func agentBriefingFor(db *sql.DB, cfg Config, d time.Time, refresh bool) agentBriefing {
-	srcs := agentSources()
+	srcs, sessions, statuses := scanAgentDay(db, d)
 	defer closeAgentSources(srcs)
-	sessions, statuses := scanAgentSources(d, srcs...)
-	recordAgentSourceScans(db, statuses)
 
 	day := d.Local().Format("2006-01-02")
 	var fp string
@@ -531,15 +546,24 @@ func agentBriefingFor(db *sql.DB, cfg Config, d time.Time, refresh bool) agentBr
 	}
 	if !refresh && db != nil && fp != "" {
 		if b, ok := loadBriefing(db, fp, day); ok {
-			// A cached fallback briefing regenerates once recaps come on —
-			// the deterministic payload shouldn't pin the day forever.
-			if b.Mode == "model" || cfg.DisableJudges || !cfg.AgentRecaps {
-				b.Sources = statuses
+			b.Sources = statuses
+			b.RecapsEnabled = cfg.AgentRecaps
+			if b.Mode == modeModel {
 				return *b
 			}
+			// Recaps came on after a fallback was cached — polish the
+			// cached skeleton directly; same fingerprint means the
+			// deterministic input is unchanged, so a rebuild would
+			// produce identical turns.
+			if cfg.AgentRecaps && !cfg.DisableJudges {
+				polishBriefing(db, cfg, b)
+				storeBriefing(db, fp, *b)
+			}
+			return *b
 		}
 	}
 	b := buildBriefing(d, sessions, statuses, srcs)
+	b.RecapsEnabled = cfg.AgentRecaps
 	if len(sessions) > 0 {
 		polishBriefing(db, cfg, &b)
 	}
@@ -552,7 +576,6 @@ func agentBriefingFor(db *sql.DB, cfg Config, d time.Time, refresh bool) agentBr
 // printBriefing renders the briefing as JSON or a compact text digest.
 func printBriefing(db *sql.DB, cfg Config, d time.Time, jsonOut, refresh bool) {
 	b := agentBriefingFor(db, cfg, d, refresh)
-	b.RecapsEnabled = cfg.AgentRecaps
 	if jsonOut {
 		json.NewEncoder(os.Stdout).Encode(b)
 		return
@@ -570,13 +593,9 @@ func printBriefing(db *sql.DB, cfg Config, d time.Time, jsonOut, refresh bool) {
 			}
 		}
 	}
-	if b.Mode == "fallback" && !cfg.AgentRecaps {
+	if b.Mode == modeFallback && !cfg.AgentRecaps {
 		fmt.Println("note: agent_recaps is off — briefing shows deterministic summaries only" +
 			" (`dayflow config set agent_recaps true` for model-written prose)")
 	}
-	for _, st := range b.Sources {
-		if st.Drift {
-			fmt.Printf("note: %s produced sessions before but none today — its store may have drifted\n", st.Source)
-		}
-	}
+	printDriftNotes(b.Sources)
 }

@@ -23,45 +23,40 @@ Column {
   rightPadding: Style.space(16)
   topPadding: Style.space(4)
 
-  // Status chip palette — adapted to the panel theme rather than upstream's
-  // fixed light palette.
+  // Status/highlight palettes — adapted to the panel theme rather than
+  // upstream's fixed light palette.
+  readonly property var statusMeta: ({
+    "inProgress":  { label: "in progress",  color: Qt.rgba(0.40, 0.70, 1.00, 1.0) },
+    "reviewReady": { label: "review ready", color: Qt.rgba(0.30, 0.80, 0.55, 1.0) },
+    "blocked":     { label: "blocked",      color: Qt.rgba(0.90, 0.35, 0.30, 1.0) },
+    "completed":   { label: "completed",    color: "gray" }
+  })
+  readonly property var highlightMeta: ({
+    "keyDecision":    { label: "decision",   color: Qt.rgba(0.62, 0.45, 0.95, 1.0) },
+    "keyInfo":        { label: "key info",   color: Qt.rgba(0.35, 0.60, 0.95, 1.0) },
+    "readyForReview": { label: "for review", color: Qt.rgba(0.95, 0.55, 0.20, 1.0) }
+  })
   function statusColor(status) {
-    switch (status) {
-    case "blocked":      return Qt.rgba(0.90, 0.35, 0.30, 1.0)
-    case "reviewReady":  return Qt.rgba(0.30, 0.80, 0.55, 1.0)
-    case "inProgress":   return Qt.rgba(0.40, 0.70, 1.00, 1.0)
-    default:             return pane.dayflow ? pane.dayflow.dim : "gray"
-    }
+    var m = statusMeta[status]
+    if (!m || status === "completed") return pane.dayflow ? pane.dayflow.dim : "gray"
+    return m.color
   }
   function statusLabel(status) {
-    switch (status) {
-    case "blocked":      return "blocked"
-    case "reviewReady":  return "review ready"
-    case "inProgress":   return "in progress"
-    default:             return "completed"
-    }
+    return statusMeta[status] ? statusMeta[status].label : "completed"
   }
   function highlightColor(kind) {
-    switch (kind) {
-    case "keyDecision":    return Qt.rgba(0.62, 0.45, 0.95, 1.0)
-    case "keyInfo":        return Qt.rgba(0.35, 0.60, 0.95, 1.0)
-    case "readyForReview": return Qt.rgba(0.95, 0.55, 0.20, 1.0)
-    default:               return "transparent"
-    }
+    return highlightMeta[kind] ? highlightMeta[kind].color : "transparent"
   }
-  function highlightLabel(kind) {
-    switch (kind) {
-    case "keyDecision":    return "decision"
-    case "keyInfo":        return "key info"
-    case "readyForReview": return "for review"
-    default:               return ""
-    }
-  }
-  // Per-status totals across all workstreams for the legend row.
-  function statusTotals() {
+  // Re-alpha a theme/status color for fills and borders.
+  function tint(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
+
+  // Per-status totals across all workstreams — bound expression evaluates
+  // once per briefing load, not per legend delegate.
+  readonly property var statusTotals: statusTotalsOf(workstreams)
+  function statusTotalsOf(ws) {
     var t = { blocked: 0, reviewReady: 0, inProgress: 0, completed: 0 }
-    for (var i = 0; i < workstreams.length; i++) {
-      var ths = workstreams[i].threads || []
+    for (var i = 0; i < ws.length; i++) {
+      var ths = ws[i].threads || []
       for (var j = 0; j < ths.length; j++) {
         var s = ths[j].status
         if (t[s] !== undefined) t[s]++
@@ -89,7 +84,7 @@ Column {
         model: ["inProgress", "reviewReady", "blocked", "completed"]
         delegate: Row {
           spacing: Style.space(4)
-          visible: pane.statusTotals()[modelData] > 0
+          visible: pane.statusTotals[modelData] > 0
           Rectangle {
             width: Style.space(8); height: Style.space(8)
             radius: Style.space(4)
@@ -98,7 +93,7 @@ Column {
           }
           Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: pane.statusTotals()[modelData] + " " + pane.statusLabel(modelData)
+            text: pane.statusTotals[modelData] + " " + pane.statusLabel(modelData)
             textFormat: Text.PlainText
             color: pane.dayflow ? pane.dayflow.dim : "gray"
             font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
@@ -263,7 +258,7 @@ Column {
               radius: Style.cornerRadius
               property color statusTint: pane.statusColor(modelData.status)
               color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
-              border.color: Qt.rgba(statusTint.r, statusTint.g, statusTint.b, 0.35)
+              border.color: pane.tint(statusTint, 0.35)
 
               Column {
                 id: cardInner
@@ -281,6 +276,7 @@ Column {
                     width: parent.width - timeText.implicitWidth - Style.space(12)
 
                     Rectangle {
+                      id: sourceBadge
                       height: Style.space(18)
                       width: badgeText.implicitWidth + Style.space(12)
                       radius: Style.cornerRadius
@@ -302,19 +298,18 @@ Column {
                     }
 
                     Rectangle {
+                      id: statusChip
                       height: Style.space(18)
                       width: statusText.implicitWidth + Style.space(12)
                       radius: Style.cornerRadius
                       anchors.verticalCenter: parent.verticalCenter
-                      color: Qt.rgba(pane.statusColor(threadCard.modelData.status).r,
-                                     pane.statusColor(threadCard.modelData.status).g,
-                                     pane.statusColor(threadCard.modelData.status).b, 0.18)
+                      color: pane.tint(threadCard.statusTint, 0.18)
                       Text {
                         id: statusText
                         anchors.centerIn: parent
                         text: pane.statusLabel(threadCard.modelData.status)
                         textFormat: Text.PlainText
-                        color: pane.statusColor(threadCard.modelData.status)
+                        color: threadCard.statusTint
                         font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
                         font.pixelSize: Style.font.caption
                       }
@@ -329,7 +324,7 @@ Column {
                       font.pixelSize: Style.font.body
                       font.bold: true
                       elide: Text.ElideRight
-                      width: parent.width - badgeText.width - statusText.width
+                      width: parent.width - sourceBadge.width - statusChip.width
                              - Style.space(24)
                     }
                   }
@@ -372,6 +367,7 @@ Column {
                     delegate: Row {
                       id: turnRow
                       required property var modelData
+                      property color hlTint: pane.highlightColor(modelData.highlight)
                       width: parent.width
                       spacing: Style.space(6)
 
@@ -405,15 +401,14 @@ Column {
                         height: Style.space(16)
                         width: hlText.implicitWidth + Style.space(8)
                         radius: Style.cornerRadius
-                        color: Qt.rgba(pane.highlightColor(turnRow.modelData.highlight).r,
-                                       pane.highlightColor(turnRow.modelData.highlight).g,
-                                       pane.highlightColor(turnRow.modelData.highlight).b, 0.18)
+                        color: pane.tint(turnRow.hlTint, 0.18)
                         Text {
                           id: hlText
                           anchors.centerIn: parent
-                          text: pane.highlightLabel(turnRow.modelData.highlight)
+                          text: pane.highlightMeta[turnRow.modelData.highlight]
+                                ? pane.highlightMeta[turnRow.modelData.highlight].label : ""
                           textFormat: Text.PlainText
-                          color: pane.highlightColor(turnRow.modelData.highlight)
+                          color: turnRow.hlTint
                           font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
                           font.pixelSize: Style.font.caption
                         }

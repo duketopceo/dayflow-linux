@@ -286,13 +286,9 @@ func main() {
 		d, err := dateArg(args, time.Now())
 		fatal(err)
 		// Drift bookkeeping reads/writes meta+events even under --no-recaps
-		// — open the db whenever we can; degrade to metadata-only rather
-		// than failing the command.
-		var db *sql.DB
-		if db, err = openDB(); err != nil {
-			fmt.Fprintf(os.Stderr, "agents: database unavailable: %v\n", err)
-			db = nil
-		} else {
+		// — degrade to metadata-only rather than failing the command.
+		db := openDBLenient("agents")
+		if db != nil {
 			defer db.Close()
 		}
 		printAgentSessions(db, cfg, d, jsonOut, !hasFlag(args, "--no-recaps"))
@@ -305,11 +301,8 @@ func main() {
 		// the per-day cache.
 		d, err := dateArg(args, time.Now())
 		fatal(err)
-		var db *sql.DB
-		if db, err = openDB(); err != nil {
-			fmt.Fprintf(os.Stderr, "briefing: database unavailable: %v\n", err)
-			db = nil
-		} else {
+		db := openDBLenient("briefing")
+		if db != nil {
 			defer db.Close()
 		}
 		printBriefing(db, cfg, d, jsonOut, hasFlag(args, "--refresh"))
@@ -1162,6 +1155,18 @@ func fatal(err error) {
 		fmt.Fprintln(os.Stderr, "dayflow:", err)
 		os.Exit(1)
 	}
+}
+
+// openDBLenient opens the journal for commands that degrade to
+// metadata-only output when it isn't available (agents, briefing) —
+// stderr note + nil rather than a fatal exit.
+func openDBLenient(cmd string) *sql.DB {
+	db, err := openDB()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: database unavailable: %v\n", cmd, err)
+		return nil
+	}
+	return db
 }
 
 func printTimeline(cfg Config, day time.Time, asJSON bool) {
