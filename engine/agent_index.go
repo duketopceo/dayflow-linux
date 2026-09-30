@@ -53,6 +53,30 @@ const agentIngestBackfillDays = 30
 // resumes from it (re-scanning catches sessions still in flight).
 const metaAgentIngestDay = "agent_ingest_day"
 
+// Runaway safeguards. An ingest pass is a maintenance job, not a
+// foreground task: a whale transcript store (devin's sessions.db is ~4GB)
+// can decode for minutes at 100% CPU, so every pass runs under a wall-clock
+// deadline and a decoded-byte ceiling, and yields rather than monopolize.
+// Vars so tests can shrink them.
+var (
+	// agentIngestBudget bounds daemon/lazy passes; the hourly tick and
+	// the next search each resume where the last pass stopped.
+	agentIngestBudget = 90 * time.Second
+	// agentIngestCLIBudget gives a manual `dayflow ingest` a generous but
+	// still finite ceiling — it reports early-stop rather than spinning.
+	agentIngestCLIBudget = 10 * time.Minute
+	// agentIngestByteLimit caps decoded turn text per pass — a second
+	// brake for paths (DB-backed sessions) where no file size exists to
+	// pre-check.
+	agentIngestByteLimit = int64(256 << 20)
+	// agentTranscriptCap skips transcript files larger than this — a
+	// decode of a >64MB single file can alone burn the whole budget.
+	agentTranscriptCap = int64(64 << 20)
+	// agentIndexSessCap bounds indexed turns per session — pathological
+	// sessions (runaway agents) are truncated rather than unbounded.
+	agentIndexSessCap = 4000
+)
+
 // ingestMu serializes lazy ingest passes — a second search while one runs
 // serves stale results instead of doubling the decode work.
 var ingestMu sync.Mutex
@@ -130,17 +154,23 @@ func ingestKey(source, session string, idx int, ts int64) string {
 	return hex.EncodeToString(h[:16])
 }
 
-// ingestAgentChats scans the watermark window and indexes any new turns.
-// Idempotent; returns (indexedTurns, error).
-func ingestAgentChats(db *sql.DB) (int, error) {
+// ingestAgentChats scans the watermark window under a wall-clock budget
+// and indexes any new turns. Idempotent; returns (indexedTurns,
+// stoppedEarly, error). When the budget or byte ceiling is hit the pass
+// stops at the current day boundary and stoppedEarly reports pending
+// work — the watermark has already advanced per completed day, so the
+// next pass resumes instead of restarting.
+func ingestAgentChats(db *sql.DB, budget time.Duration) (int, bool, error) {
 	if db == nil {
-		return 0, nil
+		return 0, false, nil
 	}
 	if err := ensureAgentIndex(db); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	deadline := now.Add(budget)
+	var decoded int64 // cumulative len of decoded turn text this pass
 
 	watermark := today.AddDate(0, 0, -agentIngestBackfillDays)
 	if v := metaGet(db, metaAgentIngestDay); v != "" {
@@ -152,28 +182,42 @@ func ingestAgentChats(db *sql.DB) (int, error) {
 	}
 	inserted := 0
 	for d := watermark; !d.After(today); d = d.AddDate(0, 0, 1) {
-		n, err := ingestAgentDay(db, d)
+		if time.Now().After(deadline) || decoded >= agentIngestByteLimit {
+			return inserted, true, nil
+		}
+		n, dayDone, err := ingestAgentDay(db, d, deadline, &decoded)
 		if err != nil {
-			return inserted, err
+			return inserted, false, err
 		}
 		inserted += n
+		if !dayDone {
+			return inserted, true, nil
+		}
+		// Per-day progress: metaSet after each completed day so a stopped
+		// or killed pass resumes where it left off instead of re-scanning.
+		metaSet(db, metaAgentIngestDay, d.Format("2006-01-02"))
 	}
-	metaSet(db, metaAgentIngestDay, today.Format("2006-01-02"))
-	return inserted, nil
+	return inserted, false, nil
 }
 
-// ingestAgentDay indexes one day's turns for all sources. Transcript
-// decode (Turns) happens outside any transaction — it can take seconds
-// per session — so the write tx is only held for the inserts themselves.
-// A long-lived tx would hit SQLITE_BUSY_SNAPSHOT whenever the capture
-// daemon commits mid-ingest; per-session txs stay short enough that the
-// occasional collision is retried cheaply.
-func ingestAgentDay(db *sql.DB, d time.Time) (int, error) {
+// ingestAgentDay indexes one day's turns for all sources under the pass
+// deadline/byte ceiling; returns (inserted, dayDone, error) — dayDone
+// false means the pass budget ran out mid-day and the caller must not
+// advance the watermark past this day. Transcript decode (Turns) happens
+// outside any transaction — it can take seconds per session — so the
+// write tx is only held for the inserts themselves. A long-lived tx
+// would hit SQLITE_BUSY_SNAPSHOT whenever the capture daemon commits
+// mid-ingest; per-session txs stay short enough that the occasional
+// collision is retried cheaply.
+func ingestAgentDay(db *sql.DB, d time.Time, deadline time.Time, decoded *int64) (int, bool, error) {
 	srcs, sessions, _ := scanAgentDay(db, d)
 	defer closeAgentSources(srcs)
 
 	inserted := 0
 	for _, sess := range sessions {
+		if time.Now().After(deadline) || *decoded >= agentIngestByteLimit {
+			return inserted, false, nil
+		}
 		src := agentSourceNamed(srcs, sess.Source)
 		if src == nil {
 			continue
@@ -201,7 +245,22 @@ func ingestAgentDay(db *sql.DB, d time.Time) (int, error) {
 		}
 		// Decode + normalize first, write after — keeps the tx short.
 		var pending []agentIndexRow
+		budgetHit := false
 		for i, t := range src.Turns(sess) {
+			// Mid-session budget check: cheap enough at every-64 turns,
+			// keeps one whale session from dragging the whole day past
+			// the deadline. Partial pending rows still write; the fp is
+			// withheld so a later pass re-decodes and fills the rest.
+			if i&63 == 0 && (time.Now().After(deadline) || *decoded >= agentIngestByteLimit) {
+				budgetHit = true
+				break
+			}
+			// Bound indexed turns per session — a runaway agent can emit
+			// tens of thousands; the first N are enough for search.
+			if i >= agentIndexSessCap {
+				break
+			}
+			*decoded += int64(len(t.text))
 			role := turnRole(t)
 			if role == "" {
 				continue
@@ -223,15 +282,21 @@ func ingestAgentDay(db *sql.DB, d time.Time) (int, error) {
 		// on transient read failure as well as genuine emptiness, and
 		// stamping would seal a failed decode until the file next grows.
 		if len(pending) == 0 {
+			if budgetHit {
+				return inserted, false, nil
+			}
 			continue
 		}
-		n, err := writeAgentSessionRows(db, pending, sessKey, sessFP, fpOK, fpChanged, sess)
+		n, err := writeAgentSessionRows(db, pending, sessKey, sessFP, fpOK && !budgetHit, fpChanged, sess)
 		if err != nil {
-			return inserted, err
+			return inserted, false, err
 		}
 		inserted += n
+		if budgetHit {
+			return inserted, false, nil
+		}
 	}
-	return inserted, nil
+	return inserted, true, nil
 }
 
 // boundForScrub caps text before the scrub regexes run. When the cap cuts
@@ -371,8 +436,12 @@ func searchAgentSessions(db *sql.DB, cfg Config, query string) ([]agentSearchHit
 	if v := metaGet(db, metaAgentIngestDay); v != todayStr(time.Now()) && !dbReadOnly(db) && ingestMu.TryLock() {
 		go func() {
 			defer ingestMu.Unlock()
-			if _, err := ingestAgentChats(db); err != nil {
+			n, early, err := ingestAgentChats(db, agentIngestBudget)
+			switch {
+			case err != nil:
 				debugf(cfg, "agent index refresh failed: %v", err)
+			case early:
+				debugf(cfg, "agent index refresh paused at budget (%d turns so far); resumes next pass", n)
 			}
 		}()
 	}

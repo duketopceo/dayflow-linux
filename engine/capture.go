@@ -1034,9 +1034,13 @@ func runDaemon(cfg Config) error {
 			if ingestMu.TryLock() {
 				go func() {
 					defer ingestMu.Unlock()
-					if n, err := ingestAgentChats(db); err != nil {
+					n, early, err := ingestAgentChats(db, agentIngestBudget)
+					switch {
+					case err != nil:
 						debugf(cfg, "agent chat ingest failed: %v", err)
-					} else if n > 0 {
+					case early:
+						debugf(cfg, "agent chat ingest paused at budget (%d turns so far); resumes next pass", n)
+					case n > 0:
 						debugf(cfg, "agent chat ingest: %d turns", n)
 					}
 				}()

@@ -320,12 +320,15 @@ func main() {
 		if hasFlag(args, "--reindex") {
 			fatal(resetAgentIndex(db))
 		}
-		n, err := ingestAgentChats(db)
+		n, early, err := ingestAgentChats(db, agentIngestCLIBudget)
 		fatal(err)
 		if jsonOut {
-			json.NewEncoder(os.Stdout).Encode(map[string]any{"indexed": n})
+			json.NewEncoder(os.Stdout).Encode(map[string]any{"indexed": n, "pending": early})
 		} else {
 			fmt.Printf("indexed %d agent turn(s)\n", n)
+			if early {
+				fmt.Println("budget reached — more turns pending; run again or let the daemon finish")
+			}
 		}
 
 	case "search-agents":

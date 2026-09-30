@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +32,7 @@ func TestAgentIndexIngestSearchDedup(t *testing.T) {
 		},
 	})
 
-	n, err := ingestAgentChats(db)
+	n, _, err := ingestAgentChats(db, agentIngestBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +41,7 @@ func TestAgentIndexIngestSearchDedup(t *testing.T) {
 	}
 
 	// Dedup: a second pass writes nothing.
-	if n2, err := ingestAgentChats(db); err != nil || n2 != 0 {
+	if n2, _, err := ingestAgentChats(db, agentIngestBudget); err != nil || n2 != 0 {
 		t.Fatalf("re-ingest must be a no-op, got n=%d err=%v", n2, err)
 	}
 
@@ -119,7 +120,7 @@ func TestAgentIndexSessionEditReplaces(t *testing.T) {
 		msgs: []ocFixtureMsg{{id: "m1", typ: "user", seq: 1, text: "original wording here",
 			created: ms(now), updated: ms(now)}},
 	})
-	if _, err := ingestAgentChats(db); err != nil {
+	if _, _, err := ingestAgentChats(db, agentIngestBudget); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +133,7 @@ func TestAgentIndexSessionEditReplaces(t *testing.T) {
 		msgs: []ocFixtureMsg{{id: "m1", typ: "user", seq: 1, text: "completely replaced wording",
 			created: ms(now), updated: ms(now.Add(time.Minute))}},
 	})
-	if _, err := ingestAgentChats(db); err != nil {
+	if _, _, err := ingestAgentChats(db, agentIngestBudget); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,5 +174,143 @@ func TestAgentIndexEmpty(t *testing.T) {
 	}
 	if _, err := searchAgentSessions(db, cfg, ""); err == nil {
 		t.Fatal("empty query must error")
+	}
+}
+
+// An expired budget must stop the pass immediately — no decode work runs
+// and the watermark stays put so the next pass does the work.
+func TestAgentIndexDeadlineStopsPass(t *testing.T) {
+	testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	now := time.Now()
+	writeOpencodeDB(t, filepath.Join(dir, "opencode.db"), ocFixtureSession{
+		id: "ses_b", title: "Budget", dir: "/home/x/p",
+		msgs: []ocFixtureMsg{{id: "m1", typ: "user", seq: 1, text: "do work",
+			created: ms(now), updated: ms(now)}},
+	})
+
+	n, early, err := ingestAgentChats(db, -time.Second) // already expired
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !early || n != 0 {
+		t.Fatalf("expired budget must stop with no work, got n=%d early=%v", n, early)
+	}
+	if metaGet(db, metaAgentIngestDay) != "" {
+		t.Fatal("watermark must not advance on an aborted pass")
+	}
+
+	// A funded pass resumes and completes.
+	n, early, err = ingestAgentChats(db, agentIngestCLIBudget)
+	if err != nil || early || n != 1 {
+		t.Fatalf("resume should index 1 turn, got n=%d early=%v err=%v", n, early, err)
+	}
+}
+
+// The decoded-byte ceiling aborts a pass mid-session: partial rows persist
+// (dedup), the fingerprint is withheld, and a later pass completes coverage.
+func TestAgentIndexByteLimitAbortsAndResumes(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	now := time.Now()
+	var msgs []ocFixtureMsg
+	for i := 0; i < 70; i++ { // >64 turns so the mid-session check fires
+		msgs = append(msgs, ocFixtureMsg{
+			id: fmt.Sprintf("m%d", i), typ: "user", seq: i + 1,
+			text:    fmt.Sprintf("turn %d of the long session body text", i),
+			created: ms(now.Add(time.Duration(i) * time.Minute)),
+			updated: ms(now.Add(time.Duration(i) * time.Minute)),
+		})
+	}
+	writeOpencodeDB(t, filepath.Join(dir, "opencode.db"), ocFixtureSession{
+		id: "ses_long", title: "Long", dir: "/home/x/p", msgs: msgs})
+
+	old := agentIngestByteLimit
+	agentIngestByteLimit = 500 // trips inside the first session
+	defer func() { agentIngestByteLimit = old }()
+
+	n, early, err := ingestAgentChats(db, agentIngestCLIBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !early {
+		t.Fatal("byte ceiling must abort the pass early")
+	}
+	if n == 0 || n >= 70 {
+		t.Fatalf("expected partial coverage, got %d", n)
+	}
+	var fpCount int
+	db.QueryRow(`SELECT count(*) FROM agent_sess_fp`).Scan(&fpCount)
+	if fpCount != 0 {
+		t.Fatal("fingerprint must be withheld on a mid-session abort")
+	}
+
+	// Resume with a real byte budget — dedup skips indexed turns, the
+	// rest land.
+	agentIngestByteLimit = old
+	n2, early, err := ingestAgentChats(db, agentIngestCLIBudget)
+	if err != nil || early {
+		t.Fatalf("resume failed: n=%d early=%v err=%v", n2, early, err)
+	}
+	var total int
+	db.QueryRow(`SELECT count(*) FROM agent_ingest`).Scan(&total)
+	if total != 70 {
+		t.Fatalf("resume must complete coverage, got %d rows", total)
+	}
+	hits, err := searchAgentSessions(db, cfg, "long session")
+	if err != nil || len(hits) == 0 {
+		t.Fatal("resumed content not searchable")
+	}
+}
+
+// Transcript files beyond agentTranscriptCap are skipped without decode —
+// the guard fires in the shared line reader so scan/excerpt/index all
+// avoid the file.
+func TestAgentIndexFileCapSkips(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	now := time.Now()
+	claudeDir := filepath.Join(dir, "claude")
+	t.Setenv("DAYFLOW_CLAUDE_DIR", claudeDir)
+	writeJSONL(t, filepath.Join(claudeDir, "-proj", "big.jsonl"), []string{
+		fmt.Sprintf(`{"type":"user","timestamp":%q,"cwd":"/home/x/proj","message":{"role":"user","content":"oversized session question"}}`,
+			now.Format(time.RFC3339Nano)),
+	}, now)
+
+	old := agentTranscriptCap
+	agentTranscriptCap = 16 // the fixture line alone exceeds this
+	defer func() { agentTranscriptCap = old }()
+
+	n, _, err := ingestAgentChats(db, agentIngestCLIBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("oversized transcript must be skipped, got %d turns", n)
+	}
+	hits, err := searchAgentSessions(db, cfg, "oversized")
+	if err != nil || len(hits) != 0 {
+		t.Fatalf("oversized content must not be indexed: %+v", hits)
 	}
 }

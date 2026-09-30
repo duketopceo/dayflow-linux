@@ -213,6 +213,17 @@ Notes:
   Derived agent text in `agent_recaps`, `agent_briefings`, and
   `chat_messages` (tool results quoting snippets) does not currently age
   out with `retention_days`.
+
+  **Runaway safeguards**: every ingest pass runs under a wall-clock
+  deadline (90 s daemon/lazy, 10 min `dayflow ingest`) and a 256 MB
+  decoded-byte ceiling; transcript files over 64 MB are skipped
+  unread (same guard covers `agents`/`briefing` scans, which show the
+  session absent), and sessions cap at 4000 indexed turns. A budgeted
+  stop is not an error: `ingest` prints/reports `pending`, the daemon
+  logs a pause line, and the per-day watermark resumes the backlog on
+  the next pass. A mid-session abort writes its partial turns but
+  withholds the fingerprint so the next pass re-decodes and completes
+  coverage.
 - `dayflow goal --json`: `streak` = `{current, best, total}` consecutive-day
   completion counts. Viewed day pending → `current` counts back from
   yesterday; any past day without a completed goal breaks a run.
