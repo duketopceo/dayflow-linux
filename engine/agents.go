@@ -56,6 +56,10 @@ type agentSource interface {
 	Fingerprint(sess AgentSession) (recapFingerprint, bool)
 	// Excerpt is the bounded transcript sample for recap generation.
 	Excerpt(sess AgentSession) string
+	// Turns returns the session's normalized turn list (role, text,
+	// timestamp) for the briefing's condensed narrative and status
+	// derivation; nil/empty degrades the thread, never the briefing.
+	Turns(sess AgentSession) []sessionTurn
 	// Close releases lazily-opened store handles held by the adapter
 	// (DB-backed sources share one handle per store per pass). No-op for
 	// file-backed sources.
@@ -89,8 +93,8 @@ type sourceScanStatus struct {
 
 func agentSources() []agentSource {
 	return []agentSource{
-		jsonlSource{name: "claude", root: claudeDir(), parse: parseClaudeLine, lineRoleText: claudeLineRoleText},
-		jsonlSource{name: "codex", root: codexDir(), parse: parseCodexLine, lineRoleText: codexLineRoleText},
+		jsonlSource{name: "claude", root: claudeDir(), parse: parseClaudeLine, lineRoleText: claudeLineRoleText, lineTurn: claudeLineTurn},
+		jsonlSource{name: "codex", root: codexDir(), parse: parseCodexLine, lineRoleText: codexLineRoleText, lineTurn: codexLineTurn},
 		&opencodeSource{},
 		&devinSource{},
 		&cursorSource{},
@@ -109,6 +113,10 @@ type jsonlSource struct {
 	// a new JSONL source can't silently produce empty excerpts that settle
 	// as cached recaps.
 	lineRoleText func([]byte) (role, text string)
+	// lineTurn decodes one transcript line into (role, text, unixTs) for
+	// the briefing's condensed turns — lineRoleText plus the timestamp the
+	// excerpt path doesn't need.
+	lineTurn func([]byte) (role, text string, ts int64)
 }
 
 func (j jsonlSource) Name() string { return j.name }
@@ -126,6 +134,39 @@ func (j jsonlSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 
 func (j jsonlSource) Excerpt(sess AgentSession) string {
 	return sessionExcerpt(sess.File, j.lineRoleText)
+}
+
+// Turns decodes every line of the transcript into the shared turn shape —
+// the briefing needs the whole conversation, not just the excerpt's
+// first/last fields.
+func (j jsonlSource) Turns(sess AgentSession) []sessionTurn {
+	if j.lineTurn == nil {
+		return nil
+	}
+	f, err := os.Open(sess.File)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var turns []sessionTurn
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		role, text, ts := j.lineTurn(sc.Bytes())
+		if role == "" {
+			continue
+		}
+		turns = append(turns, sessionTurn{
+			role:       role,
+			text:       text,
+			unixTs:     ts,
+			usableUser: role == "user" && text != "" && !isEnvelopeText(text),
+		})
+	}
+	if sc.Err() != nil {
+		return nil // truncated parse — parity with scanJSONL/sessionExcerpt
+	}
+	return turns
 }
 
 // Close is a no-op — file-backed sources hold no store handles.

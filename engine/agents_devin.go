@@ -459,3 +459,13 @@ func (d *devinSource) Excerpt(sess AgentSession) string {
 	}
 	return excerptFromTurns(devinTurns(msgs))
 }
+
+// Turns returns the session's full normalized turn list for the briefing —
+// same message path as the excerpt (DB rows or ATIF transcript).
+func (d *devinSource) Turns(sess AgentSession) []sessionTurn {
+	msgs, ok := d.messages(sess, true)
+	if !ok {
+		return nil
+	}
+	return devinTurns(msgs)
+}

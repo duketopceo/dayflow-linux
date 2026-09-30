@@ -235,37 +235,55 @@ func scrubText(s string) string {
 	return s
 }
 
-// claudeLineRoleText / codexLineRoleText are the per-source line decoders
-// registered on each jsonlSource — they decode one transcript line into
-// (role, text) for the excerpt, returning "" for non-message lines.
-func claudeLineRoleText(raw []byte) (string, string) {
+// claudeLineTurn / codexLineTurn decode one transcript line into
+// (role, text, unixTs) for the briefing's turn list; the RoleText wrappers
+// drop the timestamp for the excerpt path, which doesn't need it.
+func claudeLineTurn(raw []byte) (string, string, int64) {
 	var line claudeLine
 	if json.Unmarshal(raw, &line) != nil {
-		return "", ""
+		return "", "", 0
 	}
 	if line.Type != "user" && line.Type != "assistant" {
-		return "", ""
+		return "", "", 0
 	}
 	var msg claudeMessage
 	if json.Unmarshal(line.Message, &msg) != nil {
-		return "", ""
+		return "", "", 0
 	}
-	return line.Type, strings.TrimSpace(contentText(msg.Content))
+	var ts int64
+	if t, err := time.Parse(time.RFC3339Nano, line.Timestamp); err == nil {
+		ts = t.Unix()
+	}
+	return line.Type, strings.TrimSpace(contentText(msg.Content)), ts
 }
 
-func codexLineRoleText(raw []byte) (string, string) {
+func claudeLineRoleText(raw []byte) (string, string) {
+	role, text, _ := claudeLineTurn(raw)
+	return role, text
+}
+
+func codexLineTurn(raw []byte) (string, string, int64) {
 	var line codexLine
 	if json.Unmarshal(raw, &line) != nil {
-		return "", ""
+		return "", "", 0
 	}
 	var p codexPayload
 	if json.Unmarshal(line.Payload, &p) != nil || p.Type != "message" {
-		return "", ""
+		return "", "", 0
 	}
 	if p.Role != "user" && p.Role != "assistant" {
-		return "", ""
+		return "", "", 0
 	}
-	return p.Role, strings.TrimSpace(contentText(p.Content))
+	var ts int64
+	if t, err := time.Parse(time.RFC3339Nano, line.Timestamp); err == nil {
+		ts = t.Unix()
+	}
+	return p.Role, strings.TrimSpace(contentText(p.Content)), ts
+}
+
+func codexLineRoleText(raw []byte) (string, string) {
+	role, text, _ := codexLineTurn(raw)
+	return role, text
 }
 
 const recapPrompt = `You are summarizing one coding-agent session for a personal work journal.

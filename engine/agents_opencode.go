@@ -426,3 +426,13 @@ func (o *opencodeSource) Excerpt(sess AgentSession) string {
 	}
 	return excerptFromTurns(ocTurns(msgs))
 }
+
+// Turns returns the session's full normalized turn list for the briefing —
+// same message query the excerpt runs, normalized through ocTurns.
+func (o *opencodeSource) Turns(sess AgentSession) []sessionTurn {
+	msgs, ok := o.messages(sess, true)
+	if !ok {
+		return nil
+	}
+	return ocTurns(msgs)
+}

@@ -1942,3 +1942,59 @@ func TestCursorWorkspaceFolderRejectsUnsafeID(t *testing.T) {
 		}
 	}
 }
+
+// --- agentSource.Turns (briefing turn extraction) ---
+
+func TestJSONLSourceTurns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s1.jsonl")
+	writeJSONL(t, path, []string{
+		`{"type":"user","timestamp":"2026-09-15T10:00:00Z","cwd":"/home/x/proj","message":{"role":"user","content":"fix the build"}}`,
+		`{"type":"assistant","timestamp":"2026-09-15T10:05:00Z","cwd":"/home/x/proj","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"user","timestamp":"2026-09-15T10:10:00Z","cwd":"/home/x/proj","message":{"role":"user","content":"<environment_context>cwd=/home/x</environment_context>"}}`,
+		`{"type":"summary","summary":"not a message"}`,
+	}, time.Date(2026, 9, 15, 12, 0, 0, 0, time.Local))
+	src := jsonlSource{name: "claude", lineTurn: claudeLineTurn}
+	turns := src.Turns(AgentSession{File: path})
+	if len(turns) != 3 {
+		t.Fatalf("expected 3 turns, got %d", len(turns))
+	}
+	if turns[0].role != "user" || turns[0].text != "fix the build" || turns[0].unixTs == 0 || !turns[0].usableUser {
+		t.Fatalf("bad user turn: %+v", turns[0])
+	}
+	if turns[1].role != "assistant" || turns[1].text != "done" {
+		t.Fatalf("bad assistant turn: %+v", turns[1])
+	}
+	if turns[2].role != "user" || turns[2].usableUser {
+		t.Fatalf("envelope turn must be non-usable: %+v", turns[2])
+	}
+	if got := src.Turns(AgentSession{File: filepath.Join(dir, "gone.jsonl")}); got != nil {
+		t.Fatalf("missing file should give nil turns, got %d", len(got))
+	}
+}
+
+func TestOpencodeTurns(t *testing.T) {
+	dir := t.TempDir()
+	setAgentDirs(t, dir)
+	day := time.Date(2026, 9, 20, 0, 0, 0, 0, time.Local)
+	writeOpencodeDB(t, filepath.Join(dir, "opencode.db"), ocFixtureSession{
+		id: "ses_1", title: "Adapter work", dir: "/home/x/dayflow",
+		msgs: []ocFixtureMsg{
+			{id: "m1", typ: "user", seq: 1, text: "add the adapter",
+				created: ms(day.Add(10 * time.Hour)), updated: ms(day.Add(10 * time.Hour))},
+			{id: "m2", typ: "assistant", seq: 2, text: "done",
+				created: ms(day.Add(10*time.Hour + time.Minute)), updated: ms(day.Add(10*time.Hour + time.Minute))},
+		},
+	})
+	sessions, _ := scanAgentSources(day)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %+v", sessions)
+	}
+	turns := (&opencodeSource{}).Turns(sessions[0])
+	if len(turns) != 2 {
+		t.Fatalf("expected 2 turns, got %+v", turns)
+	}
+	if turns[0].role != "user" || turns[0].text != "add the adapter" || turns[0].unixTs == 0 {
+		t.Fatalf("bad turn: %+v", turns[0])
+	}
+}

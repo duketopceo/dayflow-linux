@@ -893,3 +893,13 @@ func (c *cursorSource) Excerpt(sess AgentSession) string {
 	}
 	return excerptFromTurns(cursorSessionTurns(turns))
 }
+
+// Turns returns the composer's full normalized turn list for the briefing —
+// same turn query the excerpt runs.
+func (c *cursorSource) Turns(sess AgentSession) []sessionTurn {
+	turns, _, ok := c.turns(sess, true)
+	if !ok {
+		return nil
+	}
+	return cursorSessionTurns(turns)
+}
