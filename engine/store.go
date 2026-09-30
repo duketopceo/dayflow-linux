@@ -92,6 +92,17 @@ CREATE TABLE IF NOT EXISTS agent_recaps (
   model              TEXT NOT NULL DEFAULT '',
   created_at         INTEGER NOT NULL
 );
+
+-- Cached agent briefings, one row per day, invalidated by a fingerprint
+-- over every session's adapter fingerprint. mode records whether the model
+-- prose pass ran ("model") or the payload is deterministic-only ("fallback").
+CREATE TABLE IF NOT EXISTS agent_briefings (
+  day         TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL DEFAULT '',
+  payload     TEXT NOT NULL DEFAULT '',
+  mode        TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
 `
 
 // schemaV2 is migration version 2: chat, standup, journal, goals, LLM-call

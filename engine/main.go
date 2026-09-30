@@ -70,6 +70,8 @@ Query:
   frames [YYYY-MM-DD] [--json]   List captured frames for a day
   agents [YYYY-MM-DD] [--json] [--no-recaps]   Coding-agent sessions + recaps
                           (Claude Code, Codex, OpenCode, Devin, Cursor)
+  briefing [YYYY-MM-DD] [--json] [--refresh] Day briefing: sessions grouped into
+                          workstreams with condensed turns + status
   forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
                           (default: tomorrow)
   playback [on|off|status] [--json]   Opt-in frame retention for timelapse
@@ -294,6 +296,23 @@ func main() {
 			defer db.Close()
 		}
 		printAgentSessions(db, cfg, d, jsonOut, !hasFlag(args, "--no-recaps"))
+
+	case "briefing":
+		// briefing [YYYY-MM-DD] [--json] [--refresh] — the day's agent
+		// briefing: sessions grouped into workstreams with condensed
+		// turns + per-thread status. Model prose under agent_recaps;
+		// deterministic fallback otherwise. --refresh regenerates past
+		// the per-day cache.
+		d, err := dateArg(args, time.Now())
+		fatal(err)
+		var db *sql.DB
+		if db, err = openDB(); err != nil {
+			fmt.Fprintf(os.Stderr, "briefing: database unavailable: %v\n", err)
+			db = nil
+		} else {
+			defer db.Close()
+		}
+		printBriefing(db, cfg, d, jsonOut, hasFlag(args, "--refresh"))
 
 	case "forecast":
 		// forecast [YYYY-MM-DD] [--json] — predict a day's category mix from
