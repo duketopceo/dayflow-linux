@@ -25,11 +25,14 @@ import (
 // Dayflow recap schema with our source names; decoding is lenient both ways
 // so a partially-written model pass degrades per-field.
 type agentBriefing struct {
-	Day         string              `json:"day"`
-	GeneratedAt string              `json:"generated_at"`
-	Mode        string              `json:"mode"` // "model" | "fallback"
-	Workstreams []briefingWorkstream `json:"workstreams"`
-	Sources     []sourceScanStatus  `json:"sources"`
+	Day         string `json:"day"`
+	GeneratedAt string `json:"generated_at"`
+	Mode        string `json:"mode"` // "model" | "fallback"
+	// RecapsEnabled mirrors cfg.AgentRecaps so renderers can show the
+	// opt-in hint when prose generation is off.
+	RecapsEnabled bool                 `json:"recaps_enabled"`
+	Workstreams   []briefingWorkstream `json:"workstreams"`
+	Sources       []sourceScanStatus   `json:"sources"`
 }
 
 type briefingWorkstream struct {
@@ -126,7 +129,12 @@ func condenseTurns(turns []sessionTurn) []briefingTurn {
 			continue
 		}
 		if n := len(out); n > 0 && out[n-1].Role == role {
-			out[n-1].Text = truncate(out[n-1].Text+" — "+text, 200)
+			// Adapters can emit the same message text on consecutive
+			// turns (e.g. a session title re-echoed per event) — don't
+			// stack identical text on itself.
+			if !strings.Contains(out[n-1].Text, text) {
+				out[n-1].Text = truncate(out[n-1].Text+" — "+text, 200)
+			}
 			if t.unixTs > out[n-1].Ts {
 				out[n-1].Ts = t.unixTs
 			}
@@ -313,11 +321,11 @@ Rules: mark review_ready only when the thread produced a finished deliverable aw
 // optional, applied by id over the skeleton.
 type briefingPolishResult struct {
 	Workstreams []struct {
-		ID       string `json:"id"`
-		Name     string `json:"name"`
-		Summary  string `json:"summary"`
-		Bullets  []string `json:"bullets"`
-		Threads  []struct {
+		ID      string   `json:"id"`
+		Name    string   `json:"name"`
+		Summary string   `json:"summary"`
+		Bullets []string `json:"bullets"`
+		Threads []struct {
 			ID            string `json:"id"`
 			Title         string `json:"title"`
 			LatestOutcome string `json:"latest_outcome"`
@@ -544,6 +552,7 @@ func agentBriefingFor(db *sql.DB, cfg Config, d time.Time, refresh bool) agentBr
 // printBriefing renders the briefing as JSON or a compact text digest.
 func printBriefing(db *sql.DB, cfg Config, d time.Time, jsonOut, refresh bool) {
 	b := agentBriefingFor(db, cfg, d, refresh)
+	b.RecapsEnabled = cfg.AgentRecaps
 	if jsonOut {
 		json.NewEncoder(os.Stdout).Encode(b)
 		return

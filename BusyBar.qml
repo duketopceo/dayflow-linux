@@ -1,5 +1,4 @@
 import QtQuick
-import Quickshell
 import qs.Commons
 
 // Thin indeterminate progress indicator shown while a fetch is in flight.

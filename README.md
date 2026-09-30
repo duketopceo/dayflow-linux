@@ -51,7 +51,7 @@ Prebuilt binaries (amd64 + arm64) are attached to each [release](https://github.
 
 **Analytics** — weekly category donut, app treemap, context-shift flow, focus blocks, week-over-week trends, next-day forecast from your history.
 
-**Agents** — recaps of your coding-agent sessions across Claude Code, Codex, OpenCode, Devin, and Cursor (opt-in; Jev judges which sessions are worth summarizing and scores the result). Per-source drift reporting so a broken store is visible, not silently empty.
+**Agents** — a workstream briefing of your coding-agent sessions across Claude Code, Codex, OpenCode, Devin, and Cursor: sessions grouped by project into named workstreams, each thread carrying a derived status (in progress / review ready / blocked / completed) and a condensed turn narrative with key decisions flagged. Fully deterministic offline; opting into `agent_recaps` adds model-written prose from a bounded, scrubbed skeleton. Plus per-session recaps (`dayflow agents`) with Jev scoring, and per-source drift reporting so a broken store is visible, not silently empty.
 
 **Ops** — desktop notifications (capture stall on by default — silence means data loss), focus-following capture on multi-monitor setups (`output: "auto"`), usage/cost reporting (`dayflow usage --days 7` with optional pricing), backups with integrity verification, `doctor` health checks, MCP server for agent access.
 
@@ -83,6 +83,7 @@ dayflow standup [save|draft]   # standup update / saved draft fields
 dayflow insights [day|week|month]   # focus, categories, apps, distractions
 dayflow weekly | week | month  # rollups + charts
 dayflow agents [day]           # coding-agent sessions + recaps (--no-recaps)
+dayflow briefing [day]         # workstream briefing: grouped sessions, statuses, condensed turns (--refresh)
 dayflow forecast [day]         # predict a day's category mix (default: tomorrow)
 dayflow search <query>         # FTS5 search over titles/summaries/categories/apps
 dayflow search --reindex       # rebuild the index

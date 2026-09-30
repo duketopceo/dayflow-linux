@@ -53,7 +53,7 @@ func TestCondenseTurns(t *testing.T) {
 	now := time.Now().Unix()
 	turns := []sessionTurn{
 		uturn("user", "first ask", now-100),
-		uturn("user", "second ask", now-90), // merges into turn 0
+		uturn("user", "second ask", now-90),                                                    // merges into turn 0
 		{role: "user", text: "<environment_context>x</environment_context>", unixTs: now - 80}, // dropped
 		{role: "assistant", text: "   ", unixTs: now - 70},                                     // empty → dropped
 		uturn("assistant", "did the thing", now-60),
@@ -322,8 +322,8 @@ func TestBriefingModelPayloadScrubbed(t *testing.T) {
 	b := agentBriefing{Day: "2026-09-20", Workstreams: []briefingWorkstream{{
 		ID: "w", Name: "proj", Threads: []briefingThread{{
 			ID: "t", Source: "claude", Status: statusCompleted,
-			Title:  "work in " + home + "/secret",
-			Turns:  []briefingTurn{{Role: "user", Text: "key is sk-abcdef1234567890 in " + home}},
+			Title: "work in " + home + "/secret",
+			Turns: []briefingTurn{{Role: "user", Text: "key is sk-abcdef1234567890 in " + home}},
 		}},
 	}}}
 	p := briefingModelPayload(&b)

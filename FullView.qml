@@ -38,26 +38,31 @@ FloatingWindow {
   }
 
   // ---- agents pane state ----
-  property var agentSessions: []
-  // Per-source scan status from agents --json ({source, sessions, status,
-  // note?, drift?}) — lets the pane surface an unavailable or drifted store
-  // instead of looking like a session-free day.
+  // The day's briefing payload from `dayflow briefing --json`:
+  // {day, mode, recaps_enabled, workstreams[], sources[]} — null until the
+  // first load so the pane can distinguish "not loaded" from "empty day".
+  property var agentBriefing: null
+  // Per-source scan status ({source, sessions, status, note?, drift?}) —
+  // surfaced so an unavailable or drifted store doesn't read as a quiet day.
   property var agentSources: []
-  // recaps_enabled from agents --json. Defaults true so a pre-field binary
+  // recaps_enabled from briefing --json. Defaults true so a pre-field binary
   // doesn't flash the opt-in hint; false only when the engine says so.
   property bool agentRecapsEnabled: true
   property bool agentsLoading: false
   property string agentsError: ""
 
-  function agentsLoad() {
+  function agentsLoad(refresh) {
     if (!root.dayflow) return
-    root.dayflow.uilog("agents load " + root.dayflow.viewDateStr())
+    root.dayflow.uilog("agents load " + root.dayflow.viewDateStr() + (refresh ? " (refresh)" : ""))
     root.agentsRun = root.agentsRun + 1
     root.agentsTimedOut = false
-    agentsProc.command = ["dayflow", "agents", root.dayflow.viewDateStr(), "--json"]
+    var cmd = ["dayflow", "briefing", root.dayflow.viewDateStr(), "--json"]
+    if (refresh) cmd.push("--refresh")
+    agentsProc.command = cmd
     root.agentsLoading = true
     if (agentsProc.running) {
-      root.agentsPending = true
+      if (refresh === true || root.agentsPending !== "refresh")
+        root.agentsPending = refresh === true ? "refresh" : "load"
     } else {
       // Stamp the run on the process only at actual start — callbacks from a
       // still-terminating previous run then fail the runId check.
@@ -66,10 +71,18 @@ FloatingWindow {
     }
   }
 
+  // Runs the pending reload/refresh recorded by agentsLoad when a process
+  // was mid-flight. A queued refresh outranks a queued load.
+  function agentsDrainPending() {
+    var pending = root.agentsPending
+    root.agentsPending = false
+    if (pending !== false) root.agentsLoad(pending === "refresh")
+  }
+
   Process {
     id: agentsProc
     property int runId: 0
-    command: ["dayflow", "agents", "--json"]
+    command: ["dayflow", "briefing", "--json"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -80,14 +93,14 @@ FloatingWindow {
         root.agentsLoading = false
         try {
           var d = JSON.parse(text)
-          root.agentSessions = d.sessions || []
+          root.agentBriefing = d
           root.agentSources = d.sources || []
           root.agentRecapsEnabled = d.recaps_enabled !== false
           root.agentsError = ""
         } catch (e) {
-          root.agentSessions = []
+          root.agentBriefing = null
           root.agentSources = []
-          root.agentsError = "could not load agent sessions"
+          root.agentsError = "could not load agent briefing"
         }
       }
     }
@@ -95,39 +108,27 @@ FloatingWindow {
       if (agentsProc.runId !== root.agentsRun) {
         // A previous process's exit — never touch the new run's state, but
         // still service the queued reload it was waiting on.
-        if (root.agentsPending) {
-          root.agentsPending = false
-          root.agentsLoad()
-        }
+        root.agentsDrainPending()
         return
       }
       root.agentsLoading = false
       if (exitCode !== 0 && !root.agentsTimedOut) {
-        root.agentSessions = []
+        root.agentBriefing = null
         root.agentSources = []
-        root.agentsError = "agent scan failed"
+        root.agentsError = "agent briefing failed"
       }
-      if (root.agentsPending) {
-        root.agentsPending = false
-        root.agentsLoad()
-      }
+      root.agentsDrainPending()
     }
     // FailedToStart emits neither exited nor streamFinished — clear the
     // flag and drain the queue so the bar never sticks.
     onRunningChanged: {
       if (!agentsProc.running) {
         if (agentsProc.runId !== root.agentsRun) {
-          if (root.agentsPending) {
-            root.agentsPending = false
-            root.agentsLoad()
-          }
+          root.agentsDrainPending()
           return
         }
         root.agentsLoading = false
-        if (root.agentsPending) {
-          root.agentsPending = false
-          root.agentsLoad()
-        }
+        root.agentsDrainPending()
       }
     }
   }
@@ -149,9 +150,9 @@ FloatingWindow {
       root.agentsTimedOut = true
       agentsProc.running = false
       root.agentsLoading = false
-      root.agentSessions = []
+      root.agentBriefing = null
       root.agentSources = []
-      root.agentsError = "agent scan timed out — recaps skipped"
+      root.agentsError = "agent briefing timed out"
     }
   }
 
@@ -185,7 +186,7 @@ FloatingWindow {
   property string tlError: ""
 
   property bool tlPending: false
-  property bool agentsPending: false
+  property var agentsPending: false
   property bool agentsTimedOut: false
   property int agentsRun: 0
 
@@ -384,8 +385,8 @@ FloatingWindow {
                   root.section = modelData.key
                   if (modelData.key === "timelapse" && root.tlFrames.length === 0 && !root.tlLoading)
                     root.tlLoad()
-                  if (modelData.key === "agents" && root.agentSessions.length === 0 && !root.agentsLoading)
-                    root.agentsLoad()
+                  if (modelData.key === "agents" && root.agentBriefing === null && !root.agentsLoading)
+                    root.agentsLoad(false)
                 }
               }
             }
@@ -469,10 +470,10 @@ FloatingWindow {
       root.tlFrames = []
       root.tlIndex = 0
       root.tlPlaying = false
-      root.agentSessions = []
+      root.agentBriefing = null
       root.agentSources = []
       if (root.section === "timelapse") root.tlLoad()
-      if (root.section === "agents") root.agentsLoad()
+      if (root.section === "agents") root.agentsLoad(false)
     }
   }
 
