@@ -27,21 +27,19 @@ Dayflow captures a lightweight screenshot every 10 seconds, deduplicates unchang
 omarchy plugin add https://github.com/duketopceo/dayflow-linux.git --enable
 ```
 
-Bar widget + full-window panel (timeline, timelapse, context shifts, agent recaps, forecast). Then `dayflow setup` to configure a provider.
+Open the panel and click **Install engine** — the widget downloads the checksum-verified release binary matching the plugin version and enables the capture units for you. Then the onboarding wizard walks provider setup. Bar widget + full-window panel (timeline, timelapse, context shifts, agent recaps, forecast).
 
 ### Any Linux (engine only)
 
 The engine needs no Omarchy — it's a standalone CLI + TUI + MCP server. Works on any wlroots compositor (Hyprland, sway, river, …) via `grim`; on KDE/GNOME/X11 set `capture_command` to any tool that writes an image to stdout.
 
 ```sh
-cd engine && go build -o dayflow .
-install -Dm755 dayflow ~/.local/bin/dayflow
-dayflow install      # writes + enables systemd user units
+curl -fsSL https://github.com/duketopceo/dayflow-linux/releases/latest/download/install.sh | bash
 dayflow setup        # interactive: paste key, validates + picks a vision model
 dayflow doctor       # sanity-check session, grim, key, model, stores
 ```
 
-Prebuilt binaries (amd64 + arm64) are attached to each [release](https://github.com/duketopceo/dayflow-linux/releases). See [docs/install-linux.md](docs/install-linux.md) for the non-Omarchy walkthrough.
+The script fetches the `amd64`/`arm64` release binary, verifies it against the release's `SHA256SUMS`, places it in `~/.local/bin`, and runs `dayflow install` for the systemd user units. See [docs/install-linux.md](docs/install-linux.md) for manual steps and options (`--version`, source build).
 
 **Requirements:** `grim` (or a `capture_command`), `systemd --user`, `hyprctl` (optional — app ignore list and `output: "auto"` focus-follow are Hyprland-only), an OpenRouter key or local endpoint.
 
@@ -163,11 +161,15 @@ Restore refuses a live DB without `--force` and rejects newer-schema backups. AP
 ## Uninstall
 
 ```sh
+# engine first, while the plugin dir still exists:
+bash ~/.config/omarchy/plugins/io.github.duketopceo.dayflow/scripts/uninstall.sh   # units + binary (data kept)
+# (after plugin removal the equivalent is: dayflow uninstall && rm ~/.local/bin/dayflow)
 omarchy plugin disable io.github.duketopceo.dayflow && omarchy plugin remove io.github.duketopceo.dayflow   # panel
-dayflow uninstall                                   # systemd units
+
+# wipe history + config too, if wanted:
 dayflow pause
-rm -rf ~/.local/share/dayflow                       # wipes frames + journal
-rm -rf ~/.config/dayflow                            # wipes config
+rm -rf ~/.local/share/dayflow
+rm -rf ~/.config/dayflow
 ```
 
 ## MCP / agent access
@@ -188,7 +190,8 @@ BarWidget.qml      # bar indicator: recording state, click for panel
 Panel.qml          # timeline panel + settings footer
 *.qml              # full view: panes, tabs, onboarding, settings
 engine/            # Go CLI/daemon/TUI/MCP — the tracking engine
-scripts/           # stress.sh (live stress), smoke-install.sh (sandboxed install smoke)
+scripts/           # install.sh/uninstall.sh (engine lifecycle), test-install.sh (offline battery),
+                   # stress.sh (live stress), smoke-install.sh (sandboxed install smoke)
 docs/              # plans, research, maintenance runbook, agent contract, publish docs
 preview.png        # marketplace preview
 ```

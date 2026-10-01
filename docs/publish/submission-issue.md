@@ -27,23 +27,29 @@ Dayflow is a private, automatic work journal for Omarchy / Hyprland. It captures
 
 **Installation:**
 ```sh
-# Build and install the Go engine
-cd engine
-go build -o dayflow .
-install -Dm755 dayflow ~/.local/bin/dayflow
-dayflow install
-systemctl --user enable --now dayflow-capture.service
-dayflow setup   # interactive key + model selection
-
-# Install the Omarchy bar plugin
 omarchy plugin add https://github.com/duketopceo/dayflow-linux.git --enable
+```
+
+Then open the panel and click **Install engine** — the widget runs the
+plugin's `scripts/install.sh`, which downloads the release binary pinned
+to the plugin's version (amd64/arm64), verifies it against the release's
+`SHA256SUMS`, places it in `~/.local/bin`, and enables the systemd user
+units. Provider setup is the one remaining interactive step — the panel's
+onboarding wizard handles it, or `dayflow setup` in a terminal.
+
+Equivalent terminal path (also works without Omarchy):
+```sh
+bash ~/.config/omarchy/plugins/io.github.duketopceo.dayflow/scripts/install.sh
+# or standalone: curl -fsSL https://github.com/duketopceo/dayflow-linux/releases/latest/download/install.sh | bash
 ```
 
 **Removal:**
 ```sh
+# engine teardown first (plugin dir must still exist):
+bash ~/.config/omarchy/plugins/io.github.duketopceo.dayflow/scripts/uninstall.sh
 omarchy plugin disable io.github.duketopceo.dayflow
 omarchy plugin remove io.github.duketopceo.dayflow
-dayflow uninstall
+# captured data + config are kept; to also wipe them:
 rm -rf ~/.local/share/dayflow
 rm -rf ~/.config/dayflow
 ```
