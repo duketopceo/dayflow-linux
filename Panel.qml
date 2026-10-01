@@ -76,6 +76,20 @@ Panel {
       decodeURIComponent(String(Qt.resolvedUrl("scripts/install.sh")).replace(/^file:\/\//, ""))
   readonly property bool engineInstalling: engineInstallProc.running
 
+  // Agents tab briefing state — AgentBriefingLoader is shared with
+  // FullView's rail section; the aliases give AgentsTab the same
+  // host.* surface the pane already uses there.
+  AgentBriefingLoader {
+    id: agentLoader
+    panel: dayflow
+  }
+  readonly property alias agentBriefing: agentLoader.briefing
+  readonly property alias agentSources: agentLoader.sources
+  readonly property alias agentRecapsEnabled: agentLoader.recapsEnabled
+  readonly property alias agentsLoading: agentLoader.loading
+  readonly property alias agentsError: agentLoader.error
+  function agentsLoad(refresh) { agentLoader.load(refresh) }
+
   function lastLine(t) {
     var lines = String(t).split("\n").filter(function(l) { return l.trim() !== "" })
     return lines.length ? lines[lines.length - 1].trim() : ""
@@ -128,6 +142,12 @@ Panel {
       if (!weeklyProc.running) weeklyProc.running = true
     } else if (tab === "settings") {
       if (!configProc.running) configProc.running = true
+    } else if (tab === "agents") {
+      // Lazy + staleness-aware: load once, reload when the viewed day
+      // drifted since the briefing was fetched.
+      if (dayflow.agentBriefing === null ||
+          (dayflow.agentBriefing.day || "") !== dayflow.viewDateStr())
+        dayflow.agentsLoad(false)
     }
     // "chat" loads its own processes when the Loader instantiates ChatTab
   }
@@ -1292,7 +1312,7 @@ Panel {
           spacing: Style.space(4)
 
           Repeater {
-            model: ["today", "standup", "chat", "week", "settings"]
+            model: ["today", "standup", "chat", "week", "agents", "settings"]
 
             delegate: Rectangle {
               height: Style.space(26)
@@ -1374,6 +1394,7 @@ Panel {
             if (dayflow.currentTab === "standup") return "StandupTab.qml"
             if (dayflow.currentTab === "chat") return "ChatTab.qml"
             if (dayflow.currentTab === "week") return "WeekTab.qml"
+            if (dayflow.currentTab === "agents") return "AgentsTab.qml"
             return "Settings.qml"
           }
           source: pickSource()
