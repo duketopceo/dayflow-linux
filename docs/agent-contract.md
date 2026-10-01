@@ -101,6 +101,11 @@ Notes:
   seconds in `*_ts` fields (and `AgentSession.start`/`end`, frame `ts`);
   human-readable string fields (`start`, `end`, `time`) are local time.
 - `blocks.status`: `done` (summarized), `failed` (retryable), `dead` (gave up).
+  A summarize sweep first pre-flights the provider key: unresolvable → the
+  sweep aborts without touching blocks (a locked keyring can't burn retry
+  attempts). Once a key resolves again, blocks that died with a
+  `no API key` error are resurrected automatically on the next sweep;
+  `dayflow summarize --retry` manually resets all failed/dead blocks.
 - Jev judgment fields on blocks (all nullable — absent means "no opinion",
   never conflate with zero): `category_confidence` (0-1, Jev's argmax
   category score), `quality_confidence` (0-1, title/summary quality gate),

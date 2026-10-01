@@ -252,6 +252,89 @@ func TestSummarizeBadJSONRetried(t *testing.T) {
 	}
 }
 
+// An unresolvable provider key (locked keyring, unset env) must abort the
+// sweep before any block is touched — historically each pending block
+// burned its 3 attempts and went dead during a keyring outage.
+func TestSummarizeNoKeyAbortsClean(t *testing.T) {
+	cfg := testEnv(t)
+	cfg.OpenRouterAPIKey = ""
+	t.Setenv("PATH", t.TempDir()) // omaseal absent → resolveProviderKey finds nothing
+
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	start := blockStart(now, cfg.BlockMinutes).Add(-time.Duration(cfg.BlockMinutes) * time.Minute)
+	p := writeFrame(t, t.TempDir(), "f.jpg", start)
+	insertFrame(db, start.Add(time.Minute), p)
+
+	n, err := summarizePending(db, cfg, false)
+	if err == nil {
+		t.Fatal("expected sweep abort on unresolvable key")
+	}
+	if n != 0 {
+		t.Fatalf("summarized %d blocks with no key", n)
+	}
+	// The block was never written — it stays pending for the next pass.
+	var cnt int
+	db.QueryRow(`SELECT COUNT(1) FROM blocks WHERE start_ts=?`, start.Unix()).Scan(&cnt)
+	if cnt != 0 {
+		t.Fatalf("no-key sweep must not write a block row, got %d", cnt)
+	}
+	pending, _ := pendingBlocks(db, cfg, now)
+	if len(pending) != 1 {
+		t.Fatalf("pending=%d, want the block still queued", len(pending))
+	}
+}
+
+// Blocks that died of a key outage are resurrected and summarized once a
+// key resolves; blocks dead of a different cause stay dead.
+func TestSummarizeHealsKeyOutageBlocks(t *testing.T) {
+	cfg := testEnv(t)
+	cfg.KeepFrames = true
+	stubOpenRouter(t, `{"title":"Healed","summary":"s","category":"coding"}`)
+
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	block := time.Duration(cfg.BlockMinutes) * time.Minute
+	keyDead := blockStart(now, cfg.BlockMinutes).Add(-3 * block)
+	realDead := keyDead.Add(-block)
+
+	for _, b := range []time.Time{keyDead, realDead} {
+		p := writeFrame(t, t.TempDir(), "f"+b.Format("150405")+".jpg", b)
+		insertFrame(db, b.Add(time.Minute), p)
+	}
+	upsertBlock(db, keyDead, keyDead.Add(block), "", "", "", 3, "dead",
+		`no API key for provider "default": set its api_key in config.json`)
+	upsertBlock(db, realDead, realDead.Add(block), "", "", "", 3, "dead",
+		"api 500: upstream exploded")
+
+	n, err := summarizePending(db, cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("healed+summarized %d blocks, want 1", n)
+	}
+	var title, status string
+	db.QueryRow(`SELECT title, status FROM blocks WHERE start_ts=?`, keyDead.Unix()).Scan(&title, &status)
+	if title != "Healed" || status != "done" {
+		t.Fatalf("key-outage block: status=%q title=%q", status, title)
+	}
+	db.QueryRow(`SELECT status FROM blocks WHERE start_ts=?`, realDead.Unix()).Scan(&status)
+	if status != "dead" {
+		t.Fatalf("non-key dead block was resurrected: status=%q", status)
+	}
+}
+
 func TestSummarizeSkipsIdleWindows(t *testing.T) {
 	cfg := testEnv(t)
 	stubOpenRouter(t, `{"title":"x","summary":"y","category":"coding"}`)
