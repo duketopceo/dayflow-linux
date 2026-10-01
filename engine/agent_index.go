@@ -98,8 +98,12 @@ func ensureAgentIndex(db *sql.DB) error {
 		if _, err := db.Exec(agentIngestDDL); err != nil {
 			return err
 		}
-		db.Exec(`DELETE FROM agent_msgs_fts`)
-		db.Exec(`DELETE FROM agent_sess_fp`)
+		if _, err := db.Exec(`DELETE FROM agent_msgs_fts`); err != nil {
+			return err
+		}
+		if _, err := db.Exec(`DELETE FROM agent_sess_fp`); err != nil {
+			return err
+		}
 		metaSet(db, metaAgentIngestDay, "")
 		return nil
 	}
