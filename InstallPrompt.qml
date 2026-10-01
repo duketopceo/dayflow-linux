@@ -9,15 +9,13 @@ import qs.Ui
 // isn't on PATH. One click runs scripts/install.sh (resolved relative to
 // this file, so it works from an installed plugin dir or a dev checkout);
 // output tails surface here on failure along with the terminal fallback.
-Flickable {
+Item {
   id: root
   property var dayflow: parent && parent.panel ? parent.panel : null
 
   width: parent ? parent.width : 0
   implicitHeight: col.implicitHeight + Style.space(12)
   height: implicitHeight
-  contentHeight: col.implicitHeight
-  clip: true
 
   Column {
     id: col
@@ -44,39 +42,51 @@ Flickable {
       wrapMode: Text.WordWrap
     }
 
-    Row {
-      spacing: Style.space(6)
-      Rectangle {
-        width: installText.implicitWidth + Style.space(16)
-        height: installText.implicitHeight + Style.space(8)
-        radius: Style.cornerRadius
-        color: root.dayflow ? root.dayflow.accentFill(0.16) : "transparent"
-        border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
-        opacity: (root.dayflow && root.dayflow.engineInstalling) ? 0.5 : 1
-        Text {
-          id: installText
-          anchors.centerIn: parent
-          text: (root.dayflow && root.dayflow.engineInstalling) ? "Installing…" : "Install engine"
-          color: root.dayflow ? root.dayflow.foreground : Color.foreground
-          font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
-          font.pixelSize: Style.font.body
-          font.bold: true
-        }
-        MouseArea {
-          anchors.fill: parent
-          cursorShape: Qt.PointingHandCursor
-          onClicked: { if (root.dayflow) root.dayflow.requestEngineInstall() }
-        }
+    Rectangle {
+      width: installText.implicitWidth + Style.space(16)
+      height: installText.implicitHeight + Style.space(8)
+      radius: Style.cornerRadius
+      color: installArea.containsMouse
+        ? (root.dayflow ? root.dayflow.accentFill(0.28) : "transparent")
+        : (root.dayflow ? root.dayflow.accentFill(0.16) : "transparent")
+      border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
+      opacity: (root.dayflow && root.dayflow.engineInstalling) ? 0.5 : 1
+      Text {
+        id: installText
+        anchors.centerIn: parent
+        text: (root.dayflow && root.dayflow.engineInstalling) ? "Installing…" : "Install engine"
+        color: root.dayflow ? root.dayflow.foreground : Color.foreground
+        font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+      MouseArea {
+        id: installArea
+        anchors.fill: parent
+        enabled: !(root.dayflow && root.dayflow.engineInstalling)
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: { if (root.dayflow) root.dayflow.requestEngineInstall() }
       }
     }
 
-    // Last line of installer output — progress during a run, the failure
-    // reason after a non-zero exit.
+    // Last line of installer stdout — progress during a run; on failure
+    // the stderr tail (installErr) is the more useful line.
     Text {
       visible: root.dayflow && root.dayflow.installLog !== ""
       width: parent.width
       text: root.dayflow ? root.dayflow.installLog : ""
       color: root.dayflow ? root.dayflow.dim : Color.muted
+      font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+
+    Text {
+      visible: root.dayflow && root.dayflow.installErr !== ""
+      width: parent.width
+      text: root.dayflow ? root.dayflow.installErr : ""
+      color: "#c06c60"
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption
       wrapMode: Text.WordWrap

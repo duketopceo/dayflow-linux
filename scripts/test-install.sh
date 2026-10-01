@@ -48,8 +48,10 @@ fake_release() {
   done
   (cd "$DL/v$v" && sha256sum "dayflow-$v-amd64" "dayflow-$v-arm64" > SHA256SUMS)
   if [[ $bad == "bad" ]]; then
-    echo "0000000000000000000000000000000000000000000000000000000000000000  dayflow-$v-amd64" \
-      > "$DL/v$v/SHA256SUMS"
+    # Corrupt BOTH arches — the test host's arch picks which line matters.
+    for a in amd64 arm64; do
+      echo "0000000000000000000000000000000000000000000000000000000000000000  dayflow-$v-$a"
+    done > "$DL/v$v/SHA256SUMS"
   fi
 }
 
@@ -64,7 +66,6 @@ fake_release 8.8.8
 CK="$SBX/checkout"
 mkdir -p "$CK/scripts"
 cp "$INSTALLER" "$CK/scripts/"
-cp "$UNINSTALLER" "$CK/scripts/" 2>/dev/null || true
 echo '{"version":"1.4.0"}' > "$CK/manifest.json"
 
 # A bare dir holding only the script — the standalone/curl-pipe shape.
@@ -99,26 +100,34 @@ grep -q "^install$" "$STUB_LOG" && ok "dayflow install ran for units" || bad "un
 H2=$(new_home same)
 mkdir -p "$H2/.local/bin"
 fake_binary 1.4.0 > "$H2/.local/bin/dayflow"; chmod +x "$H2/.local/bin/dayflow"
-env -i PATH="$STUBBIN:$PATH" HOME="$H2" \
+installs_before=$(grep -c "^install$" "$STUB_LOG" || true)
+env_base "$H2" \
   DAYFLOW_RELEASE_BASE="file://$SBX/nonexistent" DAYFLOW_RELEASE_API="file://$SBX/nonexistent" \
   bash "$CK/scripts/install.sh" > "$SBX/o2" 2>&1 \
   && ok "same-version re-run exits 0 without network" || { bad "idempotent re-run"; cat "$SBX/o2"; }
-grep -c "^install$" "$STUB_LOG" | grep -q "^2$" && ok "units re-installed on idempotent run" \
+installs_after=$(grep -c "^install$" "$STUB_LOG" || true)
+[[ $((installs_after - installs_before)) -eq 1 ]] && ok "units re-installed on idempotent run" \
   || bad "units missing on idempotent run"
 
 # 3. Upgrade: older binary gets replaced.
 H3=$(new_home upgrade)
 mkdir -p "$H3/.local/bin"
 fake_binary 1.3.0 > "$H3/.local/bin/dayflow"; chmod +x "$H3/.local/bin/dayflow"
-env_base "$H3" bash "$CK/scripts/install.sh" > "$SBX/o3" 2>&1
-[[ $($H3/.local/bin/dayflow --version) == "1.4.0" ]] \
-  && ok "upgrade replaces stale binary" || bad "upgrade failed"
+if env_base "$H3" bash "$CK/scripts/install.sh" > "$SBX/o3" 2>&1 \
+   && [[ $($H3/.local/bin/dayflow --version) == "1.4.0" ]]; then
+  ok "upgrade replaces stale binary"
+else
+  bad "upgrade failed"; cat "$SBX/o3"
+fi
 
 # 4. --version beats the manifest pin.
 H4=$(new_home flagver)
-env_base "$H4" bash "$CK/scripts/install.sh" --version 9.9.9 > "$SBX/o4" 2>&1
-[[ $($H4/.local/bin/dayflow --version) == "9.9.9" ]] \
-  && ok "--version 9.9.9 beat manifest 1.4.0" || bad "--version ignored"
+if env_base "$H4" bash "$CK/scripts/install.sh" --version 9.9.9 > "$SBX/o4" 2>&1 \
+   && [[ $($H4/.local/bin/dayflow --version) == "9.9.9" ]]; then
+  ok "--version 9.9.9 beat manifest 1.4.0"
+else
+  bad "--version ignored"; cat "$SBX/o4"
+fi
 
 # 5. Standalone (no manifest nearby) resolves latest release.
 H5=$(new_home lone)
@@ -126,6 +135,19 @@ env_base "$H5" bash "$LONE/install.sh" > "$SBX/o5" 2>&1 \
   && ok "standalone latest-release install" || { bad "standalone install"; cat "$SBX/o5"; }
 [[ -x $H5/.local/bin/dayflow && $($H5/.local/bin/dayflow --version) == "8.8.8" ]] \
   && ok "latest release v8.8.8 resolved" || bad "latest resolution wrong"
+
+# 5b. curl|bash shape: a stray manifest.json in the caller's cwd must NOT
+# hijack the version pin — BASH_SOURCE isn't a real file when piped.
+EVIL="$SBX/evil"; mkdir -p "$EVIL"; echo '{"version":"9.9.9"}' > "$EVIL/manifest.json"
+H5B=$(new_home pipe)
+if (cd "$EVIL" && env -i PATH="$STUBBIN:$PATH" HOME="$H5B" \
+    DAYFLOW_RELEASE_BASE="file://$DL" DAYFLOW_RELEASE_API="file://$FIX/latest.json" \
+    bash < "$INSTALLER") > "$SBX/o5b" 2>&1 \
+   && [[ $($H5B/.local/bin/dayflow --version) == "8.8.8" ]]; then
+  ok "piped run ignored stray cwd manifest"
+else
+  bad "piped run hijacked by stray manifest"; cat "$SBX/o5b"
+fi
 
 # 6. Checksum mismatch aborts before placement.
 H6=$(new_home badsum)
@@ -135,8 +157,7 @@ env_base "$H6" bash "$CK/scripts/install.sh" --version 2.0.0 > "$SBX/o6" 2>&1 \
   || ok "nothing placed on checksum failure"
 
 # 7. Missing SHA256SUMS fails closed.
-mkdir -p "$DL/v7.7.7"; cp "$DL/v1.4.0/dayflow-1.4.0-amd64" "$DL/v7.7.7/dayflow-7.7.7-amd64"
-cp "$DL/v1.4.0/dayflow-1.4.0-arm64" "$DL/v7.7.7/dayflow-7.7.7-arm64"
+fake_release 7.7.7; rm "$DL/v7.7.7/SHA256SUMS"
 H7=$(new_home nosums)
 env_base "$H7" bash "$CK/scripts/install.sh" --version 7.7.7 > "$SBX/o7" 2>&1 \
   && bad "missing SHA256SUMS was accepted" || ok "missing checksum manifest aborts"
@@ -158,6 +179,10 @@ rm -f "$STUBBIN/uname"
 # 9. Unknown arg rejected.
 env_base "$(new_home arg)" bash "$LONE/install.sh" --bogus > "$SBX/o9" 2>&1 \
   && bad "unknown arg accepted" || ok "unknown arg rejected"
+
+# 9b. Junk --version rejected before any download (path chars, not X.Y.Z).
+env_base "$(new_home badver)" bash "$LONE/install.sh" --version "../0.0.0" > "$SBX/o9b" 2>&1 \
+  && bad "junk --version accepted" || ok "junk --version rejected"
 
 echo "== uninstall.sh =="
 

@@ -14,13 +14,15 @@
 # (`dayflow setup`) and data dirs are never touched — consent stays with
 # the user.
 #
-# Version precedence: --version X.Y.Z > manifest.json next to this script
+# Version precedence: --version X.Y.Z > manifest.json in the plugin dir
 # (the manifest-pinned plugin path — widget and engine stay matched) >
 # latest GitHub release (standalone installs).
 #
 # Env overrides (mostly for tests):
 #   DAYFLOW_RELEASE_BASE — release-asset base URL (default github download path)
-#   DAYFLOW_RELEASE_API  — latest-release API URL (default github api)
+#   DAYFLOW_RELEASE_API  — latest-release endpoint override; when unset the
+#                          script resolves /releases/latest's redirect instead
+#                          of touching the rate-limited JSON API
 #   DAYFLOW_BUILD=local  — `go build` the repo this script lives in instead
 #                          of downloading (dev/testing)
 
@@ -28,8 +30,15 @@ set -euo pipefail
 
 REPO="duketopceo/dayflow-linux"
 RELEASE_BASE="${DAYFLOW_RELEASE_BASE:-https://github.com/$REPO/releases/download}"
-RELEASE_API="${DAYFLOW_RELEASE_API:-https://api.github.com/repos/$REPO/releases/latest}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+RELEASE_API="${DAYFLOW_RELEASE_API:-}"
+# SCRIPT_DIR is only trusted when this script is a real file — under
+# `curl | bash` BASH_SOURCE[0] is "bash", and resolving the caller's cwd
+# would let a stray manifest.json there hijack the version pin.
+src="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+if [[ -n $src && -f $src ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$src")" && pwd)"
+fi
 
 fail() {
   echo "install.sh: $*" >&2
@@ -54,7 +63,8 @@ json_field() {
   else
     local input
     if [[ $src == "-" ]]; then input=$(cat); else input=$(cat "$src" 2>/dev/null || true); fi
-    printf '%s' "$input" | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 | sed 's/.*"\([^"]*\)"$/\1/'
+    # `|| true`: head -1 can SIGPIPE grep on multi-match input → 141 under pipefail
+    printf '%s' "$input" | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true
   fi
 }
 
@@ -63,6 +73,7 @@ while (( $# > 0 )); do
   case "$1" in
   --version)
     [[ $# -ge 2 ]] || fail "--version needs a value (e.g. --version 1.4.0)"
+    [[ $2 =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "bad --version value: $2 (want X.Y.Z)"
     cli_version="$2"
     shift 2
     ;;
@@ -92,16 +103,27 @@ esac
 version=""
 if [[ -n $cli_version ]]; then
   version="${cli_version#v}"
-elif [[ -n $SCRIPT_DIR && -f $SCRIPT_DIR/../manifest.json ]]; then
-  version=$(json_field "$SCRIPT_DIR/../manifest.json" version)
-elif [[ -f $SCRIPT_DIR/manifest.json ]]; then
-  version=$(json_field "$SCRIPT_DIR/manifest.json" version)
+elif [[ -n $SCRIPT_DIR && -f "$SCRIPT_DIR/../manifest.json" ]]; then
+  # Unreadable/corrupt manifest → fall through to latest-release rather
+  # than dying on a bare jq error.
+  version=$(json_field "$SCRIPT_DIR/../manifest.json" version || true)
+elif [[ -n $SCRIPT_DIR && -f "$SCRIPT_DIR/manifest.json" ]]; then
+  version=$(json_field "$SCRIPT_DIR/manifest.json" version || true)
 fi
 if [[ -z $version ]]; then
   note "no manifest or --version given; resolving latest release"
-  latest=$(curl -fsSL "$RELEASE_API") || fail "could not query latest release"
-  tag=$(printf '%s' "$latest" | json_field - tag_name)
-  [[ -n $tag ]] || fail "latest release response had no tag_name"
+  if [[ -n $RELEASE_API ]]; then
+    # Override endpoint (tests point this at a file:// fixture).
+    latest=$(curl -fsSL "$RELEASE_API") || fail "could not query latest release"
+    tag=$(printf '%s' "$latest" | json_field - tag_name)
+  else
+    # /releases/latest 302s to /releases/tag/vX.Y.Z — resolve the
+    # redirect instead of hitting the rate-limited JSON API.
+    tag=$(curl -fsSIL -o /dev/null -w '%{url_effective}' \
+      "https://github.com/$REPO/releases/latest" | sed 's|.*/||') \
+      || fail "could not resolve latest release"
+  fi
+  [[ -n $tag ]] || fail "latest release resolution gave no tag"
   version="${tag#v}"
 fi
 note "target: dayflow $version ($arch)"
@@ -130,22 +152,33 @@ else
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
 
-  note "downloading $asset"
-  curl -fsSL "$RELEASE_BASE/v$version/$asset" -o "$tmp/$asset" ||
-    fail "download failed: $RELEASE_BASE/v$version/$asset"
+  # Checksum manifest first — a release without one fails closed before
+  # the (larger) binary download wastes the fetch.
   curl -fsSL "$RELEASE_BASE/v$version/SHA256SUMS" -o "$tmp/SHA256SUMS" ||
     fail "checksum manifest missing for v$version — refusing to install unverified binary"
 
+  note "downloading $asset"
+  curl -fsSL "$RELEASE_BASE/v$version/$asset" -o "$tmp/$asset" ||
+    fail "download failed: $RELEASE_BASE/v$version/$asset"
+
   note "verifying checksum"
-  (cd "$tmp" && grep " $asset\$" SHA256SUMS | sha256sum -c --status -) ||
+  # awk field-compare, not grep: asset names carry regex metachars (dots)
+  # and a prefix-substring could match a longer asset name.
+  entries=$(awk -v a="$asset" '$2 == a {n++} END {print n+0}' "$tmp/SHA256SUMS")
+  [[ $entries -gt 0 ]] || fail "no checksum entry for $asset in SHA256SUMS"
+  (cd "$tmp" && awk -v a="$asset" '$2 == a' SHA256SUMS | sha256sum -c --status -) ||
     fail "checksum mismatch for $asset — aborted before placing anything"
 
-  mkdir -p "$bin_dir"
   install -Dm755 "$tmp/$asset" "$bin_path"
   note "installed $bin_path"
 fi
 
 # ---- systemd user units ----
 "$bin_path" install || fail "engine installed but 'dayflow install' failed — run it yourself for the error detail"
+
+# The widget spawns `dayflow` bare — warn when the target dir isn't on
+# PATH yet so a "successful" install doesn't leave the install surface up.
+command -v dayflow >/dev/null 2>&1 ||
+  note "~/.local/bin is not on PATH in this shell — restart the shell/session for the widget to find it"
 
 note "done. Remaining step: configure a provider with \`dayflow setup\` (or open the widget's onboarding)."
