@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const version = "1.4.0"
+const version = "1.5.0"
 
 // positionalArgs drops --flags but keeps single-dash args — every real
 // flag here is long-form, so `-1` is a typo'd positional (a bad date),

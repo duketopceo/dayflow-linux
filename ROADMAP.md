@@ -2,7 +2,7 @@
 
 A private, automatic work journal for Linux (Omarchy/Hyprland, any wlroots
 compositor). Port of [Dayflow](https://www.dayflow.so/) (macOS). Current
-release: **v1.4.0**.
+release: **v1.5.0**.
 
 Last updated: 2026-09-30.
 
