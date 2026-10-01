@@ -17,8 +17,11 @@ if [[ -e $BIN ]]; then
   if [[ -x $BIN ]]; then
     echo "uninstall.sh: removing systemd user units"
     if "$BIN" uninstall; then
-      rm -f "$BIN"
-      echo "uninstall.sh: removed $BIN"
+      if rm -f "$BIN"; then
+        echo "uninstall.sh: removed $BIN"
+      else
+        echo "uninstall.sh: units removed but could not remove $BIN — delete it manually" >&2
+      fi
     else
       # Keep the binary when unit teardown fails — deleting it orphans
       # enabled units (capture is Restart=always, timers fire daily) that
@@ -28,8 +31,11 @@ if [[ -e $BIN ]]; then
     fi
   else
     # Present but not executable — can't run its teardown; still remove it.
-    rm -f "$BIN"
-    echo "uninstall.sh: removed non-executable $BIN (units may remain — run: dayflow uninstall)"
+    if rm -f "$BIN"; then
+      echo "uninstall.sh: removed non-executable $BIN (units may remain — run: dayflow uninstall)"
+    else
+      echo "uninstall.sh: could not remove non-executable $BIN — delete it manually" >&2
+    fi
   fi
 else
   echo "uninstall.sh: no binary at $BIN — skipping unit teardown and removal"

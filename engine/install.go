@@ -235,10 +235,13 @@ func installUnits() error {
 }
 
 func uninstallUnits() error {
+	var failed []string
 	run := func(args ...string) {
 		c := exec.Command("systemctl", args...)
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
-		c.Run()
+		if err := c.Run(); err != nil {
+			failed = append(failed, strings.Join(args, " "))
+		}
 	}
 	dir := unitDir()
 	var owned []string
@@ -252,11 +255,23 @@ func uninstallUnits() error {
 	}
 	if len(owned) > 0 {
 		run(append([]string{"--user", "disable", "--now"}, owned...)...)
+		if len(failed) > 0 {
+			// Disable failed — keep the unit files so a retry (or manual
+			// systemctl run) still has units to act on, and report the
+			// failure so callers don't delete the binary and orphan a
+			// loaded Restart=always service.
+			return fmt.Errorf("systemctl failed: %s", strings.Join(failed, "; "))
+		}
 		for _, name := range owned {
-			os.Remove(filepath.Join(dir, name))
+			if err := os.Remove(filepath.Join(dir, name)); err != nil {
+				failed = append(failed, "remove "+name+": "+err.Error())
+			}
 		}
 	}
 	run("--user", "daemon-reload")
+	if len(failed) > 0 {
+		return fmt.Errorf("uninstall incomplete: %s", strings.Join(failed, "; "))
+	}
 	fmt.Println("units removed")
 	return nil
 }

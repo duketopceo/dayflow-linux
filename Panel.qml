@@ -841,9 +841,16 @@ Panel {
     }
     onExited: function(exitCode) {
       if (exitCode === 0) {
-        // Success — drop any benign stderr noise the collectors caught.
-        dayflow.installErr = ""
-        dayflow.notice = "engine installed"
+        // Success — but install.sh may have warned on stderr (e.g. a
+        // PATH-shadowed `dayflow`). That warning is still actionable
+        // after the surface closes, so promote it to the notice rather
+        // than silently dropping it.
+        if (dayflow.installErr !== "") {
+          dayflow.notice = "engine installed — " + dayflow.installErr
+          dayflow.installErr = ""
+        } else {
+          dayflow.notice = "engine installed"
+        }
         // statusProc's reply clears engineMissing — the loader stays on
         // the install surface until the new binary actually answers.
         if (!statusProc.running) statusProc.running = true
@@ -1476,10 +1483,11 @@ Panel {
           Text {
             width: parent.width
             // engine-newer is a downgrade for install.sh (it installs the
-            // manifest-pinned version) — label it as alignment, not update.
+            // manifest-pinned version) — and an older engine can refuse a
+            // newer DB schema, so there is no safe action to offer here.
             text: dayflow.versionNewer(dayflow.engineVersion, dayflow.pluginVersion)
               ? "engine v" + dayflow.engineVersion + " is newer than panel v" + dayflow.pluginVersion +
-                " — update the plugin, or align the engine down"
+                " — update the plugin (the engine won't be downgraded: it could reject the newer DB schema)"
               : "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
                 " — update the engine to match the plugin"
             textFormat: Text.PlainText
@@ -1493,6 +1501,8 @@ Panel {
             spacing: Style.space(6)
 
             Rectangle {
+              // Downgrade offer hidden when the engine is newer — see above.
+              visible: !dayflow.versionNewer(dayflow.engineVersion, dayflow.pluginVersion)
               width: updText.implicitWidth + Style.space(12)
               height: updText.implicitHeight + Style.space(4)
               radius: Style.cornerRadius
@@ -1502,8 +1512,7 @@ Panel {
               Text {
                 id: updText
                 anchors.centerIn: parent
-                text: dayflow.engineInstalling ? "Updating…"
-                  : (dayflow.versionNewer(dayflow.engineVersion, dayflow.pluginVersion) ? "Align engine" : "Update engine")
+                text: dayflow.engineInstalling ? "Updating…" : "Update engine"
                 textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily
