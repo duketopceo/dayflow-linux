@@ -250,8 +250,12 @@ func scanDevinTranscripts(dir string, known map[string]bool, s, e time.Time) ([]
 		info, err := ent.Info()
 		// Same mtime bound as jsonlFiles: a file modified before s can hold
 		// no step timestamped inside [s,e). No upper bound — a session
-		// spanning midnight is written after e.
-		if err != nil || info.ModTime().Before(s) {
+		// spanning midnight is written after e. Size cap: a >64MB transcript
+		// is a decode bomb — skipped like an unparseable file.
+		if err != nil || info.ModTime().Before(s) || info.Size() > agentTranscriptCap {
+			if err == nil && !info.ModTime().Before(s) && info.Size() > agentTranscriptCap {
+				skipped++
+			}
 			continue
 		}
 		p := filepath.Join(dir, ent.Name())

@@ -143,7 +143,11 @@ func deriveStatus(sess AgentSession, turns []sessionTurn, now time.Time) string 
 // text persisted to agent_briefings, printed by --json, and shipped in
 // backups carries no pasted secrets either.
 func turnText(s string) string {
-	return truncate(strings.Join(strings.Fields(stripCtl(scrubText(s))), " "), 160)
+	// Bound before scrubbing: a multi-MB transcript line (minified blob,
+	// data URI) would otherwise send the secret regexes' backtracker
+	// spinning for minutes on a single turn.
+	return truncate(strings.Join(strings.Fields(
+		stripCtl(scrubText(boundForScrub(s, 2000)))), " "), 160)
 }
 
 // condenseTurns folds a session's raw turns into the capped narrative:

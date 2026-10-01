@@ -20,6 +20,7 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 | `get_timeline` | blocks | — |
 | `get_status` | frames, blocks, pause flag | — |
 | `search_journal` | blocks | — |
+| `search_agent_sessions` | `agent_msgs_fts` index of all five agent stores (may lazily ingest new turns into the index) | — |
 | `get_events` | events (may include local paths, provider error strings) | — |
 | `get_log` | debug.log tail (UI actions, debug lines) | — |
 | `get_frames` | frames index + frame file existence | — |
@@ -31,11 +32,14 @@ claude mcp add dayflow -- ~/.local/bin/dayflow mcp
 | `get_forecast` | blocks (same-weekday history blend) | — |
 | `chat` | blocks + journal context | **writes chat_conversations/chat_messages and sends journal-derived content to the configured AI provider** — a cli-routed provider can take minutes (`cli_timeout_sec`, default 180s); give the client a generous timeout |
 
-Every tool except `chat` is read-only — `get_agent_sessions` also reads
-agent transcript stores on disk (JSONL + sqlite) and performs the drift
-bookkeeping described above, which is intentionally side-effect-only and
-never touches journal content. `chat` is the only tool that mutates
-journal state or sends data to an external provider.
+Every tool except `chat` is read-only with respect to journal state —
+`get_agent_sessions` also reads agent transcript stores on disk (JSONL +
+sqlite) and performs the drift bookkeeping described above, and
+`search_agent_sessions` may lazily ingest turns into the derived
+`agent_msgs_fts` index (internal bookkeeping, not journal mutation; under
+`--read-only` the ro handle skips ingest entirely and an unindexed DB
+returns empty hits). `chat` is the only tool that mutates journal state
+or sends data to an external provider.
 
 ## Read-only mode
 
@@ -187,6 +191,39 @@ Notes:
   `artifact_path`/`artifact_name` are accepted from the model only when
   the path is path-shaped and literally appears in the source turn text —
   the model cannot fabricate files.
+- **Agent chat index** (`dayflow ingest`, `dayflow search-agents <q>`,
+  `dayflow ask <q>`, MCP `search_agent_sessions`, chat tool
+  `searchAgentSessions`): every usable turn (real user input + assistant
+  replies) from all five harnesses is scrubbed, bounded (4 KB), and stored
+  in a content-stored FTS5 table `agent_msgs_fts` with `source`, `session`
+  (the stable `file` key), `project`, `role`, `ts` citation columns.
+  `agent_ingest` deduplicates turns by `sha(source|session|idx|ts)`;
+  `agent_sess_fp` skips sessions whose adapter fingerprint is unchanged so
+  unchanged transcripts are never re-decoded. `meta.agent_ingest_day` is
+  the rolling watermark — first `ingest` backfills ~30 days, later runs
+  cover watermark..today. Ingestion is fully local (no provider calls) and
+  runs on demand, on `searchAgentSessions` when the watermark is stale,
+  and hourly alongside daemon retention; indexed rows prune with
+  `retention_days`. `dayflow ingest --reindex` wipes and rebuilds the
+  index; `dayflow scrub` does NOT touch it (blocks only). FTS retrieval
+  is local-only — `hits` are `{session, source, project, role, ts,
+  snippet}` (max 20 matches, 8 sessions, snippet() ellipsized; session and
+  project are scrubbed like the text) — only the already-scrubbed
+  snippets can reach a provider, via the normal consent-gated chat path.
+  Derived agent text in `agent_recaps`, `agent_briefings`, and
+  `chat_messages` (tool results quoting snippets) does not currently age
+  out with `retention_days`.
+
+  **Runaway safeguards**: every ingest pass runs under a wall-clock
+  deadline (90 s daemon/lazy, 10 min `dayflow ingest`) and a 256 MB
+  decoded-byte ceiling; transcript files over 64 MB are skipped
+  unread (same guard covers `agents`/`briefing` scans, which show the
+  session absent), and sessions cap at 4000 indexed turns. A budgeted
+  stop is not an error: `ingest` prints/reports `pending`, the daemon
+  logs a pause line, and the per-day watermark resumes the backlog on
+  the next pass. A mid-session abort writes its partial turns but
+  withholds the fingerprint so the next pass re-decodes and completes
+  coverage.
 - `dayflow goal --json`: `streak` = `{current, best, total}` consecutive-day
   completion counts. Viewed day pending → `current` counts back from
   yesterday; any past day without a completed goal breaks a run.

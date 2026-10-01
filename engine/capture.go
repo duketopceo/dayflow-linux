@@ -523,6 +523,10 @@ func runRetention(db *sql.DB, cfg Config) {
 			}
 		}
 		pruneOldEvents(db, cutoff)
+		// Indexed agent turns age out with the rest of the journal —
+		// dedup keys in agent_ingest outlive them harmlessly (the rolling
+		// watermark never rescans pruned days).
+		db.Exec(`DELETE FROM agent_msgs_fts WHERE ts < ?`, cutoff.Unix())
 	}
 	// the storage caps are independent of day retention — they always run.
 	// Split caps own their own pools; a legacy max_storage_mb still bounds
@@ -1023,6 +1027,24 @@ func runDaemon(cfg Config) error {
 			capture()
 		case <-retentionTick.C:
 			runRetention(db, cfg)
+			// Ingest off-loop: a decode pass can take minutes, and a
+			// synchronous call here would drop capture ticks (missed
+			// frames + false capture-stall heartbeats). ingestMu shared
+			// with the lazy search path so passes never stack.
+			if ingestMu.TryLock() {
+				go func() {
+					defer ingestMu.Unlock()
+					n, early, err := ingestAgentChats(db, agentIngestBudget)
+					switch {
+					case err != nil:
+						debugf(cfg, "agent chat ingest failed: %v", err)
+					case early:
+						debugf(cfg, "agent chat ingest paused at budget (%d turns so far); resumes next pass", n)
+					case n > 0:
+						debugf(cfg, "agent chat ingest: %d turns", n)
+					}
+				}()
+			}
 			debugf(cfg, "retention run complete; data dir %s", humanBytes(dataDirSize()))
 		case <-lockTick.C:
 			if !cfg.AutoPauseLocked {

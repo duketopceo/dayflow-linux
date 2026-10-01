@@ -395,13 +395,18 @@ func scanAgentDay(db *sql.DB, d time.Time) ([]agentSource, []AgentSession, []sou
 
 // eachJSONLLine streams a transcript's raw lines to fn; false on open or
 // scan error (e.g. a >1MB line) so callers can drop partial data — parity
-// across scanJSONL, sessionExcerpt, and jsonlSource.Turns.
+// across scanJSONL, sessionExcerpt, and jsonlSource.Turns. Files beyond
+// agentTranscriptCap are decode bombs (a >64MB JSONL can monopolize a
+// scan for minutes) — skipped up front rather than mid-parse.
 func eachJSONLLine(path string, fn func([]byte)) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return false
 	}
 	defer f.Close()
+	if st, err := f.Stat(); err == nil && st.Size() > agentTranscriptCap {
+		return false
+	}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {

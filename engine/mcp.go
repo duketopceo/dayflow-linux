@@ -43,6 +43,9 @@ var mcpTools = []map[string]any{
 	{"name": "search_journal", "description": "Search block titles/summaries for a substring (e.g. an app, file, or topic). Returns matching blocks.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
+	{"name": "search_agent_sessions", "description": "Full-text search over indexed coding-agent conversations (Claude Code, Codex, OpenCode, Devin, Cursor). Returns bounded snippets with source/session/ts citation. Local-only; no egress.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
 	{"name": "get_events", "description": "Recent engine event log (captures, dedup skips, errors).",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"limit": map[string]any{"type": "integer"}}}},
@@ -107,10 +110,54 @@ func mcpText(v any) map[string]any {
 	}}
 }
 
+// validateMCPArgs type-checks the caller's arguments against the tool's
+// declared inputSchema — a mistyped argument must error, not silently
+// coerce to the zero value and answer a different question. Unknown args
+// stay tolerated; absent args are the tool's own concern.
+func validateMCPArgs(name string, args map[string]any) error {
+	var schema map[string]any
+	for _, t := range mcpTools {
+		if t["name"] == name {
+			schema, _ = t["inputSchema"].(map[string]any)
+			break
+		}
+	}
+	props, _ := schema["properties"].(map[string]any)
+	for k, v := range args {
+		decl, _ := props[k].(map[string]any)
+		want, _ := decl["type"].(string)
+		if want == "" {
+			continue
+		}
+		ok := false
+		switch want {
+		case "string":
+			_, ok = v.(string)
+		case "number", "integer":
+			_, ok = v.(float64) // encoding/json decodes all numbers to float64
+		case "boolean":
+			_, ok = v.(bool)
+		case "object":
+			_, ok = v.(map[string]any)
+		case "array":
+			_, ok = v.([]any)
+		default:
+			ok = true
+		}
+		if !ok {
+			return fmt.Errorf("invalid argument %q: want %s", k, want)
+		}
+	}
+	return nil
+}
+
 func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string]any) (any, error) {
 	cfg.DisableJudges = readOnly // judge calls egress to OpenRouter — read-only sessions stay local
 	if readOnly && mcpMutating[name] {
 		return nil, fmt.Errorf("tool %q is disabled in read-only mode", name)
+	}
+	if err := validateMCPArgs(name, args); err != nil {
+		return nil, err
 	}
 	switch name {
 	case "get_timeline":
@@ -171,6 +218,17 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 			})
 		}
 		return map[string]any{"matches": out}, nil
+
+	case "search_agent_sessions":
+		q, _ := args["query"].(string)
+		if q == "" {
+			return nil, fmt.Errorf("query required")
+		}
+		hits, err := searchAgentSessions(db, cfg, q)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"hits": hits}, nil
 
 	case "get_events":
 		limit := 20.0

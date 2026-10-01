@@ -16,12 +16,15 @@ import (
 
 const version = "1.4.0"
 
-// positionalArgs returns non-flag argv entries; an empty arg is not a flag
-// and is skipped (a[0] on "" panics).
+// positionalArgs drops --flags but keeps single-dash args — every real
+// flag here is long-form, so `-1` is a typo'd positional (a bad date),
+// not a flag, and must surface as an error rather than silently
+// defaulting to today. An empty arg is skipped (HasPrefix on "" is safe
+// but a bare "" is never a positional either).
 func positionalArgs(args []string) []string {
 	var out []string
 	for _, a := range args {
-		if a != "" && a[0] != '-' {
+		if a != "" && !strings.HasPrefix(a, "--") {
 			out = append(out, a)
 		}
 	}
@@ -72,6 +75,10 @@ Query:
                           (Claude Code, Codex, OpenCode, Devin, Cursor)
   briefing [YYYY-MM-DD] [--json] [--refresh] Day briefing: sessions grouped into
                           workstreams with condensed turns + status
+  ingest [--json] [--reindex]   Index agent-chat turns into the local FTS
+                          store (--reindex wipes and rebuilds the index)
+  search-agents <q> [--json]   Full-text search indexed agent conversations
+  ask <question> [--json]   One-shot chat over journal + agent history
   forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
                           (default: tomorrow)
   playback [on|off|status] [--json]   Opt-in frame retention for timelapse
@@ -306,6 +313,58 @@ func main() {
 			defer db.Close()
 		}
 		printBriefing(db, cfg, d, jsonOut, hasFlag(args, "--refresh"))
+
+	case "ingest":
+		db := openDBLenient("ingest")
+		if db == nil {
+			os.Exit(1)
+		}
+		defer db.Close()
+		if hasFlag(args, "--reindex") {
+			fatal(resetAgentIndex(db))
+		}
+		n, early, err := ingestAgentChats(db, agentIngestCLIBudget)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(map[string]any{"indexed": n, "pending": early})
+		} else {
+			fmt.Printf("indexed %d agent turn(s)\n", n)
+			if early {
+				fmt.Println("budget reached — more turns pending; run again or let the daemon finish")
+			}
+		}
+
+	case "search-agents":
+		db := openDBLenient("search-agents")
+		if db == nil {
+			os.Exit(1)
+		}
+		defer db.Close()
+		q := strings.Join(positionalArgs(args), " ")
+		if q == "" {
+			usage()
+		}
+		printAgentSearch(db, cfg, q, jsonOut)
+
+	case "ask":
+		// ask <question> [--json] — one-shot journal+agent-history chat;
+		// same engine as `dayflow chat`, no conversation flag needed.
+		db := openDBLenient("ask")
+		if db == nil {
+			os.Exit(1)
+		}
+		defer db.Close()
+		msg := strings.Join(positionalArgs(args), " ")
+		if msg == "" {
+			usage()
+		}
+		res, err := chatWithJournal(db, cfg, 0, msg)
+		fatal(err)
+		if jsonOut {
+			json.NewEncoder(os.Stdout).Encode(res)
+		} else {
+			fmt.Println(res.Reply)
+		}
 
 	case "forecast":
 		// forecast [YYYY-MM-DD] [--json] — predict a day's category mix from

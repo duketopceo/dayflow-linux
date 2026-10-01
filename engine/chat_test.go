@@ -150,7 +150,9 @@ func TestChatWithJournalFetchTimeline(t *testing.T) {
 	if len(*bodies) != 2 {
 		t.Fatalf("expected 2 provider calls, got %d", len(*bodies))
 	}
-	// The second request should include a tool result message.
+	// The second request should include the tool result — sent as user
+	// text because role:"tool" without a tool_call_id is rejected by
+	// providers implementing the OpenAI tool spec.
 	var req orRequest
 	if err := json.Unmarshal([]byte((*bodies)[1]), &req); err != nil {
 		t.Fatalf("second request was not valid JSON: %v", err)
@@ -158,11 +160,14 @@ func TestChatWithJournalFetchTimeline(t *testing.T) {
 	hasTool := false
 	hasUser := false
 	for _, m := range req.Messages {
-		if m.Role == "tool" && strings.Contains(m.Content[0].Text, "Refactor engine") {
-			hasTool = true
+		if m.Role == "tool" {
+			t.Fatalf("tool-role message without tool_call_id must not be sent: %s", (*bodies)[1])
 		}
 		if m.Role == "user" {
 			hasUser = true
+			if strings.Contains(m.Content[0].Text, "Tool result") && strings.Contains(m.Content[0].Text, "Refactor engine") {
+				hasTool = true
+			}
 		}
 	}
 	if !hasTool {
@@ -170,6 +175,50 @@ func TestChatWithJournalFetchTimeline(t *testing.T) {
 	}
 	if !hasUser {
 		t.Fatal("second request did not include the original user message")
+	}
+}
+
+// A persisted "tool" message must replay to the provider as user text —
+// role:"tool" without a tool_call_id is rejected by OpenAI-spec providers.
+func TestChatToolResultReplaysAsUser(t *testing.T) {
+	srv, bodies := chatTestServer([]string{
+		`{"tool":"getStandup"}`,
+		"Here is your standup.",
+		"A follow-up answer.",
+	})
+	defer srv.Close()
+	cfg := chatTestConfig(t, srv)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	res, err := chatWithJournal(db, cfg, 0, "standup please")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chatWithJournal(db, cfg, res.ConversationID, "follow up"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*bodies) < 3 {
+		t.Fatalf("expected ≥3 provider calls, got %d", len(*bodies))
+	}
+	var req orRequest
+	if err := json.Unmarshal([]byte((*bodies)[2]), &req); err != nil {
+		t.Fatal(err)
+	}
+	foundToolResult := false
+	for _, m := range req.Messages {
+		if m.Role == "tool" {
+			t.Fatalf("tool-role message replayed to provider: %s", (*bodies)[2])
+		}
+		if m.Role == "user" && strings.Contains(m.Content[0].Text, "Tool result") {
+			foundToolResult = true
+		}
+	}
+	if !foundToolResult {
+		t.Fatalf("persisted tool result missing from replay: %s", (*bodies)[2])
 	}
 }
 

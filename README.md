@@ -51,7 +51,7 @@ Prebuilt binaries (amd64 + arm64) are attached to each [release](https://github.
 
 **Analytics** — weekly category donut, app treemap, context-shift flow, focus blocks, week-over-week trends, next-day forecast from your history.
 
-**Agents** — a workstream briefing of your coding-agent sessions across Claude Code, Codex, OpenCode, Devin, and Cursor: sessions grouped by project into named workstreams, each thread carrying a derived status (in progress / review ready / blocked / completed) and a condensed turn narrative with key decisions flagged. Fully deterministic offline; opting into `agent_recaps` adds model-written prose from a bounded, scrubbed skeleton. Plus per-session recaps (`dayflow agents`) with Jev scoring, and per-source drift reporting so a broken store is visible, not silently empty.
+**Agents** — a workstream briefing of your coding-agent sessions across Claude Code, Codex, OpenCode, Devin, and Cursor: sessions grouped by project into named workstreams, each thread carrying a derived status (in progress / review ready / blocked / completed) and a condensed turn narrative with key decisions flagged. Fully deterministic offline; opting into `agent_recaps` adds model-written prose from a bounded, scrubbed skeleton. Plus per-session recaps (`dayflow agents`) with Jev scoring, a local FTS5 index of every conversation turn (`dayflow ingest` / `search-agents` — scrubbed before storage, deduped by fingerprint, queryable from chat and MCP), and per-source drift reporting so a broken store is visible, not silently empty.
 
 **Ops** — desktop notifications (capture stall on by default — silence means data loss), focus-following capture on multi-monitor setups (`output: "auto"`), usage/cost reporting (`dayflow usage --days 7` with optional pricing), backups with integrity verification, `doctor` health checks, MCP server for agent access.
 
@@ -84,6 +84,9 @@ dayflow insights [day|week|month]   # focus, categories, apps, distractions
 dayflow weekly | week | month  # rollups + charts
 dayflow agents [day]           # coding-agent sessions + recaps (--no-recaps)
 dayflow briefing [day]         # workstream briefing: grouped sessions, statuses, condensed turns (--refresh)
+dayflow ingest                 # index agent-chat turns into the local FTS store
+dayflow search-agents <query>  # FTS5 search indexed agent conversations (all five harnesses)
+dayflow ask "<question>"       # one-shot chat over journal + agent history
 dayflow forecast [day]         # predict a day's category mix (default: tomorrow)
 dayflow search <query>         # FTS5 search over titles/summaries/categories/apps
 dayflow search --reindex       # rebuild the index
@@ -173,7 +176,7 @@ rm -rf ~/.config/dayflow                            # wipes config
 
 ## MCP / agent access
 
-`dayflow mcp` is a stdio MCP server exposing `get_timeline`, `get_status`, `search_journal`, `get_events`, `get_usage`, `get_stats`, `get_standup`, `get_insights`, `chat`. All read-only except `chat`; `--read-only` (or `DAYFLOW_MCP_READONLY=1`) hides it. Contract: [docs/agent-contract.md](docs/agent-contract.md).
+`dayflow mcp` is a stdio MCP server exposing `get_timeline`, `get_status`, `search_journal`, `search_agent_sessions`, `get_events`, `get_usage`, `get_stats`, `get_standup`, `get_insights`, `chat`. All read-only except `chat`; `--read-only` (or `DAYFLOW_MCP_READONLY=1`) hides it. Contract: [docs/agent-contract.md](docs/agent-contract.md).
 
 ```sh
 claude mcp add dayflow -- ~/.local/bin/dayflow mcp

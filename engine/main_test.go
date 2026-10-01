@@ -526,3 +526,18 @@ func TestStorageCapMigration(t *testing.T) {
 		t.Fatalf("defaults: %+v", cfg)
 	}
 }
+
+// A single-dash typo (-1) is a bad positional, not a flag — it must error
+// rather than silently default to today. Long-form --flags stay filtered.
+func TestDateArgRejectsDashPositional(t *testing.T) {
+	if _, err := dateArg([]string{"-1"}, time.Now()); err == nil {
+		t.Fatal("-1 must error as a bad date, not be dropped as a flag")
+	}
+	if _, err := dateArg([]string{"--json", "2026-09-15"}, time.Now()); err != nil {
+		t.Fatalf("flag + valid date failed: %v", err)
+	}
+	def := time.Date(2026, 9, 29, 0, 0, 0, 0, time.Local)
+	if d, err := dateArg([]string{"--json"}, def); err != nil || !d.Equal(def) {
+		t.Fatalf("flags alone must default to %v, got %v err=%v", def, d, err)
+	}
+}
