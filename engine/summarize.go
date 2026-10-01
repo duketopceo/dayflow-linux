@@ -357,6 +357,23 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 	if err != nil {
 		return 0, err
 	}
+	// Pre-flight key check: an unresolvable key (locked keyring, unset
+	// env) makes every block fail identically — historically each burned
+	// its attempts and went dead during the outage. Fail the whole sweep
+	// instead: blocks stay pending and pick up on the next pass once the
+	// key resolves.
+	if providerNeedsAuth(vp) && resolveProviderKey(vp) == "" {
+		return 0, fmt.Errorf("no API key for provider %q — sweep aborted, no blocks touched", vp.ID)
+	}
+	// Auto-heal: blocks that died of exactly that outage are resurrected
+	// here — they re-enter pendingBlocks below and summarize on this same
+	// pass. A block that dies again lands a different error and stays
+	// dead, so this can't loop.
+	if n, herr := deleteBlocksWhere(db,
+		`status IN ('failed','dead') AND error LIKE 'no API key%'`); herr == nil && n > 0 {
+		logEvent(db, "key_outage_heal", fmt.Sprintf("%d block(s)", n))
+		log.Printf("re-queued %d block(s) killed by an unresolved provider key", n)
+	}
 	// Log/api_calls provenance: for a cli provider cfg.Model is meaningless —
 	// record the command; otherwise record the routed provider's model.
 	modelLabel, callTarget := cfg.Model, providerChatURL(vp)

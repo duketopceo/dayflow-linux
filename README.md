@@ -98,6 +98,7 @@ dayflow frames [day] | blocks  # raw frames / failed summaries (auto-retried)
 dayflow pause | resume | toggle
 dayflow ignore <class> | --active | unignore   # never capture an app
 dayflow retry | reconcile [--dry-run] | scrub <query>
+dayflow summarize --retry      # reset failed/dead blocks AND sweep — fills gaps
 dayflow backup [dir] | backup-verify | restore <dir> [--force]
 dayflow provider list|add|set|remove|test     # multi-provider routing
 dayflow key set|status|del     # store API keys in the system keyring

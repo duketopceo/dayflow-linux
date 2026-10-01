@@ -61,7 +61,8 @@ Usage: dayflow <command> [args]
 
 Engine:
   daemon              Run the capture loop in the foreground (for systemd)
-  summarize [--now]   Summarize all complete pending blocks (--now includes current)
+  summarize [--now] [--retry]   Summarize all complete pending blocks
+                          (--now includes current, --retry resets failed/dead)
   install             Write + enable systemd user units (capture service, summarize timer)
   uninstall           Disable and remove the systemd units
 
@@ -213,6 +214,11 @@ func main() {
 		db, err := openDB()
 		fatal(err)
 		defer db.Close()
+		if hasFlag(args, "--retry") {
+			m, err := resetFailedBlocks(db)
+			fatal(err)
+			fmt.Fprintf(os.Stderr, "reset %d failed/dead block(s)\n", m)
+		}
 		n, err := summarizePending(db, cfg, hasFlag(args, "--now"))
 		fatal(err)
 		if !jsonOut {
