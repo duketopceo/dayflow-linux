@@ -21,6 +21,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          # Dispatch must build the tagged tree, not the dispatch branch.
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -40,7 +42,8 @@ jobs:
           # Stronger contract: const version == manifest.json == plugin
           # version. install.sh pins its download to manifest.json, so a
           # drifted manifest would fetch assets that don't exist.
-          go test -run TestVersionConsistency ./engine/
+          # The module lives in engine/ — no go.work, so run inside it.
+          go -C engine test -run TestVersionConsistency .
           echo "version=$ver" >> "$GITHUB_ENV"
 
       - name: Build binaries
@@ -48,9 +51,9 @@ jobs:
           mkdir -p dist
           pids=""
           for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build \
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go -C engine build \
               -trimpath -ldflags="-s -w" \
-              -o "dist/dayflow-${{ env.version }}-$arch" ./engine &
+              -o "../dist/dayflow-${{ env.version }}-$arch" . &
             pids="$pids $!"
           done
           rc=0

@@ -35,7 +35,7 @@ Item {
       width: parent.width
       text: "The widget is installed but the dayflow engine binary isn't on PATH yet. " +
             "Install downloads the verified release for this device, places it in ~/.local/bin, " +
-            "and enables the capture units. Provider setup stays yours to choose afterwards."
+            "and enables + starts the capture units. Provider setup stays yours to choose afterwards."
       color: root.dayflow ? root.dayflow.dim : Color.muted
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.body
@@ -76,6 +76,7 @@ Item {
       visible: root.dayflow && root.dayflow.installLog !== ""
       width: parent.width
       text: root.dayflow ? root.dayflow.installLog : ""
+      textFormat: Text.PlainText
       color: root.dayflow ? root.dayflow.dim : Color.muted
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption
@@ -86,6 +87,7 @@ Item {
       visible: root.dayflow && root.dayflow.installErr !== ""
       width: parent.width
       text: root.dayflow ? root.dayflow.installErr : ""
+      textFormat: Text.PlainText
       color: "#c06c60"
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption

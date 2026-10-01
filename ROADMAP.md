@@ -4,7 +4,7 @@ A private, automatic work journal for Linux (Omarchy/Hyprland, any wlroots
 compositor). Port of [Dayflow](https://www.dayflow.so/) (macOS). Current
 release: **v1.4.0**.
 
-Last updated: 2026-09-29.
+Last updated: 2026-09-30.
 
 ## Shipped
 
@@ -12,13 +12,12 @@ Last updated: 2026-09-29.
 - Jev classification for category + productive flag; opt-in agent-session recaps (Claude Code, Codex, OpenCode, Devin, Cursor).
 - Multi-provider routing: OpenRouter / custom / local / MCP / CLI providers (`kind: "cli"` shells out to subscription-auth agent CLIs).
 - macOS-parity v1.3; v1.4 facelift; completion program (focus capture, notifications, FTS5 search, usage stats, drift-watch) merged.
-- Omarchy marketplace listing (`io.github.duketopceo.dayflow`, status: Manual setup).
+- Omarchy marketplace listing (`io.github.duketopceo.dayflow`) with automated install: `scripts/install.sh` pins the engine binary to the plugin's manifest version, verifies SHA256SUMS before placing it in `~/.local/bin`, and enables the systemd user units; the widget surfaces a one-click install when the binary is missing.
 
 ## Next
 
-1. Marketplace "Manual setup" → fully automated install (prebuilt binaries via release, `omak` install path).
-2. Flow feature parity — track the upstream macOS Dayflow beta and port what Linux users ask for.
-3. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
+1. Flow feature parity — track the upstream macOS Dayflow beta and port what Linux users ask for.
+2. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
 
 ## Principles
 

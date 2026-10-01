@@ -81,6 +81,16 @@ Panel {
     return lines.length ? lines[lines.length - 1].trim() : ""
   }
 
+  // Strict semver compare (string compare lies past .9).
+  function versionNewer(a, b) {
+    var pa = String(a).split("."), pb = String(b).split(".")
+    for (var i = 0; i < 3; i++) {
+      var na = parseInt(pa[i] || "0", 10), nb = parseInt(pb[i] || "0", 10)
+      if (na !== nb) return na > nb
+    }
+    return false
+  }
+
   readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(dayflow.foreground, 1.5)
   readonly property string fontFamily: dayflow.bar ? dayflow.bar.fontFamily : Style.font.family
@@ -123,7 +133,10 @@ Panel {
   }
 
   function refreshAll() {
-    if (!statusProc.running) statusProc.running = true
+    // Don't probe mid-install: the binary may be staged mid-swap, and a
+    // FailedToStart would wedge the "engine answers" check the success
+    // path relies on.
+    if (!statusProc.running && !dayflow.engineInstalling) statusProc.running = true
     if (dayflow.engineMissing) return
     dayflow.loadTimeline()
     refreshForTab(dayflow.currentTab)
@@ -751,6 +764,7 @@ Panel {
     id: statusProc
     property bool didStart: false
     property bool gotStatus: false
+    property string statusErr: ""
     command: ["dayflow", "status", "--json"]
     onStarted: statusProc.didStart = true
     stdout: StdioCollector {
@@ -758,21 +772,40 @@ Panel {
       onStreamFinished: {
         if (text.trim() !== "") {
           statusProc.gotStatus = true
-          dayflow.engineMissing = false
           dayflow.applyStatus(text)
+          if (dayflow.engineMissing) {
+            // The tab loaders were gated while the engine was missing —
+            // now that it answers, fill them (not just statusProc data).
+            dayflow.engineMissing = false
+            dayflow.loadTimeline()
+            refreshForTab(dayflow.currentTab)
+          }
         }
       }
     }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: statusProc.statusErr = dayflow.lastLine(text)
+    }
     // FailedToStart emits neither exited nor streamFinished — a missing
     // binary is the install surface's trigger, not a stuck loader. A
-    // binary that spawns then exits non-zero with no status output is
-    // broken the same way — the install surface is still the right fix.
+    // binary that spawns then exits 126/127 is unrunnable (wrong arch,
+    // bad interpreter) — same fix. Any other non-zero exit means the
+    // binary is healthy enough to run but the engine itself failed
+    // (corrupt DB, migration error): reinstalling can't fix that, so
+    // surface it as a notice instead of looping through InstallPrompt.
     onExited: function(exitCode) {
-      if (exitCode !== 0 && !statusProc.gotStatus) dayflow.engineMissing = true
+      if (exitCode === 0 || statusProc.gotStatus || dayflow.engineInstalling) return
+      if (exitCode === 126 || exitCode === 127) {
+        dayflow.engineMissing = true
+      } else {
+        dayflow.notice = "engine error" + (statusProc.statusErr ? " — " + statusProc.statusErr : " (status exited " + exitCode + ")")
+      }
     }
     onRunningChanged: {
-      if (statusProc.running) statusProc.gotStatus = false
-      if (!statusProc.running && !statusProc.didStart) dayflow.engineMissing = true
+      if (statusProc.running) { statusProc.gotStatus = false; statusProc.statusErr = "" }
+      if (!statusProc.running && !statusProc.didStart && !dayflow.engineInstalling)
+        dayflow.engineMissing = true
       if (!statusProc.running) statusProc.didStart = false
     }
   }
@@ -808,6 +841,8 @@ Panel {
     }
     onExited: function(exitCode) {
       if (exitCode === 0) {
+        // Success — drop any benign stderr noise the collectors caught.
+        dayflow.installErr = ""
         dayflow.notice = "engine installed"
         // statusProc's reply clears engineMissing — the loader stays on
         // the install surface until the new binary actually answers.
@@ -817,6 +852,21 @@ Panel {
           dayflow.installErr = "install failed — run " + dayflow.installScriptPath + " in a terminal"
         dayflow.notice = "engine install failed"
       }
+    }
+  }
+
+  // The installer is a Process with no natural deadline — curl has
+  // timeouts inside the script, but a wedged systemctl/go build can hang
+  // it too. The panel is persistent, so an unbounded hang would leave
+  // "Installing…" forever. 10 min covers a slow-link binary download.
+  Timer {
+    id: installWatchdog
+    interval: 600000
+    running: engineInstallProc.running
+    onTriggered: {
+      engineInstallProc.running = false
+      dayflow.installErr = "install timed out — check the network and re-run " + dayflow.installScriptPath + " in a terminal"
+      dayflow.notice = "engine install timed out"
     }
   }
 
@@ -1425,8 +1475,13 @@ Panel {
 
           Text {
             width: parent.width
-            text: "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
-                  " — update the engine to match the plugin"
+            // engine-newer is a downgrade for install.sh (it installs the
+            // manifest-pinned version) — label it as alignment, not update.
+            text: dayflow.versionNewer(dayflow.engineVersion, dayflow.pluginVersion)
+              ? "engine v" + dayflow.engineVersion + " is newer than panel v" + dayflow.pluginVersion +
+                " — update the plugin, or align the engine down"
+              : "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
+                " — update the engine to match the plugin"
             textFormat: Text.PlainText
             color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
             font.family: dayflow.fontFamily
@@ -1447,7 +1502,8 @@ Panel {
               Text {
                 id: updText
                 anchors.centerIn: parent
-                text: dayflow.engineInstalling ? "Updating…" : "Update engine"
+                text: dayflow.engineInstalling ? "Updating…"
+                  : (dayflow.versionNewer(dayflow.engineVersion, dayflow.pluginVersion) ? "Align engine" : "Update engine")
                 textFormat: Text.PlainText
                 color: dayflow.foreground
                 font.family: dayflow.fontFamily

@@ -13,11 +13,24 @@ BIN="$HOME/.local/bin/dayflow"
 DATA="$HOME/.local/share/dayflow"
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/dayflow"
 
-if [[ -x $BIN ]]; then
-  echo "uninstall.sh: removing systemd user units"
-  "$BIN" uninstall || echo "uninstall.sh: 'dayflow uninstall' reported an error — continuing" >&2
-  rm -f "$BIN"
-  echo "uninstall.sh: removed $BIN"
+if [[ -e $BIN ]]; then
+  if [[ -x $BIN ]]; then
+    echo "uninstall.sh: removing systemd user units"
+    if "$BIN" uninstall; then
+      rm -f "$BIN"
+      echo "uninstall.sh: removed $BIN"
+    else
+      # Keep the binary when unit teardown fails — deleting it orphans
+      # enabled units (capture is Restart=always, timers fire daily) that
+      # this script can no longer clean up.
+      echo "uninstall.sh: 'dayflow uninstall' failed — keeping $BIN so the units stay cleanable" >&2
+      echo "uninstall.sh: or remove units manually: rm ~/.config/systemd/user/dayflow-*" >&2
+    fi
+  else
+    # Present but not executable — can't run its teardown; still remove it.
+    rm -f "$BIN"
+    echo "uninstall.sh: removed non-executable $BIN (units may remain — run: dayflow uninstall)"
+  fi
 else
   echo "uninstall.sh: no binary at $BIN — skipping unit teardown and removal"
   echo "uninstall.sh: if units were installed from a different binary path, run: dayflow uninstall"

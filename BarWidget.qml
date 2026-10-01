@@ -120,7 +120,7 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: !root.available ? "󰚯" : (root.paused ? "ᛯ" : "󰚯")
+    text: root.available && root.paused ? "ᛯ" : "󰚯"
     opacity: root.available ? 1 : 0.45
     tooltipText: !root.available
       ? "Dayflow engine not installed — click to set it up"
