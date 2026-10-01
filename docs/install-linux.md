@@ -15,21 +15,48 @@ anywhere `grim` (or a substitute `capture_command`) and `systemd --user` exist.
 ## Install
 
 ```sh
-# from a release binary (amd64/arm64):
-install -Dm755 dayflow ~/.local/bin/dayflow
-
-# or from source:
-cd engine && go build -o dayflow . && install -Dm755 dayflow ~/.local/bin/dayflow
-
-dayflow install        # systemd user units: capture daemon, summarize/backup/export timers
+curl -fsSL https://github.com/duketopceo/dayflow-linux/releases/latest/download/install.sh | bash
 dayflow setup          # pick a provider (OpenRouter key, Ollama/LM Studio, MCP, or a CLI provider)
 dayflow doctor         # verifies session, capture backend, key, model, agent stores, bus
 dayflow tui            # timeline in the terminal
 ```
 
+`install.sh` maps `uname -m` to the `amd64`/`arm64` release asset,
+downloads it plus the release's `SHA256SUMS`, verifies the checksum
+before anything lands in `~/.local/bin`, then runs `dayflow install` for
+the systemd user units (capture daemon + summarize/backup/export
+timers). It's idempotent — re-running upgrades to the target version and
+re-installs units. Options: `--version X.Y.Z` pins a release;
+`DAYFLOW_BUILD=local` builds the checked-out repo instead of
+downloading.
+
 No Omarchy, no Quickshell, no `hyprctl` required — those paths degrade
 gracefully (`output:"auto"` falls back to composite capture, `ignore --active`
 reports Hyprland-only).
+
+## Uninstall
+
+```sh
+bash scripts/uninstall.sh   # from a checkout — units + ~/.local/bin/dayflow, data kept
+# or without a checkout: dayflow uninstall && rm ~/.local/bin/dayflow
+```
+
+`~/.local/share/dayflow` (journal + frames) and `~/.config/dayflow`
+survive on purpose; delete them by hand if wanted.
+
+## Manual install
+
+```sh
+# from a release binary (amd64/arm64) downloaded from a release page:
+install -Dm755 dayflow ~/.local/bin/dayflow
+
+# or from source:
+cd engine && go build -o dayflow . && install -Dm755 dayflow ~/.local/bin/dayflow
+
+dayflow install        # systemd user units
+dayflow setup          # provider
+dayflow doctor         # sanity check
+```
 
 ## Verify
 

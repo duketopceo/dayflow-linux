@@ -60,6 +60,36 @@ Panel {
   // reported version to warn when the plugin and binary drift apart.
   readonly property string pluginVersion: "1.4.0"
   property string engineVersion: ""
+  // Engine install state: statusProc's FailedToStart path sets
+  // engineMissing (binary absent → InstallPrompt surface instead of
+  // tabs); a successful status reply clears it. installLog carries the
+  // last output line of scripts/install.sh for that surface. The script
+  // path resolves relative to this file, so it works from the installed
+  // plugin dir and a dev checkout alike.
+  property bool engineMissing: false
+  property string installLog: ""
+  property string installErr: ""
+  // Skew banner dismiss is keyed on the version pair — a different
+  // mismatch later re-shows the banner instead of staying silenced.
+  property string skewDismissedFor: ""
+  readonly property string installScriptPath:
+      decodeURIComponent(String(Qt.resolvedUrl("scripts/install.sh")).replace(/^file:\/\//, ""))
+  readonly property bool engineInstalling: engineInstallProc.running
+
+  function lastLine(t) {
+    var lines = String(t).split("\n").filter(function(l) { return l.trim() !== "" })
+    return lines.length ? lines[lines.length - 1].trim() : ""
+  }
+
+  // Strict semver compare (string compare lies past .9).
+  function versionNewer(a, b) {
+    var pa = String(a).split("."), pb = String(b).split(".")
+    for (var i = 0; i < 3; i++) {
+      var na = parseInt(pa[i] || "0", 10), nb = parseInt(pb[i] || "0", 10)
+      if (na !== nb) return na > nb
+    }
+    return false
+  }
 
   readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(dayflow.foreground, 1.5)
@@ -103,8 +133,12 @@ Panel {
   }
 
   function refreshAll() {
+    // Don't probe mid-install: the binary may be staged mid-swap, and a
+    // FailedToStart would wedge the "engine answers" check the success
+    // path relies on.
+    if (!statusProc.running && !dayflow.engineInstalling) statusProc.running = true
+    if (dayflow.engineMissing) return
     dayflow.loadTimeline()
-    if (!statusProc.running) statusProc.running = true
     refreshForTab(dayflow.currentTab)
   }
 
@@ -728,11 +762,123 @@ Panel {
 
   Process {
     id: statusProc
+    property bool didStart: false
+    property bool gotStatus: false
+    property string statusErr: ""
     command: ["dayflow", "status", "--json"]
+    onStarted: statusProc.didStart = true
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: dayflow.applyStatus(text)
+      onStreamFinished: {
+        if (text.trim() !== "") {
+          statusProc.gotStatus = true
+          dayflow.applyStatus(text)
+          if (dayflow.engineMissing) {
+            // The tab loaders were gated while the engine was missing —
+            // now that it answers, fill them (not just statusProc data).
+            dayflow.engineMissing = false
+            dayflow.loadTimeline()
+            refreshForTab(dayflow.currentTab)
+          }
+        }
+      }
     }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: statusProc.statusErr = dayflow.lastLine(text)
+    }
+    // FailedToStart emits neither exited nor streamFinished — a missing
+    // binary is the install surface's trigger, not a stuck loader. A
+    // binary that spawns then exits 126/127 is unrunnable (wrong arch,
+    // bad interpreter) — same fix. Any other non-zero exit means the
+    // binary is healthy enough to run but the engine itself failed
+    // (corrupt DB, migration error): reinstalling can't fix that, so
+    // surface it as a notice instead of looping through InstallPrompt.
+    onExited: function(exitCode) {
+      if (exitCode === 0 || statusProc.gotStatus || dayflow.engineInstalling) return
+      if (exitCode === 126 || exitCode === 127) {
+        dayflow.engineMissing = true
+      } else {
+        dayflow.notice = "engine error" + (statusProc.statusErr ? " — " + statusProc.statusErr : " (status exited " + exitCode + ")")
+      }
+    }
+    onRunningChanged: {
+      if (statusProc.running) { statusProc.gotStatus = false; statusProc.statusErr = "" }
+      if (!statusProc.running && !statusProc.didStart && !dayflow.engineInstalling)
+        dayflow.engineMissing = true
+      if (!statusProc.running) statusProc.didStart = false
+    }
+  }
+
+  // Shared engine-install runner — InstallPrompt and the skew banner's
+  // Update button both funnel through requestEngineInstall(). install.sh
+  // resolves its target version itself (manifest-pinned), so no args.
+  Process {
+    id: engineInstallProc
+    property bool didStart: false
+    command: ["bash", dayflow.installScriptPath]
+    onStarted: engineInstallProc.didStart = true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.installLog = dayflow.lastLine(text) || dayflow.installLog
+    }
+    // stderr carries the fail() reason — kept in installErr so a trailing
+    // stdout progress line can't clobber it when the collectors race.
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: dayflow.installErr = dayflow.lastLine(text) || dayflow.installErr
+    }
+    onRunningChanged: {
+      if (engineInstallProc.running) {
+        dayflow.installLog = ""
+        dayflow.installErr = ""
+      }
+      if (!engineInstallProc.running && !engineInstallProc.didStart) {
+        dayflow.installErr = "could not launch installer — missing " + dayflow.installScriptPath
+        dayflow.notice = "engine install failed"
+      }
+      if (!engineInstallProc.running) engineInstallProc.didStart = false
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        // Success — but install.sh may have warned on stderr (e.g. a
+        // PATH-shadowed `dayflow`). That warning is still actionable
+        // after the surface closes, so promote it to the notice rather
+        // than silently dropping it.
+        if (dayflow.installErr !== "") {
+          dayflow.notice = "engine installed — " + dayflow.installErr
+          dayflow.installErr = ""
+        } else {
+          dayflow.notice = "engine installed"
+        }
+        // statusProc's reply clears engineMissing — the loader stays on
+        // the install surface until the new binary actually answers.
+        if (!statusProc.running) statusProc.running = true
+      } else {
+        if (dayflow.installErr === "")
+          dayflow.installErr = "install failed — run " + dayflow.installScriptPath + " in a terminal"
+        dayflow.notice = "engine install failed"
+      }
+    }
+  }
+
+  // The installer is a Process with no natural deadline — curl has
+  // timeouts inside the script, but a wedged systemctl/go build can hang
+  // it too. The panel is persistent, so an unbounded hang would leave
+  // "Installing…" forever. 10 min covers a slow-link binary download.
+  Timer {
+    id: installWatchdog
+    interval: 600000
+    running: engineInstallProc.running
+    onTriggered: {
+      engineInstallProc.running = false
+      dayflow.installErr = "install timed out — check the network and re-run " + dayflow.installScriptPath + " in a terminal"
+      dayflow.notice = "engine install timed out"
+    }
+  }
+
+  function requestEngineInstall() {
+    if (!engineInstallProc.running) engineInstallProc.running = true
   }
 
   Process {
@@ -1220,13 +1366,17 @@ Panel {
           width: parent.width - content.leftPadding - content.rightPadding
           height: item ? item.implicitHeight : Style.space(120)
           property var panel: dayflow
-          source: (!dayflow.configured && !dayflow.onboardingSkipped)
-            ? "Onboarding.qml"
-            : dayflow.currentTab === "today" ? "TodayTab.qml"
-            : dayflow.currentTab === "standup" ? "StandupTab.qml"
-            : dayflow.currentTab === "chat" ? "ChatTab.qml"
-            : dayflow.currentTab === "week" ? "WeekTab.qml"
-            : "Settings.qml"
+          // Gate order: install surface > first-run onboarding > tabs.
+          function pickSource() {
+            if (dayflow.engineMissing) return "InstallPrompt.qml"
+            if (!dayflow.configured && !dayflow.onboardingSkipped) return "Onboarding.qml"
+            if (dayflow.currentTab === "today") return "TodayTab.qml"
+            if (dayflow.currentTab === "standup") return "StandupTab.qml"
+            if (dayflow.currentTab === "chat") return "ChatTab.qml"
+            if (dayflow.currentTab === "week") return "WeekTab.qml"
+            return "Settings.qml"
+          }
+          source: pickSource()
           onLoaded: {
             if (item && item.dismissed) {
               item.dismissed.connect(function() { dayflow.onboardingSkipped = true })
@@ -1323,16 +1473,99 @@ Panel {
         }
 
         // ---- status ----
-        Text {
-          visible: dayflow.engineVersion !== "" && dayflow.engineVersion !== dayflow.pluginVersion
+        Column {
+          visible: dayflow.engineVersion !== "" &&
+                   dayflow.engineVersion !== dayflow.pluginVersion &&
+                   dayflow.skewDismissedFor !== (dayflow.engineVersion + ":" + dayflow.pluginVersion)
           width: parent.width - content.leftPadding - content.rightPadding
-          text: "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
-                " — align the engine binary and panel plugin versions (upgrade whichever is older)"
-          textFormat: Text.PlainText
-          color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
+          spacing: Style.space(4)
+
+          Text {
+            width: parent.width
+            // engine-newer is a downgrade for install.sh (it installs the
+            // manifest-pinned version) — and an older engine can refuse a
+            // newer DB schema, so there is no safe action to offer here.
+            text: dayflow.versionNewer(dayflow.engineVersion, dayflow.pluginVersion)
+              ? "engine v" + dayflow.engineVersion + " is newer than panel v" + dayflow.pluginVersion +
+                " — update the plugin (the engine won't be downgraded: it could reject the newer DB schema)"
+              : "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
+                " — update the engine to match the plugin"
+            textFormat: Text.PlainText
+            color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
+          Row {
+            spacing: Style.space(6)
+
+            Rectangle {
+              // Downgrade offer hidden when the engine is newer — see above.
+              visible: !dayflow.versionNewer(dayflow.engineVersion, dayflow.pluginVersion)
+              width: updText.implicitWidth + Style.space(12)
+              height: updText.implicitHeight + Style.space(4)
+              radius: Style.cornerRadius
+              color: dayflow.accentFill(updMa.containsMouse ? 0.28 : 0.16)
+              border.color: dayflow.accentFill(0.5)
+              opacity: dayflow.engineInstalling ? 0.5 : 1
+              Text {
+                id: updText
+                anchors.centerIn: parent
+                text: dayflow.engineInstalling ? "Updating…" : "Update engine"
+                textFormat: Text.PlainText
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+              MouseArea {
+                id: updMa
+                anchors.fill: parent
+                enabled: !dayflow.engineInstalling
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: dayflow.requestEngineInstall()
+              }
+            }
+
+            Rectangle {
+              width: disText.implicitWidth + Style.space(12)
+              height: disText.implicitHeight + Style.space(4)
+              radius: Style.cornerRadius
+              color: dayflow.btnBg(disMa.containsMouse)
+              border.color: dayflow.fgFill(0.12)
+              Text {
+                id: disText
+                anchors.centerIn: parent
+                text: "Not now"
+                textFormat: Text.PlainText
+                color: dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              MouseArea {
+                id: disMa
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: dayflow.skewDismissedFor = dayflow.engineVersion + ":" + dayflow.pluginVersion
+              }
+            }
+          }
+
+          // Installer's stderr tail after a failed Update — InstallPrompt
+          // isn't loaded in the skew path, so surface it here.
+          Text {
+            visible: dayflow.installErr !== ""
+            width: parent.width
+            text: dayflow.installErr
+            textFormat: Text.PlainText
+            color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
         }
 
         Text {

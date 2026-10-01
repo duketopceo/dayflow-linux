@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build/upload assets for"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release create + asset upload
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          # Dispatch must build the tagged tree, not the dispatch branch.
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      # The tag must match the compiled-in version — `const version` in
+      # engine/main.go is the binary's single source of truth, so a drifted
+      # tag fails the release rather than shipping a mislabeled binary.
+      - name: Assert tag matches engine version
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          ver="${TAG#v}"
+          grep -qF "const version = \"$ver\"" engine/main.go ||
+            { echo "tag $TAG does not match const version in engine/main.go" >&2; exit 1; }
+          # Stronger contract: const version == manifest.json == plugin
+          # version. install.sh pins its download to manifest.json, so a
+          # drifted manifest would fetch assets that don't exist.
+          # The module lives in engine/ — no go.work, so run inside it.
+          go -C engine test -run TestVersionConsistency .
+          echo "version=$ver" >> "$GITHUB_ENV"
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          pids=""
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go -C engine build \
+              -trimpath -ldflags="-s -w" \
+              -o "../dist/dayflow-${{ env.version }}-$arch" . &
+            pids="$pids $!"
+          done
+          rc=0
+          for p in $pids; do wait "$p" || rc=1; done
+          exit "$rc"
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum dayflow-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          # Idempotent across re-runs, but a real create failure stays loud.
+          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 ||
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "$TAG" \
+              --generate-notes \
+              --verify-tag
+          gh release upload "$TAG" \
+            --repo "${{ github.repository }}" \
+            --clobber \
+            dist/dayflow-* dist/SHA256SUMS scripts/install.sh

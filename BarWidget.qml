@@ -58,7 +58,9 @@ BarWidget {
     }
   }
 
-  visible: available
+  // Always render — a missing engine is exactly when the panel's install
+  // surface needs to be reachable. Unavailable state shows a dimmed icon.
+  visible: true
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -66,13 +68,22 @@ BarWidget {
 
   Process {
     id: statusProc
+    property bool didStart: false
     command: ["dayflow", "status", "--json"]
+    onStarted: statusProc.didStart = true
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyStatus(text)
     }
     onExited: function(exitCode) {
       if (exitCode !== 0) root.available = false
+    }
+    // FailedToStart (binary absent) emits neither exited nor
+    // streamFinished — the widget must still render so the panel's
+    // install surface is reachable.
+    onRunningChanged: {
+      if (!statusProc.running && !statusProc.didStart) root.available = false
+      if (!statusProc.running) statusProc.didStart = false
     }
   }
 
@@ -109,15 +120,19 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.paused ? "ᛯ" : "󰚯"
-    tooltipText: root.paused
-      ? "Dayflow paused — click for timeline, right-click to resume"
-      : "Dayflow recording — click for timeline, right-click to pause"
+    text: root.available && root.paused ? "ᛯ" : "󰚯"
+    opacity: root.available ? 1 : 0.45
+    tooltipText: !root.available
+      ? "Dayflow engine not installed — click to set it up"
+      : (root.paused
+        ? "Dayflow paused — click for timeline, right-click to resume"
+        : "Dayflow recording — click for timeline, right-click to pause")
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.LeftButton) {
         root.toggle()
       } else if (buttonCode === Qt.RightButton) {
-        toggleProc.running = true
+        // No engine → nothing to toggle; the click-through stays left-only.
+        if (root.available) toggleProc.running = true
       }
     }
   }

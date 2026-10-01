@@ -209,15 +209,24 @@ func installUnits() error {
 		}
 		fmt.Println("wrote default config:", configPath())
 	}
+	var failed []string
 	run := func(args ...string) {
 		c := exec.Command("systemctl", args...)
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
-		c.Run()
+		if err := c.Run(); err != nil {
+			failed = append(failed, strings.Join(args, " "))
+		}
 	}
 	run("--user", "daemon-reload")
 	run("--user", "enable", "--now", "dayflow-summarize.timer")
 	run("--user", "enable", "--now", "dayflow-backup.timer")
 	run("--user", "enable", "--now", "dayflow-export.timer")
+	if len(failed) > 0 {
+		// Callers (scripts/install.sh) treat a non-zero exit as "units not
+		// enabled" — silently swallowing systemctl failures would report
+		// success on headless/no-user-bus installs where nothing was enabled.
+		return fmt.Errorf("systemctl failed: %s", strings.Join(failed, "; "))
+	}
 	fmt.Println("\nEnabled dayflow-summarize.timer, dayflow-backup.timer (daily snapshot, keeps last 7), dayflow-export.timer (daily markdown export).")
 	fmt.Println("Start capture with:  systemctl --user enable --now dayflow-capture.service")
 	fmt.Println("Already running an older build?  systemctl --user restart dayflow-capture.service")
@@ -226,10 +235,13 @@ func installUnits() error {
 }
 
 func uninstallUnits() error {
+	var failed []string
 	run := func(args ...string) {
 		c := exec.Command("systemctl", args...)
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
-		c.Run()
+		if err := c.Run(); err != nil {
+			failed = append(failed, strings.Join(args, " "))
+		}
 	}
 	dir := unitDir()
 	var owned []string
@@ -243,11 +255,23 @@ func uninstallUnits() error {
 	}
 	if len(owned) > 0 {
 		run(append([]string{"--user", "disable", "--now"}, owned...)...)
+		if len(failed) > 0 {
+			// Disable failed — keep the unit files so a retry (or manual
+			// systemctl run) still has units to act on, and report the
+			// failure so callers don't delete the binary and orphan a
+			// loaded Restart=always service.
+			return fmt.Errorf("systemctl failed: %s", strings.Join(failed, "; "))
+		}
 		for _, name := range owned {
-			os.Remove(filepath.Join(dir, name))
+			if err := os.Remove(filepath.Join(dir, name)); err != nil {
+				failed = append(failed, "remove "+name+": "+err.Error())
+			}
 		}
 	}
 	run("--user", "daemon-reload")
+	if len(failed) > 0 {
+		return fmt.Errorf("uninstall incomplete: %s", strings.Join(failed, "; "))
+	}
 	fmt.Println("units removed")
 	return nil
 }

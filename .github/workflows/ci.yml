@@ -36,3 +36,6 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Test
         run: go test ./...
+      - name: Install-script battery
+        run: bash scripts/test-install.sh
+        working-directory: .
