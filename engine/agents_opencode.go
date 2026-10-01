@@ -420,9 +420,15 @@ func (o *opencodeSource) Fingerprint(sess AgentSession) (recapFingerprint, bool)
 // through the shared excerpt builder so the egress shape is identical to the
 // JSONL sources.
 func (o *opencodeSource) Excerpt(sess AgentSession) string {
+	return excerptFromTurns(o.Turns(sess))
+}
+
+// Turns returns the session's full normalized turn list for the briefing —
+// same message query the excerpt runs, normalized through ocTurns.
+func (o *opencodeSource) Turns(sess AgentSession) []sessionTurn {
 	msgs, ok := o.messages(sess, true)
 	if !ok {
-		return ""
+		return nil
 	}
-	return excerptFromTurns(ocTurns(msgs))
+	return ocTurns(msgs)
 }

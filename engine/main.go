@@ -70,6 +70,8 @@ Query:
   frames [YYYY-MM-DD] [--json]   List captured frames for a day
   agents [YYYY-MM-DD] [--json] [--no-recaps]   Coding-agent sessions + recaps
                           (Claude Code, Codex, OpenCode, Devin, Cursor)
+  briefing [YYYY-MM-DD] [--json] [--refresh] Day briefing: sessions grouped into
+                          workstreams with condensed turns + status
   forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
                           (default: tomorrow)
   playback [on|off|status] [--json]   Opt-in frame retention for timelapse
@@ -284,16 +286,26 @@ func main() {
 		d, err := dateArg(args, time.Now())
 		fatal(err)
 		// Drift bookkeeping reads/writes meta+events even under --no-recaps
-		// — open the db whenever we can; degrade to metadata-only rather
-		// than failing the command.
-		var db *sql.DB
-		if db, err = openDB(); err != nil {
-			fmt.Fprintf(os.Stderr, "agents: database unavailable: %v\n", err)
-			db = nil
-		} else {
+		// — degrade to metadata-only rather than failing the command.
+		db := openDBLenient("agents")
+		if db != nil {
 			defer db.Close()
 		}
 		printAgentSessions(db, cfg, d, jsonOut, !hasFlag(args, "--no-recaps"))
+
+	case "briefing":
+		// briefing [YYYY-MM-DD] [--json] [--refresh] — the day's agent
+		// briefing: sessions grouped into workstreams with condensed
+		// turns + per-thread status. Model prose under agent_recaps;
+		// deterministic fallback otherwise. --refresh regenerates past
+		// the per-day cache.
+		d, err := dateArg(args, time.Now())
+		fatal(err)
+		db := openDBLenient("briefing")
+		if db != nil {
+			defer db.Close()
+		}
+		printBriefing(db, cfg, d, jsonOut, hasFlag(args, "--refresh"))
 
 	case "forecast":
 		// forecast [YYYY-MM-DD] [--json] — predict a day's category mix from
@@ -1143,6 +1155,18 @@ func fatal(err error) {
 		fmt.Fprintln(os.Stderr, "dayflow:", err)
 		os.Exit(1)
 	}
+}
+
+// openDBLenient opens the journal for commands that degrade to
+// metadata-only output when it isn't available (agents, briefing) —
+// stderr note + nil rather than a fatal exit.
+func openDBLenient(cmd string) *sql.DB {
+	db, err := openDB()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: database unavailable: %v\n", cmd, err)
+		return nil
+	}
+	return db
 }
 
 func printTimeline(cfg Config, day time.Time, asJSON bool) {

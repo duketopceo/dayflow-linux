@@ -887,9 +887,15 @@ func (c *cursorSource) Fingerprint(sess AgentSession) (recapFingerprint, bool) {
 // through the shared excerpt builder so the egress shape is identical to the
 // other sources.
 func (c *cursorSource) Excerpt(sess AgentSession) string {
+	return excerptFromTurns(c.Turns(sess))
+}
+
+// Turns returns the composer's full normalized turn list for the briefing —
+// same turn query the excerpt runs.
+func (c *cursorSource) Turns(sess AgentSession) []sessionTurn {
 	turns, _, ok := c.turns(sess, true)
 	if !ok {
-		return ""
+		return nil
 	}
-	return excerptFromTurns(cursorSessionTurns(turns))
+	return cursorSessionTurns(turns)
 }
