@@ -60,6 +60,18 @@ Panel {
   // reported version to warn when the plugin and binary drift apart.
   readonly property string pluginVersion: "1.4.0"
   property string engineVersion: ""
+  // Engine install state: statusProc's FailedToStart path sets
+  // engineMissing (binary absent → InstallPrompt surface instead of
+  // tabs); a successful status reply clears it. installLog carries the
+  // last output line of scripts/install.sh for that surface. The script
+  // path resolves relative to this file, so it works from the installed
+  // plugin dir and a dev checkout alike.
+  property bool engineMissing: false
+  property bool engineInstalling: false
+  property string installLog: ""
+  property bool skewDismissed: false
+  readonly property string installScriptPath:
+      String(Qt.resolvedUrl("scripts/install.sh")).replace(/^file:\/\//, "")
 
   readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(dayflow.foreground, 1.5)
@@ -728,11 +740,71 @@ Panel {
 
   Process {
     id: statusProc
+    property bool didStart: false
     command: ["dayflow", "status", "--json"]
+    onStarted: statusProc.didStart = true
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: dayflow.applyStatus(text)
+      onStreamFinished: {
+        dayflow.engineMissing = false
+        dayflow.applyStatus(text)
+      }
     }
+    // FailedToStart emits neither exited nor streamFinished — a missing
+    // binary is the install surface's trigger, not a stuck loader.
+    onRunningChanged: {
+      if (!statusProc.running && !statusProc.didStart) dayflow.engineMissing = true
+      if (!statusProc.running) statusProc.didStart = false
+    }
+  }
+
+  // Shared engine-install runner — InstallPrompt and the skew banner's
+  // Update button both funnel through requestEngineInstall(). install.sh
+  // resolves its target version itself (manifest-pinned), so no args.
+  Process {
+    id: installProc
+    property bool didStart: false
+    command: ["bash", dayflow.installScriptPath]
+    onStarted: installProc.didStart = true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var lines = text.split("\n").filter(function(l) { return l.trim() !== "" })
+        if (lines.length) dayflow.installLog = lines[lines.length - 1].trim()
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var t = text.trim()
+        if (t !== "") dayflow.installLog = t.split("\n").pop()
+      }
+    }
+    onRunningChanged: {
+      dayflow.engineInstalling = installProc.running
+      if (installProc.running) dayflow.installLog = ""
+      if (!installProc.running && !installProc.didStart) {
+        dayflow.installLog = "could not launch installer"
+        dayflow.notice = "engine install failed"
+      }
+      if (!installProc.running) installProc.didStart = false
+    }
+    onExited: function(exitCode) {
+      dayflow.engineInstalling = false
+      if (exitCode === 0) {
+        dayflow.engineMissing = false
+        dayflow.notice = "engine installed"
+        if (!statusProc.running) statusProc.running = true
+      } else {
+        if (dayflow.installLog === "")
+          dayflow.installLog = "install failed — run " + dayflow.installScriptPath + " in a terminal"
+        dayflow.notice = "engine install failed"
+      }
+    }
+  }
+
+  function requestEngineInstall() {
+    if (!installProc.running) installProc.running = true
   }
 
   Process {
@@ -1220,7 +1292,9 @@ Panel {
           width: parent.width - content.leftPadding - content.rightPadding
           height: item ? item.implicitHeight : Style.space(120)
           property var panel: dayflow
-          source: (!dayflow.configured && !dayflow.onboardingSkipped)
+          source: dayflow.engineMissing
+            ? "InstallPrompt.qml"
+            : (!dayflow.configured && !dayflow.onboardingSkipped)
             ? "Onboarding.qml"
             : dayflow.currentTab === "today" ? "TodayTab.qml"
             : dayflow.currentTab === "standup" ? "StandupTab.qml"
@@ -1323,16 +1397,75 @@ Panel {
         }
 
         // ---- status ----
-        Text {
-          visible: dayflow.engineVersion !== "" && dayflow.engineVersion !== dayflow.pluginVersion
+        Column {
+          visible: !dayflow.skewDismissed && dayflow.engineVersion !== "" &&
+                   dayflow.engineVersion !== dayflow.pluginVersion
           width: parent.width - content.leftPadding - content.rightPadding
-          text: "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
-                " — align the engine binary and panel plugin versions (upgrade whichever is older)"
-          textFormat: Text.PlainText
-          color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
+          spacing: Style.space(4)
+
+          Text {
+            width: parent.width
+            text: "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
+                  " — update the engine to match the plugin"
+            textFormat: Text.PlainText
+            color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
+          Row {
+            spacing: Style.space(6)
+
+            Rectangle {
+              width: updText.implicitWidth + Style.space(12)
+              height: updText.implicitHeight + Style.space(4)
+              radius: Style.cornerRadius
+              color: dayflow.accentFill(0.16)
+              border.color: dayflow.accentFill(0.5)
+              opacity: dayflow.engineInstalling ? 0.5 : 1
+              Text {
+                id: updText
+                anchors.centerIn: parent
+                text: dayflow.engineInstalling ? "Updating…" : "Update engine"
+                textFormat: Text.PlainText
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: dayflow.requestEngineInstall()
+              }
+            }
+
+            Rectangle {
+              width: disText.implicitWidth + Style.space(12)
+              height: disText.implicitHeight + Style.space(4)
+              radius: Style.cornerRadius
+              color: dayflow.btnBg(disMa.containsMouse)
+              border.color: dayflow.fgFill(0.12)
+              Text {
+                id: disText
+                anchors.centerIn: parent
+                text: "Not now"
+                textFormat: Text.PlainText
+                color: dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              MouseArea {
+                id: disMa
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: dayflow.skewDismissed = true
+              }
+            }
+          }
         }
 
         Text {
