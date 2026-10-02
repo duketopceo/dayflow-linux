@@ -85,6 +85,7 @@ func fetchModels(apiKey string) ([]struct {
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	setOpenRouterHeaders(req, "")
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
