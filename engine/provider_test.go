@@ -122,6 +122,67 @@ func TestCallProviderText(t *testing.T) {
 	}
 }
 
+func TestOpenRouterCallsCarryAppAttribution(t *testing.T) {
+	testEnv(t)
+	var gotTitle, gotReferer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTitle = r.Header.Get("X-Title")
+		gotReferer = r.Header.Get("HTTP-Referer")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+	old := openRouterURL
+	openRouterURL = srv.URL
+	t.Cleanup(func() { openRouterURL = old })
+
+	cfg := defaultConfig()
+	cfg.Providers = []Provider{
+		{ID: "p1", Kind: "openrouter", APIKey: "sk-x", Model: "m", Enabled: true},
+	}
+	cfg.Routing.Primary = "p1"
+
+	if _, _, _, err := callProviderText(cfg, "chat", "s", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if gotTitle != "dayflow-linux" {
+		t.Fatalf("X-Title=%q", gotTitle)
+	}
+	if !strings.Contains(gotReferer, "dayflow-linux") {
+		t.Fatalf("HTTP-Referer=%q", gotReferer)
+	}
+}
+
+func TestCustomEndpointGetsNoAttribution(t *testing.T) {
+	testEnv(t)
+	gotTitle := "unset"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTitle = r.Header.Get("X-Title")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	cfg := defaultConfig()
+	cfg.Providers = []Provider{
+		{ID: "c1", Kind: "custom", APIBaseURL: srv.URL, APIKey: "k", Model: "m", Enabled: true},
+	}
+	cfg.Routing.Primary = "c1"
+
+	if _, _, _, err := callProviderText(cfg, "chat", "s", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if gotTitle != "" {
+		t.Fatalf("custom endpoint received X-Title=%q — attribution must stay OpenRouter-only", gotTitle)
+	}
+}
+
 func TestLocalProviderSendsNoAuth(t *testing.T) {
 	testEnv(t)
 	authed := true

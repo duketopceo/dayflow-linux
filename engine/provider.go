@@ -196,6 +196,17 @@ func providerUsesOpenRouterHeaders(p Provider) bool {
 	return p.APIBaseURL == "" || strings.Contains(p.APIBaseURL, "openrouter.ai")
 }
 
+// setOpenRouterHeaders stamps app attribution on a request — every call to
+// OpenRouter (chat, decisions, models listing) carries these so the app
+// shows up correctly on the OpenRouter activity/leaderboard pages.
+func setOpenRouterHeaders(req *http.Request, siteName string) {
+	if siteName == "" {
+		siteName = defaultSiteName
+	}
+	req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
+	req.Header.Set("X-Title", siteName)
+}
+
 // defaultRequestTimeout bounds a single provider attempt. The old hard 120s
 // ceiling was hit 58 times in 11 days while successful calls averaged 40s.
 const defaultRequestTimeout = 180 * time.Second
@@ -285,8 +296,7 @@ func providerChatOnce(cfg Config, p Provider, messages []orMessage) (string, int
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if providerUsesOpenRouterHeaders(p) {
-		req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
-		req.Header.Set("X-Title", cfg.SiteName)
+		setOpenRouterHeaders(req, cfg.SiteName)
 	}
 
 	timeout := time.Duration(cfg.RequestTimeoutSec) * time.Second

@@ -80,8 +80,7 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/duketopceo/dayflow-linux")
-	req.Header.Set("X-Title", cfg.SiteName)
+	setOpenRouterHeaders(req, cfg.SiteName)
 
 	client := &http.Client{Timeout: decisionsTimeout}
 	resp, err := client.Do(req)

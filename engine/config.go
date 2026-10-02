@@ -19,6 +19,9 @@ type Category struct {
 	Color       string `json:"color,omitempty"` // optional hex color for UI
 }
 
+// defaultSiteName is the OpenRouter X-Title app attribution.
+const defaultSiteName = "dayflow-linux"
+
 type Config struct {
 	Provider             string     `json:"provider"` // openrouter, local, custom, mcp
 	OpenRouterAPIKey     string     `json:"openrouter_api_key"`
@@ -134,7 +137,7 @@ func defaultConfig() Config {
 		KeepFrames:           false,
 		RetentionDays:        0, // storage caps own eviction; days only prune when set explicitly
 		IgnoreApps:           []string{"swaylock", "hyprlock", "waylock", "gtklock", "i3lock", "xscreensaver", "screensaver"},
-		SiteName:             "dayflow-linux",
+		SiteName:             defaultSiteName,
 		MaxFramesMB:          20480,
 		MaxDBMB:              10240,
 		AutoPauseLocked:      true,
@@ -224,7 +227,7 @@ func loadConfig() (Config, error) {
 	}
 	cfg.APIBaseURL = normalizeAPIBaseURL(cfg.APIBaseURL)
 	if cfg.SiteName == "" {
-		cfg.SiteName = "dayflow-linux"
+		cfg.SiteName = defaultSiteName
 	}
 	// Storage caps: a legacy max_storage_mb still bounds the whole data dir,
 	// and migrates to the frame cap when no split keys are present. Absent
