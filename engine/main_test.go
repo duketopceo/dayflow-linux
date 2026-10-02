@@ -551,7 +551,11 @@ func TestBlocksForDayFlagsDeadBlocks(t *testing.T) {
 	testEnv(t)
 	db, _ := openDB()
 	defer db.Close()
-	day := time.Now()
+	// Noon today keeps the derived block on the same day — near midnight
+	// blockStart(now)-15min would land on the previous date and the day
+	// query would find nothing.
+	now := time.Now()
+	day := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, now.Location())
 	start := blockStart(day, 15).Add(-15 * time.Minute)
 	end := start.Add(15 * time.Minute)
 	upsertBlockFull(db, start, end, "", "", "", "", "", 0, 3, "dead", "api 500: boom\nsecond line", nil)
