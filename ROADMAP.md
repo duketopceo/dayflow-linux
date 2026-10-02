@@ -16,8 +16,11 @@ Last updated: 2026-09-30.
 
 ## Next
 
-1. Flow feature parity — track the upstream macOS Dayflow beta and port what Linux users ask for.
-2. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
+1. Kurultai remote-ingest patch — upstream kurultai-private gains an authenticated non-loopback `/ingest` (or trust-lane promote path); until then synced atoms land in quarantine and the SSH relay is the transport.
+2. Per-agent-conversation stats and playback ranges (upstream `AgentsOverviewView`/`AgentPlaybackView` parity).
+3. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
+
+Resolved dead-ends: Flow parity (upstream Flow is a hosted waitlist product, nothing local to port); Fable integration (declined).
 
 ## Principles
 

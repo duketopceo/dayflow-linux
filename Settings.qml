@@ -94,6 +94,32 @@ Flickable {
     function onStorageTextChanged() { root.usageText = dayflow.storageText }
   }
 
+  // "Sync now" — pushes today's distilled atoms to the configured
+  // Kurultai profile. Only armed when knowledge_sync is on; the engine
+  // refuses otherwise and the error lands in syncStatus.
+  property string syncStatus: ""
+
+  Process {
+    id: syncNowProc
+    command: ["dayflow", "sync", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var d = JSON.parse(text)
+          root.syncStatus = d.error && d.error !== ""
+            ? "sync failed: " + d.error
+            : "synced " + d.day + " — pushed " + d.pushed + ", unchanged " + d.unchanged
+        } catch (e) {
+          root.syncStatus = "sync failed (no result)"
+        }
+      }
+    }
+    onExited: function(code) {
+      if (code !== 0 && root.syncStatus === "") root.syncStatus = "sync failed"
+    }
+  }
+
   Column {
     id: col
     width: parent.width
@@ -495,6 +521,117 @@ Flickable {
               dayflow.configDraft = d
             }
           }
+        }
+      }
+
+      Text {
+        width: parent.width
+        text: "Knowledge sync"
+        color: dayflow.foreground
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+
+      Text {
+        width: parent.width
+        text: "Off by default. When on, the daily export pass also pushes distilled atoms — the day's journal brief and agent-workstream summaries — to your Kurultai brain (knowledge.shippedit.dev, \"Ulaanbaatar\"). Raw frames, transcripts, and turns are never sent."
+        color: dayflow.dim
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+
+      Row {
+        width: parent.width
+        spacing: Style.space(8)
+
+        Text {
+          width: parent.width - ksyncToggle.width - parent.spacing
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Sync to Kurultai (Ulaanbaatar)"
+          color: dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.body
+          wrapMode: Text.WordWrap
+        }
+
+        Rectangle {
+          id: ksyncToggle
+          width: ksyncToggleText.implicitWidth + Style.space(12)
+          height: ksyncToggleText.implicitHeight + Style.space(6)
+          radius: Style.cornerRadius
+          color: dayflow.configDraft.knowledge_sync === true
+            ? dayflow.accentFill(0.16)
+            : dayflow.btnBg(ksyncToggleMa.containsMouse)
+          border.color: dayflow.configDraft.knowledge_sync === true
+            ? dayflow.accentFill(0.5)
+            : dayflow.fgFill(0.12)
+
+          Text {
+            id: ksyncToggleText
+            anchors.centerIn: parent
+            text: dayflow.configDraft.knowledge_sync === true ? "On" : "Off"
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+          MouseArea {
+            id: ksyncToggleMa
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: {
+              var d = Object.assign({}, dayflow.configDraft)
+              d.knowledge_sync = !(d.knowledge_sync === true)
+              dayflow.configDraft = d
+            }
+          }
+        }
+      }
+
+      Row {
+        width: parent.width
+        spacing: Style.space(8)
+        visible: dayflow.configDraft.knowledge_sync === true
+
+        Rectangle {
+          width: syncNowText.implicitWidth + Style.space(12)
+          height: syncNowText.implicitHeight + Style.space(6)
+          radius: Style.cornerRadius
+          color: dayflow.btnBg(syncNowMa.containsMouse || syncNowProc.running)
+          border.color: dayflow.fgFill(0.12)
+
+          Text {
+            id: syncNowText
+            anchors.centerIn: parent
+            text: syncNowProc.running ? "Syncing…" : "Sync now"
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+          MouseArea {
+            id: syncNowMa
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: !syncNowProc.running
+            onClicked: {
+              root.syncStatus = ""
+              syncNowProc.running = true
+            }
+          }
+        }
+
+        Text {
+          width: parent.width - parent.children[0].width - parent.spacing
+          anchors.verticalCenter: parent.verticalCenter
+          visible: root.syncStatus !== ""
+          text: root.syncStatus
+          color: dayflow.dim
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
         }
       }
 

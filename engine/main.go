@@ -79,6 +79,8 @@ Query:
   ingest [--json] [--reindex]   Index agent-chat turns into the local FTS
                           store (--reindex wipes and rebuilds the index)
   search-agents <q> [--json]   Full-text search indexed agent conversations
+  sync [YYYY-MM-DD] [--json]   Push the day's distilled atoms to the Kurultai
+                          brain (knowledge_sync in config; opt-in egress)
   ask <question> [--json]   One-shot chat over journal + agent history
   forecast [YYYY-MM-DD] [--json]   Predict a day's category mix from history
                           (default: tomorrow)
@@ -1083,6 +1085,22 @@ func main() {
 		} else {
 			fmt.Print(md)
 		}
+		// Export tail — when knowledge sync is enabled, push yesterday's
+		// finalized journal + workstream atoms to the brain. Errors are
+		// logged, never fatal to the export itself.
+		knowledgeSyncAfterExport(db, cfg)
+
+	case "sync":
+		// sync [YYYY-MM-DD|today|yesterday] [--json] — push the day's
+		// distilled atoms (journal brief + agent workstreams) to the
+		// configured Kurultai brain profile. Requires knowledge_sync.
+		d, err := dateArg(args, time.Now())
+		fatal(err)
+		db := openDBLenient("sync")
+		if db != nil {
+			defer db.Close()
+		}
+		printSync(db, cfg, d, jsonOut)
 
 	case "provider":
 		var pargs []string

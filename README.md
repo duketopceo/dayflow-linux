@@ -177,6 +177,28 @@ rm -rf ~/.local/share/dayflow
 rm -rf ~/.config/dayflow
 ```
 
+## Knowledge sync (Kurultai)
+
+Opt-in. When `knowledge_sync` is on, the daily export pass also pushes the
+previous day's distilled journal — one markdown document (`Journal` +
+`Agent workstreams` sections) — to a Kurultai brain via `POST /ingest`,
+deduplicated by content hash (`dayflow/<date>.md` source_ids upsert
+server-side). Raw frames, transcripts, and turn text never leave the
+machine.
+
+```sh
+dayflow sync                 # push today (manual)
+dayflow sync 2026-09-30 --json
+```
+
+Transport: the hosted brain's `/ingest` is loopback-only, so the push
+relays through SSH into the container (`ssh <host> docker exec -i …`); the
+ingest secret travels on stdin, never argv. Tunables (defaults target
+Ulaanbaatar): `knowledge_ssh_host` = `server-001`, `knowledge_container` =
+`kurultai-personal`, `knowledge_port` = `8421`, `knowledge_secret_ref` =
+`omaseal://kurultai/personal-ingest-secret`. Atoms land in the quarantine
+lane until a Kurultai patch adds authenticated remote ingest + trust.
+
 ## MCP / agent access
 
 `dayflow mcp` is a stdio MCP server exposing `get_timeline`, `get_status`, `search_journal`, `search_agent_sessions`, `get_events`, `get_usage`, `get_stats`, `get_standup`, `get_insights`, `chat`. All read-only except `chat`; `--read-only` (or `DAYFLOW_MCP_READONLY=1`) hides it. Contract: [docs/agent-contract.md](docs/agent-contract.md).
