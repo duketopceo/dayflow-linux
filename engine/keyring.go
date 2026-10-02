@@ -21,9 +21,16 @@ func keyringAvailable() bool {
 // on any failure — missing keyring, locked agent mode, or not_found — so
 // callers can fall through to file/env sources.
 func keyringGet(account string) (string, error) {
+	return keyringGetService(keyringService, account)
+}
+
+// keyringGetService resolves a secret from an arbitrary OmaSeal service —
+// knowledge sync reads the Kurultai profile's omaseal:// refs, which live
+// under the "kurultai" service, not "dayflow".
+func keyringGetService(service, account string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "omaseal", "get", keyringService, account).Output()
+	out, err := exec.CommandContext(ctx, "omaseal", "get", service, account).Output()
 	if err != nil {
 		return "", err
 	}
