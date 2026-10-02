@@ -136,6 +136,15 @@ Column {
   }
 
   Text {
+    visible: host !== null && host.agentsLoading
+    text: "Rebuilding the day's briefing — can take a couple of minutes while sessions are active."
+    textFormat: Text.PlainText
+    color: pane.dayflow ? pane.dayflow.dim : "transparent"
+    font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+    font.pixelSize: Style.font.caption
+  }
+
+  Text {
     visible: host !== null && host.agentsError !== ""
     text: "! " + (host ? host.agentsError : "")
     textFormat: Text.PlainText
