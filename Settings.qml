@@ -535,7 +535,7 @@ Flickable {
 
       Text {
         width: parent.width
-        text: "Off by default. When on, the daily export pass also pushes distilled atoms — the day's journal brief and agent-workstream summaries — to your Kurultai brain (knowledge.shippedit.dev, \"Ulaanbaatar\"). Raw frames, transcripts, and turns are never sent."
+        text: "Off by default. When on, the daily export pass also pushes distilled atoms — the day's journal brief and agent-workstream summaries — to a Kurultai brain you configure in config.json (knowledge_url / knowledge_transport). Raw frames, transcripts, and turns are never sent."
         color: dayflow.dim
         font.family: dayflow.fontFamily
         font.pixelSize: Style.font.caption
@@ -549,7 +549,7 @@ Flickable {
         Text {
           width: parent.width - ksyncToggle.width - parent.spacing
           anchors.verticalCenter: parent.verticalCenter
-          text: "Sync to Kurultai (Ulaanbaatar)"
+          text: "Sync to knowledge brain"
           color: dayflow.foreground
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.body

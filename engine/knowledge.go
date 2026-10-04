@@ -1,19 +1,22 @@
 package main
 
-// Knowledge sync — opt-in push of distilled atoms to a Kurultai brain
-// (Ulaanbaatar, knowledge.shippedit.dev).
+// Knowledge sync — opt-in push of distilled atoms to a Kurultai brain.
 //
 // Egress surface: only summarized text leaves the machine — the day's
 // brief markdown and per-workstream briefing prose. Raw frames,
 // transcripts, and turn text are never sent.
 //
-// Transport: the remote brain has no public atom-write surface — /mcp is
-// read-only and /ingest requires a loopback peer. So the payload rides an
-// SSH relay: `ssh <host> docker exec -i <container> curl … /ingest` —
-// inside the container the request is genuinely loopback. The ingest
-// secret travels on stdin, never in argv. When Kurultai gains an
-// authenticated remote ingest route, this transport becomes a config
-// swap, not a rewrite.
+// Transports (knowledge_transport):
+//   - "http" (default): direct POST <knowledge_url>/ingest with the
+//     secret in the Authorization header. Requires the brain to accept
+//     authenticated remote ingest.
+//   - "ssh": fallback for brains whose /ingest is loopback-only —
+//     `ssh <host> docker exec -i <container> curl … /ingest`, inside
+//     the container the request is genuinely loopback. The ingest
+//     secret travels on stdin, never in argv.
+//
+// Every endpoint detail is user config — no hosts, containers, or
+// secret references are baked into the binary.
 //
 // Dedup: the whole day document is content-hashed into meta; unchanged
 // days are skipped. Source_id stability comes from the ingest `name`
@@ -27,7 +30,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -49,6 +55,70 @@ func resolveOmaseal(v string) string {
 	return s
 }
 
+// knowledgePushFor selects the push transport. Unknown values error
+// loudly — silent fallback across transports would hide which one ran.
+func knowledgePushFor(cfg Config) (knowledgePush, error) {
+	switch cfg.KnowledgeTransport {
+	case "", "http":
+		return httpIngestPush(cfg)
+	case "ssh":
+		return sshIngestPush(cfg)
+	default:
+		return nil, fmt.Errorf("unknown knowledge_transport %q (want \"http\" or \"ssh\")", cfg.KnowledgeTransport)
+	}
+}
+
+// knowledgeSecret resolves the configured ingest secret reference.
+func knowledgeSecret(cfg Config) (string, error) {
+	if cfg.KnowledgeSecretRef == "" {
+		return "", fmt.Errorf("knowledge_secret_ref is required (\"omaseal://service/account\" or a literal value)")
+	}
+	secret := resolveOmaseal(cfg.KnowledgeSecretRef)
+	if secret == "" {
+		return "", fmt.Errorf("knowledge ingest secret unavailable (omaseal locked? %s)", cfg.KnowledgeSecretRef)
+	}
+	return secret, nil
+}
+
+// httpIngestPush posts the doc directly to <knowledge_url>/ingest — for
+// brains configured to accept secret-authenticated remote ingest.
+func httpIngestPush(cfg Config) (knowledgePush, error) {
+	base := strings.TrimRight(strings.TrimSpace(cfg.KnowledgeURL), "/")
+	if base == "" {
+		return nil, fmt.Errorf("knowledge_url is required for http transport")
+	}
+	if _, err := url.ParseRequestURI(base); err != nil {
+		return nil, fmt.Errorf("knowledge_url %q is not a valid URL", cfg.KnowledgeURL)
+	}
+	secret, err := knowledgeSecret(cfg)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	return func(name string, doc []byte) error {
+		u := fmt.Sprintf("%s/ingest?name=%s&format=md", base, url.QueryEscape(name))
+		req, err := http.NewRequest("POST", u, bytes.NewReader(doc))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set("Content-Type", "text/markdown")
+		req.Header.Set("x-kurultai-agent-id", "dayflow")
+		req.Header.Set("x-kurultai-namespace", "dayflow")
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("ingest POST: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode/100 != 2 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return fmt.Errorf("ingest POST: HTTP %d: %.200s", resp.StatusCode, body)
+		}
+		return nil
+	}, nil
+}
+
 // sshIngestPush returns a knowledgePush that relays through SSH into the
 // brain container's loopback /ingest. Secret and body both travel on
 // stdin: the remote `read` consumes the secret line, curl consumes the
@@ -56,23 +126,19 @@ func resolveOmaseal(v string) string {
 func sshIngestPush(cfg Config) (knowledgePush, error) {
 	host := cfg.KnowledgeSSHHost
 	if host == "" {
-		host = "server-001"
+		return nil, fmt.Errorf("knowledge_ssh_host is required for ssh transport")
 	}
 	container := cfg.KnowledgeContainer
 	if container == "" {
-		container = "kurultai-personal"
+		return nil, fmt.Errorf("knowledge_container is required for ssh transport")
 	}
 	port := cfg.KnowledgePort
 	if port == 0 {
 		port = 8421
 	}
-	secretRef := cfg.KnowledgeSecretRef
-	if secretRef == "" {
-		secretRef = "omaseal://kurultai/personal-ingest-secret"
-	}
-	secret := resolveOmaseal(secretRef)
-	if secret == "" {
-		return nil, fmt.Errorf("knowledge ingest secret unavailable (omaseal locked? %s)", secretRef)
+	secret, err := knowledgeSecret(cfg)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := exec.LookPath("ssh"); err != nil {
 		return nil, fmt.Errorf("ssh not found: %w", err)
@@ -106,17 +172,39 @@ func knowledgeDocFor(db *sql.DB, cfg Config, day time.Time) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "---\ntitle: Dayflow %s\ntags: dayflow, journal\n---\n\n# Dayflow %s\n\n", ds, ds)
 
+	// The brain chunks markdown by section and quality-gates each atom
+	// (tags + ~80 chars minimum), so every section carries a lead-in
+	// line — a bare heading followed by a tiny body lands in quarantine.
 	start, end := dayBounds(day)
-	if blocks, err := blocksBetween(db, start, end); err == nil && len(blocks) > 0 {
+	blocks, berr := blocksBetween(db, start, end)
+	if berr == nil && len(blocks) > 0 {
 		b.WriteString("## Journal\n\n")
 		b.WriteString(markdownBrief(blocks, ds))
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "\n_%d summarized blocks, %s–%s local; top categories: %s._\n",
+			len(blocks), blocks[0].StartStr, blocks[len(blocks)-1].EndStr, topCategories(blocks, 3))
 	}
 
 	if db != nil {
 		briefing := agentBriefingFor(db, cfg, day, false)
+		if len(blocks) == 0 && len(briefing.Workstreams) == 0 {
+			fmt.Fprintf(&b, "## Journal\n\nNo captured blocks or agent sessions for %s — an offline, idle, or untracked day.\n", ds)
+		}
 		if len(briefing.Workstreams) > 0 {
-			b.WriteString("## Agent workstreams\n\n")
+			nthreads := 0
+			sources := map[string]bool{}
+			for _, ws := range briefing.Workstreams {
+				nthreads += len(ws.Threads)
+				for _, th := range ws.Threads {
+					sources[th.Source] = true
+				}
+			}
+			var srcs []string
+			for s := range sources {
+				srcs = append(srcs, s)
+			}
+			sort.Strings(srcs)
+			fmt.Fprintf(&b, "## Agent workstreams\n\n%d workstreams spanning %d agent conversation threads across %s — condensed from locally indexed sessions; raw turns never leave this machine.\n\n",
+				len(briefing.Workstreams), nthreads, strings.Join(srcs, ", "))
 		}
 		for _, ws := range briefing.Workstreams {
 			var sources []string
@@ -135,6 +223,33 @@ func knowledgeDocFor(db *sql.DB, cfg Config, day time.Time) []byte {
 		}
 	}
 	return []byte(b.String())
+}
+
+// topCategories returns the n most common block categories, ties broken
+// alphabetically for deterministic output.
+func topCategories(blocks []Block, n int) string {
+	counts := map[string]int{}
+	for _, bl := range blocks {
+		c := bl.Category
+		if c == "" {
+			c = "uncategorized"
+		}
+		counts[c]++
+	}
+	var names []string
+	for c := range counts {
+		names = append(names, c)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if counts[names[i]] != counts[names[j]] {
+			return counts[names[i]] > counts[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	if len(names) > n {
+		names = names[:n]
+	}
+	return strings.Join(names, ", ")
 }
 
 // syncKnowledge pushes the day's distilled document. Returns
@@ -166,7 +281,7 @@ func knowledgeSyncAfterExport(db *sql.DB, cfg Config) {
 	if !cfg.KnowledgeSync {
 		return
 	}
-	push, err := sshIngestPush(cfg)
+	push, err := knowledgePushFor(cfg)
 	if err != nil {
 		debugf(cfg, "knowledge sync skipped: %v", err)
 		return
@@ -185,7 +300,7 @@ func printSync(db *sql.DB, cfg Config, day time.Time, jsonOut bool) {
 	if !cfg.KnowledgeSync {
 		fatal(fmt.Errorf("knowledge sync is off — set knowledge_sync: true in config.json or the Settings toggle"))
 	}
-	push, err := sshIngestPush(cfg)
+	push, err := knowledgePushFor(cfg)
 	if err != nil {
 		fatal(err)
 	}
