@@ -26,12 +26,22 @@ func decisionsTestServer(status int, respBody string) (*httptest.Server, *[]stri
 }
 
 // pointDecisionsAt redirects the decisions endpoint to srv for the test's
-// duration and registers cleanup. Returns srv (already closed on failure).
+// duration and registers cleanup. The /decisions path keeps the URL on the
+// decisions transport — a bare base normalizes to /v1 and selects chat.
 func pointDecisionsAt(t *testing.T, srv *httptest.Server) {
 	t.Helper()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	t.Cleanup(func() { decisionsURL = old })
+	old := decisionsURLOverride
+	decisionsURLOverride = srv.URL + "/decisions"
+	t.Cleanup(func() { decisionsURLOverride = old })
+}
+
+// useConfigDecisions clears the suite-wide endpoint override so the test's
+// cfg.DecisionsURL is what decide() actually targets.
+func useConfigDecisions(t *testing.T) {
+	t.Helper()
+	old := decisionsURLOverride
+	decisionsURLOverride = ""
+	t.Cleanup(func() { decisionsURLOverride = old })
 }
 
 func TestDecideHappy(t *testing.T) {
@@ -91,7 +101,8 @@ func TestDecideHappy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task != "judge:category" || provider != "typesafe" || m != "typesafe/jev-1.13-20260917" || pt != 100 || ct != 20 {
+	wantProvider := strings.TrimPrefix(srv.URL, "http://")
+	if task != "judge:category" || provider != wantProvider || m != "typesafe/jev-1.13-20260917" || pt != 100 || ct != 20 {
 		t.Fatalf("llm_calls row: %s %s %s %d %d", task, provider, m, pt, ct)
 	}
 }
@@ -316,9 +327,9 @@ func TestJudgeRetryable(t *testing.T) {
 			srv, _ := decisionsTestServer(200, fmt.Sprintf(
 				`{"model":"m","answers":{"retryable":{"type":"noul","noul":%v}},"usage":{}}`, tc.score))
 			defer srv.Close()
-			old := decisionsURL
-			decisionsURL = srv.URL
-			defer func() { decisionsURL = old }()
+			old := decisionsURLOverride
+			decisionsURLOverride = srv.URL + "/decisions"
+			defer func() { decisionsURLOverride = old }()
 			cfg := Config{OpenRouterAPIKey: "k", JevClassification: true}
 			if got := judgeRetryable(nil, cfg, start, "api error"); got != tc.want {
 				t.Fatalf("judgeRetryable = %v, want %v", got, tc.want)
@@ -626,5 +637,345 @@ func TestQualityGateRegenAdoptsBetter(t *testing.T) {
 	}
 	if qual != 0.8 {
 		t.Fatalf("quality_confidence = %v, want 0.8 (better judgment wins)", qual)
+	}
+}
+
+type capturedRequest struct {
+	Path    string
+	Auth    string
+	Referer string
+	Title   string
+	Body    string
+}
+
+// recordingServer answers every request with (status, body), recording
+// path, egress-relevant headers, and body for assertions.
+func recordingServer(t *testing.T, status int, body string) (*httptest.Server, *[]capturedRequest) {
+	t.Helper()
+	var reqs []capturedRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		reqs = append(reqs, capturedRequest{
+			Path:    r.URL.Path,
+			Auth:    r.Header.Get("Authorization"),
+			Referer: r.Header.Get("HTTP-Referer"),
+			Title:   r.Header.Get("X-Title"),
+			Body:    string(b),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &reqs
+}
+
+// chatBody builds a chat-completions response whose assistant message is content.
+func chatBody(content string) string {
+	b, _ := json.Marshal(map[string]any{
+		"choices": []map[string]any{
+			{"message": map[string]string{"content": content}},
+		},
+		"usage": map[string]int{"prompt_tokens": 12, "completion_tokens": 3},
+	})
+	return string(b)
+}
+
+func TestDecisionsEndpointResolution(t *testing.T) {
+	useConfigDecisions(t)
+	cases := []struct {
+		url      string
+		wantURL  string
+		wantChat bool
+	}{
+		{"", defaultDecisionsURL, false},
+		{"https://mirror.example/decisions", "https://mirror.example/decisions", false},
+		{" https://mirror.example/decisions/ ", "https://mirror.example/decisions", false},
+		{"http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/v1/chat/completions", true},
+		{"http://127.0.0.1:11434", "http://127.0.0.1:11434/v1/chat/completions", true},
+		{"http://localhost:8080/v1/chat/completions", "http://localhost:8080/v1/chat/completions", true},
+	}
+	for _, tc := range cases {
+		got, chat := decisionsEndpoint(Config{DecisionsURL: tc.url})
+		if got != tc.wantURL || chat != tc.wantChat {
+			t.Fatalf("decisionsEndpoint(%q) = %q, %v — want %q, %v", tc.url, got, chat, tc.wantURL, tc.wantChat)
+		}
+	}
+}
+
+func TestDecideViaChatTransport(t *testing.T) {
+	cfg := testEnv(t)
+	srv, reqs := recordingServer(t, 200, chatBody(`{"worthy":0.9,"quality":0.2}`))
+	useConfigDecisions(t)
+	cfg.DecisionsURL = srv.URL // bare base → /v1 → chat transport
+	cfg.DecisionsModel = "local-judge"
+
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ans, model, err := decide(db, cfg, "recap", "session state", map[string]string{
+		"worthy": "w?", "quality": "q?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans["worthy"] != 0.9 || ans["quality"] != 0.2 || len(ans) != 2 {
+		t.Fatalf("ans = %v", ans)
+	}
+	if model != "local-judge" {
+		t.Fatalf("model = %q", model)
+	}
+	if len(*reqs) != 1 {
+		t.Fatalf("reqs = %d", len(*reqs))
+	}
+	r := (*reqs)[0]
+	if r.Path != "/v1/chat/completions" {
+		t.Fatalf("path = %q", r.Path)
+	}
+	// a non-OpenRouter endpoint must not receive credentials or attribution
+	if r.Auth != "" || r.Referer != "" || r.Title != "" {
+		t.Fatalf("egress headers on local call: %+v", r)
+	}
+	var req decisionsChatRequest
+	if err := json.Unmarshal([]byte(r.Body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Model != "local-judge" || req.Temperature != 0 || len(req.Messages) != 1 {
+		t.Fatalf("req = %+v", req)
+	}
+	text := req.Messages[0].Content[0].Text
+	qi, wi := strings.Index(text, `Q "quality"`), strings.Index(text, `Q "worthy"`)
+	if !strings.Contains(text, "session state") || qi < 0 || wi < 0 || qi > wi {
+		t.Fatalf("prompt = %q", text)
+	}
+	// llm_calls names the loopback host as provider
+	var task, provider, m string
+	err = db.QueryRow(`SELECT task, provider, model FROM llm_calls ORDER BY id DESC LIMIT 1`).
+		Scan(&task, &provider, &m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task != "judge:recap" || provider != strings.TrimPrefix(srv.URL, "http://") || m != "local-judge" {
+		t.Fatalf("llm_calls: %s %s %s", task, provider, m)
+	}
+}
+
+func TestDecideViaChatThinkNoise(t *testing.T) {
+	cfg := testEnv(t)
+	srv, _ := recordingServer(t, 200,
+		chatBody(`Sure! <think>the answer is {"worthy":0.1}</think> {"worthy":0.7} done.`))
+	useConfigDecisions(t)
+	cfg.DecisionsURL = srv.URL
+
+	ans, _, err := decide(nil, cfg, "recap", "s", map[string]string{"worthy": "w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans["worthy"] != 0.7 || len(ans) != 1 {
+		t.Fatalf("ans = %v", ans)
+	}
+}
+
+func TestDecideViaChatPartialAnswers(t *testing.T) {
+	cfg := testEnv(t)
+	srv, _ := recordingServer(t, 200, chatBody(`{"worthy":0.9}`))
+	useConfigDecisions(t)
+	cfg.DecisionsURL = srv.URL
+
+	ans, _, err := decide(nil, cfg, "recap", "s", map[string]string{"worthy": "w", "quality": "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans["worthy"] != 0.9 || len(ans) != 1 {
+		t.Fatalf("missing keys must not be fabricated: %v", ans)
+	}
+}
+
+func TestDecideViaChatMalformed(t *testing.T) {
+	cfg := testEnv(t)
+	srv, _ := recordingServer(t, 200, chatBody(`I cannot score this.`))
+	useConfigDecisions(t)
+	cfg.DecisionsURL = srv.URL
+
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, _, err := decide(db, cfg, "recap", "s", map[string]string{"w": "x"}); err == nil {
+		t.Fatal("prose-only reply must error so callers keep their fallback")
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM llm_calls ORDER BY id DESC LIMIT 1`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "error" {
+		t.Fatalf("status = %q", status)
+	}
+}
+
+func TestDecideViaChatAPIKey(t *testing.T) {
+	cfg := testEnv(t)
+	srv, reqs := recordingServer(t, 200, chatBody(`{"a":0.5}`))
+	useConfigDecisions(t)
+	cfg.DecisionsURL = srv.URL
+	cfg.DecisionsAPIKey = "local-secret"
+
+	if _, _, err := decide(nil, cfg, "k", "s", map[string]string{"a": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if (*reqs)[0].Auth != "Bearer local-secret" {
+		t.Fatalf("auth = %q", (*reqs)[0].Auth)
+	}
+}
+
+func TestParseNoulScores(t *testing.T) {
+	out, err := parseNoulScores(`{"a":-1,"b":42,"c":"high"}`)
+	if err != nil || out["a"] != 0 || out["b"] != 1 || len(out) != 2 {
+		t.Fatalf("clamp/drop: %v err=%v", out, err)
+	}
+	out, err = parseNoulScores(`{}`)
+	if err != nil || len(out) != 0 {
+		t.Fatalf("empty object: %v err=%v", out, err)
+	}
+	if _, err = parseNoulScores(`no object here`); err == nil {
+		t.Fatal("prose should error")
+	}
+	if _, err = parseNoulScores(`{"a":`); err == nil {
+		t.Fatal("truncated JSON should error")
+	}
+}
+
+func TestJudgeBlockViaChat(t *testing.T) {
+	testEnv(t)
+	srv, _ := recordingServer(t, 200, chatBody(`{
+		"cat_coding":0.9,"cat_comms":0.05,"cat_browsing":0.03,"cat_idle":0.02,
+		"productive":0.8,"quality":0.7}`))
+	useConfigDecisions(t)
+	cfg := judgeTestCfg()
+	cfg.DecisionsURL = srv.URL
+
+	res := &blockResult{Title: "Refactor engine", Summary: "Split store.go", Category: "browsing"}
+	j, err := judgeBlock(nil, cfg, res, "neovim", "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Category != "coding" || j.Confidence == nil || *j.Confidence != 0.9 {
+		t.Fatalf("j = %+v", j)
+	}
+	if j.Productive == nil || !*j.Productive {
+		t.Fatalf("productive = %v", j.Productive)
+	}
+}
+
+func TestDecideCustomEndpointAuth(t *testing.T) {
+	testEnv(t)
+	srv, reqs := recordingServer(t, 200,
+		`{"model":"m","answers":{"a":{"type":"noul","noul":0.7}},"usage":{}}`)
+	useConfigDecisions(t)
+	cfg := Config{OpenRouterAPIKey: "k", JevClassification: true, DecisionsURL: srv.URL + "/mirror/decisions"}
+
+	ans, _, err := decide(nil, cfg, "k", "s", map[string]string{"a": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans["a"] != 0.7 {
+		t.Fatalf("ans = %v", ans)
+	}
+	r := (*reqs)[0]
+	if r.Path != "/mirror/decisions" {
+		t.Fatalf("path = %q", r.Path)
+	}
+	// decisions contract, no key, no attribution
+	if !strings.Contains(r.Body, `"questions"`) || !strings.Contains(r.Body, `"noul"`) {
+		t.Fatalf("body = %s", r.Body)
+	}
+	if r.Auth != "" || r.Referer != "" || r.Title != "" {
+		t.Fatalf("headers on keyed-less mirror: %+v", r)
+	}
+	cfg.DecisionsAPIKey = "mirror-key"
+	if _, _, err := decide(nil, cfg, "k", "s", map[string]string{"a": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if (*reqs)[1].Auth != "Bearer mirror-key" {
+		t.Fatalf("auth = %q", (*reqs)[1].Auth)
+	}
+}
+
+// A URL containing "openrouter.ai" as a path or prefix on another host must
+// not receive the provider-chain key or attribution headers — only the
+// hostname gates OpenRouter behavior.
+func TestDecideSpoofedOpenRouterHost(t *testing.T) {
+	testEnv(t)
+	srv, reqs := recordingServer(t, 200,
+		`{"model":"m","answers":{"a":{"type":"noul","noul":0.7}},"usage":{}}`)
+	useConfigDecisions(t)
+	cfg := Config{OpenRouterAPIKey: "k", JevClassification: true,
+		DecisionsURL: srv.URL + "/openrouter.ai/api/alpha/decisions"}
+
+	if _, _, err := decide(nil, cfg, "k", "s", map[string]string{"a": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	r := (*reqs)[0]
+	if r.Auth != "" || r.Referer != "" || r.Title != "" {
+		t.Fatalf("spoofed host got OpenRouter headers: %+v", r)
+	}
+}
+
+// Fully local: a chat-shaped decisions_url answers every judgment on
+// loopback — no Authorization, no attribution, and llm_calls names only
+// local providers.
+func TestDecideFullyLocalNoEgress(t *testing.T) {
+	cfg := testEnv(t)
+	srv, reqs := recordingServer(t, 200, chatBody(`{
+		"worthy":0.9,"cat_coding":0.9,"cat_comms":0.05,"cat_browsing":0.03,"cat_idle":0.02,
+		"productive":0.8,"quality":0.7}`))
+	useConfigDecisions(t)
+	cfg.DecisionsURL = srv.URL
+	cfg.DecisionsModel = "local-judge"
+	cfg.Categories = judgeTestCfg().Categories
+
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, _, err := decide(db, cfg, "recap", "s", map[string]string{"worthy": "w"}); err != nil {
+		t.Fatal(err)
+	}
+	res := &blockResult{Title: "t", Summary: "s", Category: "browsing"}
+	if _, err := judgeBlock(db, cfg, res, "neovim", "", "", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range *reqs {
+		if r.Auth != "" || r.Referer != "" || r.Title != "" {
+			t.Fatalf("local endpoint received egress headers: %+v", r)
+		}
+	}
+	rows, err := db.Query(`SELECT DISTINCT provider FROM llm_calls`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var provs []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		provs = append(provs, p)
+	}
+	if len(provs) == 0 {
+		t.Fatal("no llm_calls logged")
+	}
+	for _, p := range provs {
+		if !strings.HasPrefix(p, "127.0.0.1:") {
+			t.Fatalf("non-local provider logged: %q (all: %v)", p, provs)
+		}
 	}
 }

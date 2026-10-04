@@ -16,9 +16,9 @@ func benchEnv(b *testing.B) Config {
 	cfg := defaultConfig()
 	cfg.OpenRouterAPIKey = "test-key"
 	// no judge egress from benchmarks (see testEnv)
-	old := decisionsURL
-	decisionsURL = "http://127.0.0.1:1/"
-	b.Cleanup(func() { decisionsURL = old })
+	old := decisionsURLOverride
+	decisionsURLOverride = "http://127.0.0.1:1/decisions"
+	b.Cleanup(func() { decisionsURLOverride = old })
 	return cfg
 }
 

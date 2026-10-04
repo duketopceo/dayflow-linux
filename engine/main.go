@@ -481,6 +481,9 @@ func main() {
 		if masked.OpenRouterAPIKey != "" {
 			masked.OpenRouterAPIKey = "***redacted***"
 		}
+		if masked.DecisionsAPIKey != "" {
+			masked.DecisionsAPIKey = "***redacted***"
+		}
 		for i := range masked.Providers {
 			if masked.Providers[i].APIKey != "" {
 				masked.Providers[i].APIKey = "***redacted***"
@@ -1348,6 +1351,7 @@ func printDailyGrid(cfg Config, day time.Time, asJSON bool) {
 }
 
 func printStatus(cfg Config, asJSON bool) {
+	_, configured := configuredVisionProvider(cfg)
 	db, err := openDB()
 	fatal(err)
 	defer db.Close()
@@ -1375,7 +1379,7 @@ func printStatus(cfg Config, asJSON bool) {
 			"model":          cfg.Model,
 			"ignored_apps":   cfg.IgnoreApps,
 			"active_app":     activeWindowClass(),
-			"configured":     cfg.OpenRouterAPIKey != "",
+			"configured":     configured,
 			"panel_expanded": cfg.PanelExpanded,
 			"storage_bytes":  storage,
 			"storage_text":   humanBytes(storage),

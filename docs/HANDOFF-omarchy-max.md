@@ -61,7 +61,7 @@ on `master` and pushed.
   presence on the Hey board after connect.
 - `.codebase-memory/` is a local MCP artifact — gitignored, never
   commit it (it slipped in twice).
-- Tests must never egress: `testEnv`/`benchEnv` stub `decisionsURL`
+- Tests must never egress: `testEnv`/`benchEnv` stub `decisionsURLOverride`
   to a dead endpoint — keep that when adding test envs.
 - CI is `.github/workflows/ci.yml` (build/vet/gofmt/test on merge refs —
   unformatted files on master poison EVERY PR's check).

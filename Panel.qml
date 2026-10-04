@@ -198,11 +198,10 @@ Panel {
   function saveConfig() {
     var patch = dayflow.cloneConfig(dayflow.configDraft)
     if (patch.openrouter_api_key === "***redacted***") delete patch.openrouter_api_key
-    if (patch.providers) {
-      for (var pi = 0; pi < patch.providers.length; pi++) {
-        if (patch.providers[pi].api_key === "***redacted***") delete patch.providers[pi].api_key
-      }
-    }
+    // Advanced provider fields are saved independently. Round-tripping this
+    // stale snapshot would undo prompt overrides written since loadConfig.
+    delete patch.providers
+    delete patch.routing
     patch.categories = []
     for (var i = 0; i < settingsCatModel.count; i++) {
       var item = settingsCatModel.get(i)
@@ -1197,7 +1196,7 @@ Panel {
     bar: dayflow.bar
     open: dayflow.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(dayflow.expanded ? Style.space(780) : Style.space(540))
+    contentWidth: panel.fittedContentWidth(dayflow.currentTab === "settings" && dayflow.configured ? Style.space(1180) : (dayflow.expanded ? Style.space(780) : Style.space(620)))
     contentHeight: panel.fittedContentHeight(content.implicitHeight)
 
     PanelKeyCatcher {
@@ -1363,19 +1362,16 @@ Panel {
 
         // ---- error / not-configured states ----
         Column {
-          visible: dayflow.errorText !== "" || !dayflow.configured
+          visible: (dayflow.errorText !== "" && dayflow.currentTab !== "settings") || !dayflow.configured
           width: parent.width - content.leftPadding - content.rightPadding
           spacing: Style.space(4)
 
-          Text {
+          PagedText {
             visible: dayflow.errorText !== ""
             width: parent.width
+            dayflow: tabLoader.panel
+            bodyHeight: Style.space(26)
             text: "! " + dayflow.errorText
-            textFormat: Text.PlainText
-            color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.body
-            wrapMode: Text.WordWrap
           }
 
           Text {
@@ -1611,18 +1607,14 @@ Panel {
           elide: Text.ElideRight
         }
 
-        Text {
-          visible: dayflow.notice !== ""
+        PagedText {
+          visible: dayflow.notice !== "" && dayflow.currentTab !== "settings"
           width: parent.width - content.leftPadding - content.rightPadding
+          dayflow: tabLoader.panel
+          bodyHeight: Style.space(26)
           text: dayflow.notice
-          textFormat: Text.PlainText
-          color: dayflow.noticeIsError && Color.urgent !== undefined
-            ? Color.urgent
-            : (Color.accent !== undefined ? Color.accent : dayflow.foreground)
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
         }
+
       }
     }
   }

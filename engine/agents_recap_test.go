@@ -229,7 +229,7 @@ func TestRecapJevDisabledStillGenerates(t *testing.T) {
 
 func TestRecapJevDownStillGenerates(t *testing.T) {
 	cfg := testEnv(t)
-	// decisionsURL points at the dead testEnv endpoint — decide() fails,
+	// decisionsURLOverride points at the dead testEnv endpoint — decide() fails,
 	// generation proceeds without judgment (documented degrade).
 	stubOpenRouter(t, "Recap despite dead Jev.")
 	db, err := openDB()
@@ -533,7 +533,7 @@ func TestRecapsDefaultOffNoEgress(t *testing.T) {
 	}
 
 	// With the flag off, attachRecaps must not call either egress endpoint.
-	// testEnv must run first — it repoints decisionsURL at its dead-end
+	// testEnv must run first — it repoints decisionsURLOverride at its dead-end
 	// default, which would clobber the counting server.
 	cfg = testEnv(t)
 	cfg.AgentRecaps = false
@@ -544,9 +544,9 @@ func TestRecapsDefaultOffNoEgress(t *testing.T) {
 	}
 	decSrv := httptest.NewServer(http.HandlerFunc(count))
 	defer decSrv.Close()
-	old := decisionsURL
-	decisionsURL = decSrv.URL
-	defer func() { decisionsURL = old }()
+	old := decisionsURLOverride
+	decisionsURLOverride = decSrv.URL + "/decisions"
+	defer func() { decisionsURLOverride = old }()
 	orSrv := httptest.NewServer(http.HandlerFunc(count))
 	defer orSrv.Close()
 	oldOR := openRouterURL

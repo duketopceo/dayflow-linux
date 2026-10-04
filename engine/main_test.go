@@ -28,10 +28,11 @@ func testEnv(t *testing.T) Config {
 	cfg.AgentRecaps = true
 	// Jev calls must never egress from tests — point at a dead endpoint so
 	// decide() fails fast and every judge path degrades.
-	// Tests that exercise decide() point decisionsURL at their own server.
-	old := decisionsURL
-	decisionsURL = "http://127.0.0.1:1/"
-	t.Cleanup(func() { decisionsURL = old })
+	// Tests that exercise decide() point decisionsURLOverride at their own
+	// server (or set cfg.DecisionsURL after clearing the override).
+	old := decisionsURLOverride
+	decisionsURLOverride = "http://127.0.0.1:1/decisions"
+	t.Cleanup(func() { decisionsURLOverride = old })
 	return cfg
 }
 
@@ -374,12 +375,18 @@ func TestConfigSet(t *testing.T) {
 	if err := setConfigValue("ignore_apps", "a, B ,c"); err != nil {
 		t.Fatal(err)
 	}
+	if err := setConfigValue("decisions_url", "http://localhost:11434"); err != nil {
+		t.Fatal(err)
+	}
 	if err := setConfigValue("bogus_key", "x"); err == nil {
 		t.Fatal("expected error for unknown key")
 	}
 	cfg, _ := loadConfig()
 	if cfg.Model != "openai/gpt-5" || len(cfg.IgnoreApps) != 3 || cfg.IgnoreApps[1] != "B" {
 		t.Fatalf("cfg=%+v", cfg)
+	}
+	if cfg.DecisionsURL != "http://localhost:11434/v1" {
+		t.Fatalf("decisions_url=%q", cfg.DecisionsURL)
 	}
 }
 
