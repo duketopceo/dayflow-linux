@@ -56,7 +56,8 @@ Item {
 
   function applyConversations(raw) {
     try {
-      root.conversations = JSON.parse(raw)
+      var parsed = JSON.parse(raw)
+      root.conversations = Array.isArray(parsed) ? parsed : []
     } catch (e) {
       root.conversations = []
     }

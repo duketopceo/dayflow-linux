@@ -39,7 +39,7 @@ Item {
       }
       PagedText {
         width: parent.width; dayflow: root.dayflow; readOnly: false; label: root.draftField
-        bodyHeight: Math.max(28,draft.height-draftTabs.implicitHeight-92)
+        bodyHeight: Math.max(28,draft.height-draftTabs.height-92)
         text: root.draftField === "goal" ? root.goalDraft : root.dayflow.draft[root.draftField] || ""
         onEdited: function(value) { if (root.draftField === "goal") { root.goalDraft = value } else { var next=Object.assign({},root.dayflow.draft); next[root.draftField]=value; root.dayflow.draft=next; root.dayflow.draftDirty=true } }
         onAccepted: function(value) { if(root.draftField === "goal") {var proc=root.dayflow.procByName("goalSetProc"); proc.command=["dayflow","goal","set",value,"--json"]; proc.running=true} }

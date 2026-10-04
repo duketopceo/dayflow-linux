@@ -208,7 +208,7 @@ Item {
       id:left; width:(parent.width-parent.spacing)/2; height:parent.height; dayflow:root.dayflow
       title:root.section === "Provider" ? "AI provider" : root.section === "Capture" ? "Capture and storage" : root.section === "Prompts" ? "Classification instructions" : "Privacy and automation"
       Column {
-        visible:root.section === "Provider"; width:parent.width; spacing:4
+        visible:root.section === "Provider"; width:parent.width; spacing:2
         Field {label:"Provider"; key:"provider"; fallback:"openrouter"}
         Field {label:"Model"; key:"model"; fallback:"google/gemma-4-31b-it"}
         Field {label:"API URL"; key:"api_base_url"}

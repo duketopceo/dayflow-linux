@@ -16,6 +16,7 @@ parser.add_argument('--filter', default='', help='Only case names containing thi
 parser.add_argument('--scale',type=float,default=1,help='Theme spacing scale')
 parser.add_argument('--demo', action='store_true', help='Use shareable synthetic demo data')
 parser.add_argument('--font-size', type=int, default=12)
+parser.add_argument('--minimum-window', action='store_true', help='Verify the 1100x660 floating window with its 16px margins')
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='dayflow-ui-') as directory:
@@ -57,7 +58,7 @@ QtObject {
     (bin_dir / 'dayflow').write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"providers":[],"presets":[],"agents":{}}\'\n')
     (bin_dir / 'dayflow').chmod(0o700)
     harness = Path(__file__).with_name('fit-dashboard.qml').read_text()
-    (root / 'shell.qml').write_text(harness.replace('OUTPUT_PATH', json.dumps(str(args.output.resolve()))).replace('CASE_FILTER',json.dumps(args.filter)).replace('DEMO_MODE','true' if args.demo else 'false'))
+    (root / 'shell.qml').write_text(harness.replace('OUTPUT_PATH', json.dumps(str(args.output.resolve()))).replace('CASE_FILTER',json.dumps(args.filter)).replace('DEMO_MODE','true' if args.demo else 'false').replace('MINIMUM_WINDOW','true' if args.minimum_window else 'false'))
     env = os.environ.copy()
     env['PATH'] = str(bin_dir) + ':' + env['PATH']
     if not args.native:

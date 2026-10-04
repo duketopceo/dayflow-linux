@@ -37,6 +37,7 @@ Ui.Panel {
   property string currentTab: "today"
   property var config: ({})
   property var configDraft: ({})
+  readonly property alias settingsCatModel: categoriesModel
   property bool configLoaded: false
   property var standup: ({ yesterday: { date: "", total_minutes: 0, entries: [] }, today: { date: "", total_minutes: 0, entries: [] } })
   property var dayGoal: ({ date: "", goal: "", completed: false })
@@ -1194,7 +1195,7 @@ Ui.Panel {
 
 
   ListModel {
-    id: settingsCatModel
+    id: categoriesModel
   }
 
   // Dashboard actions keep engine processes owned by this persistent panel.

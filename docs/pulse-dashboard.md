@@ -41,6 +41,7 @@ configuration is introduced by the interface change.
 ```sh
 python tests/ui/verify-dashboard.py
 python tests/ui/verify-dashboard.py --filter 1280x720-dark --font-size 16 --scale 1.333333
+python tests/ui/verify-dashboard.py --minimum-window --font-size 14 --scale 1.166667
 python tests/ui/verify-fit.py
 python tests/ui/verify-completions.py
 ```
@@ -52,5 +53,8 @@ status drawer at logical 1280×720, 1280×800 and 1920×1080 in light/dark theme
 It checks viewport bounds, card body overflow, minimum font size, measured text
 fit and Unicode paging/edit roundtrips. `--demo` produces shareable synthetic data;
 private live captures should never be committed. `--native` uses the active display
-for visual review. The full floating window can resize down to 1100×660; screen
-fit below the tested viewports still requires host-specific inspection.
+for visual review. The floating window also passes all cases at its 1100×660
+minimum with 14 px text and the current host's spacing scale. A larger-font pass
+uses 16 px text and 133% spacing at the smallest standard screen size. Native
+host inspection complements these checks; other font/scale combinations require
+their own fit verification.

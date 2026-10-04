@@ -155,7 +155,7 @@ ShellRoot {
   }
   function findPage(item) { if(item.objectName === "dashboardPage")return item.item; for(var child of item.children || []) {var found=findPage(child);if(found)return found} return null }
   function applyCase(test) {
-    stage.width=test.width-120;stage.height=test.height-120
+    stage.width=test.width-(MINIMUM_WINDOW ? 32 : 120);stage.height=test.height-(MINIMUM_WINDOW ? 32 : 120)
     model.light=test.light; Color.light=test.light
     model.foreground=test.light ? "#202020" : "#e4e4e4";model.dim=test.light ? "#505050" : "#a5a5a5"
     model.currentTab=test.tab
@@ -208,7 +208,7 @@ ShellRoot {
   Component.onCompleted: {
     for(var i=0;i<120;i++)categories.append({name:"Category "+i,description:Array(30).join("Complete category description. "),color:""})
     var list=[]
-    for(var size of [{width:1280,height:720},{width:1280,height:800},{width:1920,height:1080}])for(var light of [false,true]) {
+    for(var size of (MINIMUM_WINDOW ? [{width:1100,height:660}] : [{width:1280,height:720},{width:1280,height:800},{width:1920,height:1080}]))for(var light of [false,true]) {
       var prefix=size.width+"x"+size.height+"-"+(light?"light":"dark")
       for(var tab of ["today","standup","chat","week","agents","context","timelapse","settings"])for(var mode of ["normal","empty","error"])list.push({name:prefix+"-"+tab+"-"+mode,width:size.width,height:size.height,light:light,tab:tab,mode:mode})
       for(var section of ["Capture","Prompts","Privacy"])list.push({name:prefix+"-settings-"+section,width:size.width,height:size.height,light:light,tab:"settings",section:section})
