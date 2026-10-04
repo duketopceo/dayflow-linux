@@ -129,9 +129,15 @@ func logLLMCall(db *sql.DB, task, provider, model string, promptTok, completionT
 		time.Now().Unix(), task, provider, model, promptTok, completionTok, latency, status, errStr)
 }
 
-// callChatModel sends the message list to the routed "chat" provider and logs the call.
+// callChatModel sends the message list to the routed provider and logs the
+// call. A task_provider override keyed on the call-site task name
+// ("agent_recap", "agent_briefing") wins; otherwise the shared "chat" route.
 func callChatModel(db *sql.DB, cfg Config, task string, messages []orMessage) (string, int, int, error) {
-	p, err := providerForTask(cfg, "chat")
+	route := "chat"
+	if cfg.Routing.TaskProvider[task] != "" {
+		route = task
+	}
+	p, err := providerForTask(cfg, route)
 	if err != nil {
 		return "", 0, 0, err
 	}

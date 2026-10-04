@@ -474,6 +474,15 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession, srcs ...agent
 	sort.Slice(order, func(a, b int) bool {
 		return sessions[order[a]].Messages > sessions[order[b]].Messages
 	})
+	// Batch mode: uncached sessions go out as one OpenRouter batch job and
+	// are collected on a later pass. Falls through to the inline loop when
+	// the routed recap provider isn't batch-capable (non-OpenRouter or cli).
+	if cfg.AgentRecapBatch {
+		if bp, ok := batchRecapProvider(cfg); ok {
+			attachRecapsBatch(db, cfg, sessions, order, srcs, bp)
+			return
+		}
+	}
 	// Wall-clock budget: each session can cost up to ~5 blocking model calls;
 	// bound the whole pass so a hanging provider can't stall the UI load that
 	// invoked this. Skipped sessions trickle-fill on later views.
