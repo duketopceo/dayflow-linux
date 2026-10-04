@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -49,7 +50,8 @@ type Provider struct {
 }
 
 // Routing decides which provider serves which task.
-// TaskProvider keys: vision, summary, detailed, chat, review, standup.
+// TaskProvider keys: vision, summary, detailed, chat, review, standup,
+// classification, agent_recap, agent_briefing.
 type Routing struct {
 	Primary      string            `json:"primary,omitempty"`
 	Secondary    string            `json:"secondary,omitempty"`
@@ -175,6 +177,29 @@ func providerForTask(cfg Config, task string) (Provider, error) {
 		}
 	}
 	return Provider{}, err
+}
+
+// configuredVisionProvider checks the actual vision route without making a
+// model call. Presence of legacy OpenRouter fields is not provider readiness.
+func configuredVisionProvider(cfg Config) (Provider, bool) {
+	p, err := providerForTask(cfg, "vision")
+	if err != nil || !validProviderKind(p.Kind) {
+		return p, false
+	}
+	if p.Kind == "cli" {
+		if p.Command == "" {
+			return p, false
+		}
+		_, err := exec.LookPath(p.Command)
+		return p, err == nil
+	}
+	if strings.TrimSpace(p.Model) == "" {
+		return p, false
+	}
+	if !providerNeedsAuth(p) {
+		return p, strings.TrimSpace(p.APIBaseURL) != ""
+	}
+	return p, resolveProviderKey(p) != ""
 }
 
 // providerNeedsAuth reports whether the provider should receive an
@@ -371,7 +396,7 @@ func findProvider(cfg Config, id string) *Provider {
 	return nil
 }
 
-var providerTasks = []string{"vision", "summary", "detailed", "chat", "review", "standup", "classification"}
+var providerTasks = []string{"vision", "summary", "detailed", "chat", "review", "standup", "classification", "agent_recap", "agent_briefing"}
 
 func isProviderTask(s string) bool {
 	for _, t := range providerTasks {
@@ -606,7 +631,11 @@ func runProvider(cfg Config, args []string, jsonOut bool) error {
 		var p Provider
 		if isProviderTask(args[1]) {
 			var err error
-			p, err = providerForTask(cfg, args[1])
+			route := args[1]
+			if route == "agent_recap" || route == "agent_briefing" {
+				route = chatRoute(cfg, route)
+			}
+			p, err = providerForTask(cfg, route)
 			if err != nil {
 				return err
 			}
