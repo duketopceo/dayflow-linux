@@ -7,16 +7,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
-// decisionsURL is the OpenRouter decisions endpoint (alpha). Overridable in tests.
 const defaultJevModel = "typesafe/jev-1.13"
 
-var decisionsURL = "https://openrouter.ai/api/alpha/decisions"
+// defaultDecisionsURL is the OpenRouter decisions endpoint (alpha) — used
+// whenever decisions_url is unset.
+const defaultDecisionsURL = "https://openrouter.ai/api/alpha/decisions"
+
+// decisionsURLOverride replaces the configured endpoint wholesale — tests
+// pin it so a judge path can never reach the real network.
+var decisionsURLOverride string
 var decisionsTimeout = 15 * time.Second
 
 // judgeQuestion describes one calibrated noul judgment requested from Jev.
@@ -44,6 +50,120 @@ type decisionsResponse struct {
 	Provider string `json:"provider"`
 }
 
+// decisionsEndpoint resolves where judgments go. An empty decisions_url is
+// the OpenRouter alpha API. A chat-completions URL — or a bare base that
+// normalizes to a /v1 root — selects the chat transport; anything else
+// speaks the decisions contract.
+func decisionsEndpoint(cfg Config) (endpoint string, isChat bool) {
+	u := cfg.DecisionsURL
+	if decisionsURLOverride != "" {
+		u = decisionsURLOverride
+	}
+	u = normalizeAPIBaseURL(u)
+	switch {
+	case u == "":
+		return defaultDecisionsURL, false
+	case strings.HasSuffix(u, "/chat/completions"):
+		return u, true
+	case strings.HasSuffix(u, "/v1"):
+		return u + "/chat/completions", true
+	}
+	return u, false
+}
+
+// decisionsModel picks the slug sent with judgments: decisions_model, then
+// classification_model, then the Jev default — so a local chat endpoint is
+// never handed the OpenRouter Jev slug.
+func decisionsModel(cfg Config) string {
+	if cfg.DecisionsModel != "" {
+		return cfg.DecisionsModel
+	}
+	if cfg.ClassificationModel != "" {
+		return cfg.ClassificationModel
+	}
+	return defaultJevModel
+}
+
+// isOpenRouterHost reports whether endpoint's hostname is OpenRouter — the
+// credential/attribution gate. A substring match would send the provider
+// chain key to any URL containing "openrouter.ai" (e.g. a path on a mirror).
+func isOpenRouterHost(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h == "openrouter.ai" || strings.HasSuffix(h, ".openrouter.ai")
+}
+
+// decisionsKey resolves the credential for a decisions-class endpoint: an
+// explicit decisions_api_key always wins; otherwise the provider chain
+// applies on OpenRouter only — other endpoints send no Authorization header.
+func decisionsKey(cfg Config, endpoint string) (string, error) {
+	if cfg.DecisionsAPIKey != "" {
+		return cfg.DecisionsAPIKey, nil
+	}
+	if !isOpenRouterHost(endpoint) {
+		return "", nil
+	}
+	if k := jevAPIKey(cfg); k != "" {
+		return k, nil
+	}
+	return "", fmt.Errorf("no API key for Jev decisions")
+}
+
+// decisionsProvider labels the llm_calls provider column with the endpoint
+// host, so `dayflow usage` shows where judgments actually went.
+func decisionsProvider(endpoint string) string {
+	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return endpoint
+}
+
+// decisionsRoundTrip POSTs one JSON body to a decisions-class endpoint and
+// returns the raw response body. Auth follows the endpoint shape — explicit
+// decisions_api_key, the provider chain on OpenRouter, nothing elsewhere —
+// and OpenRouter attribution headers ride OpenRouter calls only.
+func decisionsRoundTrip(db *sql.DB, cfg Config, kind, provider, model, endpoint string, body []byte) ([]byte, error) {
+	apiKey, err := decisionsKey(cfg, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if isOpenRouterHost(endpoint) {
+		setOpenRouterHeaders(req, cfg.SiteName)
+	}
+
+	client := &http.Client{Timeout: decisionsTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, int(time.Since(start).Milliseconds()), "error", err.Error())
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, int(time.Since(start).Milliseconds()), "error", err.Error())
+		return nil, err
+	}
+	if resp.StatusCode/100 != 2 {
+		msg := fmt.Sprintf("decisions API %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, int(time.Since(start).Milliseconds()), "error", msg)
+		return nil, fmt.Errorf("%s", msg)
+	}
+	return raw, nil
+}
+
 // decide asks Jev for calibrated judgments. state is the textual context;
 // questions maps caller-chosen keys to instruction strings. Returns the
 // resolved noul scores by key plus the model that answered. Any HTTP/API
@@ -55,14 +175,11 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 	if cfg.DisableJudges || !cfg.JevClassification {
 		return nil, "", nil // deliberate suppression (read-only MCP / jev_classification off) — no opinion, not a failure
 	}
-	apiKey := jevAPIKey(cfg)
-	if apiKey == "" {
-		return nil, "", fmt.Errorf("no API key for Jev decisions")
+	endpoint, isChat := decisionsEndpoint(cfg)
+	if isChat {
+		return decideViaChat(db, cfg, kind, state, questions, endpoint)
 	}
-	model := cfg.ClassificationModel
-	if model == "" {
-		model = defaultJevModel
-	}
+	model := decisionsModel(cfg)
 	qs := make(map[string]judgeQuestion, len(questions))
 	for k, ins := range questions {
 		qs[k] = judgeQuestion{Instructions: truncate(ins, 300), Type: "noul"}
@@ -73,37 +190,20 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 		return nil, "", err
 	}
 
+	// The provider column names the vendor on OpenRouter and the endpoint
+	// host elsewhere — `dayflow usage` can then show judgment locality.
+	provider := "typesafe"
+	if !isOpenRouterHost(endpoint) {
+		provider = decisionsProvider(endpoint)
+	}
 	start := time.Now()
-	req, err := http.NewRequest(http.MethodPost, decisionsURL, bytes.NewReader(body))
+	raw, err := decisionsRoundTrip(db, cfg, kind, provider, model, endpoint, body)
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	setOpenRouterHeaders(req, cfg.SiteName)
-
-	client := &http.Client{Timeout: decisionsTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		logLLMCall(db, "judge:"+kind, "typesafe", model, 0, 0, int(time.Since(start).Milliseconds()), "error", err.Error())
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		logLLMCall(db, "judge:"+kind, "typesafe", model, 0, 0, int(time.Since(start).Milliseconds()), "error", err.Error())
-		return nil, "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		msg := fmt.Sprintf("decisions API %d: %s", resp.StatusCode, truncate(string(raw), 200))
-		logLLMCall(db, "judge:"+kind, "typesafe", model, 0, 0, int(time.Since(start).Milliseconds()), "error", msg)
-		return nil, "", fmt.Errorf("%s", msg)
-	}
-
 	var dr decisionsResponse
 	if err := json.Unmarshal(raw, &dr); err != nil {
-		logLLMCall(db, "judge:"+kind, "typesafe", model, 0, 0, int(time.Since(start).Milliseconds()), "error", "bad JSON")
+		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, int(time.Since(start).Milliseconds()), "error", "bad JSON")
 		return nil, "", fmt.Errorf("bad decisions JSON: %w", err)
 	}
 	resolved := dr.Model
@@ -118,9 +218,112 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 			out[k] = *a.Noul
 		}
 	}
-	logLLMCall(db, "judge:"+kind, "typesafe", resolved, dr.Usage.InputTokens, dr.Usage.OutputTokens,
+	logLLMCall(db, "judge:"+kind, provider, resolved, dr.Usage.InputTokens, dr.Usage.OutputTokens,
 		int(time.Since(start).Milliseconds()), "ok", "")
 	return out, resolved, nil
+}
+
+// decisionsChatRequest is the OpenAI-compatible body the chat transport
+// sends — temperature pinned to 0 for deterministic judgments.
+type decisionsChatRequest struct {
+	Model       string      `json:"model"`
+	Messages    []orMessage `json:"messages"`
+	Temperature float64     `json:"temperature"`
+}
+
+// decideViaChat serves decide() when the configured endpoint is an ordinary
+// OpenAI-compatible chat API — no decisions service required. The noul
+// questions compile into one user message; the reply is a {"key": 0-1} score
+// map parsed leniently with the same missing-keys-tolerated contract.
+func decideViaChat(db *sql.DB, cfg Config, kind, state string, questions map[string]string, endpoint string) (map[string]float64, string, error) {
+	model := decisionsModel(cfg)
+	keys := make([]string, 0, len(questions))
+	for k := range questions {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var prompt strings.Builder
+	prompt.WriteString(state)
+	for _, k := range keys {
+		fmt.Fprintf(&prompt, "\nQ %q: %s", k, truncate(questions[k], 300))
+	}
+	prompt.WriteString("\n\nAnswer each question with a float 0-1 in one strict JSON object keyed by question name. Output JSON only.")
+	body, err := json.Marshal(decisionsChatRequest{
+		Model:       model,
+		Messages:    []orMessage{{Role: "user", Content: []orContent{{Type: "text", Text: prompt.String()}}}},
+		Temperature: 0,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	provider := decisionsProvider(endpoint)
+	start := time.Now()
+	raw, err := decisionsRoundTrip(db, cfg, kind, provider, model, endpoint, body)
+	if err != nil {
+		return nil, "", err
+	}
+	latency := int(time.Since(start).Milliseconds())
+	var or orResponse
+	if err := json.Unmarshal(raw, &or); err != nil {
+		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, latency, "error", "bad JSON")
+		return nil, "", fmt.Errorf("bad decisions chat JSON: %w", err)
+	}
+	if or.Error != nil {
+		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, latency, "error", or.Error.Message)
+		return nil, "", fmt.Errorf("decisions chat error: %s", or.Error.Message)
+	}
+	if len(or.Choices) == 0 {
+		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, latency, "error", "no choices")
+		return nil, "", fmt.Errorf("decisions chat returned no choices")
+	}
+	scores, err := parseNoulScores(or.Choices[0].Message.Content)
+	if err != nil {
+		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, latency, "error", err.Error())
+		return nil, "", err
+	}
+	pt, ct := 0, 0
+	if or.Usage != nil {
+		pt, ct = or.Usage.PromptTokens, or.Usage.CompletionTokens
+	}
+	logLLMCall(db, "judge:"+kind, provider, model, pt, ct, latency, "ok", "")
+	return scores, model, nil
+}
+
+// parseNoulScores extracts the {"key": 0-1} score map a chat judge emits —
+// tolerant of think-tag noise and surrounding prose, strict on the object
+// itself. Values clamp to [0,1]; entries that aren't numbers drop out.
+func parseNoulScores(text string) (map[string]float64, error) {
+	for {
+		i := strings.Index(text, "<think>")
+		j := strings.Index(text, "</think>")
+		if i < 0 || j <= i {
+			break
+		}
+		text = text[:i] + text[j+len("</think>"):]
+	}
+	start := strings.Index(text, "{")
+	if start < 0 {
+		return nil, fmt.Errorf("no JSON object in judge response")
+	}
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(strings.NewReader(text[start:])).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("bad judge JSON: %w", err)
+	}
+	out := make(map[string]float64, len(raw))
+	for k, v := range raw {
+		var f float64
+		if err := json.Unmarshal(v, &f); err != nil {
+			continue
+		}
+		if f < 0 {
+			f = 0
+		} else if f > 1 {
+			f = 1
+		}
+		out[k] = f
+	}
+	return out, nil
 }
 
 // boundState trims a state payload for the decisions endpoint. The API
