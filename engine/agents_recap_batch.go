@@ -15,13 +15,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
 // metaRecapBatch is the meta key holding the pending batch's durable state.
+// metaRecapBatchClaim is the sole-submitter lease: "token|expiry_unix". Two
+// recap-enabled commands sharing one database could otherwise both pass the
+// pending checks, both POST a batch, and the loser's savePendingBatch would
+// overwrite the winner's ID — that batch then completes provider-side with
+// no local record, billed but never collected.
 const metaRecapBatch = "agent_recap_batch"
+const metaRecapBatchClaim = "agent_recap_batch_claim"
 
 // maxBatchRecaps bounds one submission — excerpts are ~2KB each, so 150
 // requests is still a ~300KB POST, while leaving head-room for stragglers
@@ -43,8 +50,9 @@ type pendingRecapBatch struct {
 }
 
 // batchSession is the submit-time record needed to write the recap row on
-// collect: the cache fingerprint the excerpt was taken at, plus the
-// worthiness score already paid for by the submit-time Jev gate.
+// collect: the cache fingerprint the excerpt was taken at, the worthiness
+// score already paid for by the submit-time Jev gate, and the judge state
+// so collection scores quality against identical context to the inline path.
 type batchSession struct {
 	CustomID string   `json:"custom_id"`
 	Path     string   `json:"path"`
@@ -53,6 +61,7 @@ type batchSession struct {
 	Mtime    int64    `json:"mtime"`
 	Size     int64    `json:"size"`
 	Worthy   *float64 `json:"worthy,omitempty"`
+	State    string   `json:"state"`
 }
 
 func loadPendingBatch(db *sql.DB) (*pendingRecapBatch, bool) {
@@ -77,6 +86,34 @@ func savePendingBatch(db *sql.DB, p *pendingRecapBatch) {
 
 func clearPendingBatch(db *sql.DB) {
 	db.Exec(`DELETE FROM meta WHERE k=?`, metaRecapBatch)
+}
+
+// batchClaimTTL bounds a submitter lease. A claim covers only the
+// submit-and-save window (~one HTTP call), so two minutes is generous —
+// and a crashed claimer's lease expires rather than pinning the slot.
+const batchClaimTTL = 120 * time.Second
+
+// claimBatchSubmit takes the sole-submitter lease atomically: the
+// conditional upsert only lands when the stored lease has expired (or the
+// key is new), so concurrent claimers can't both pass. The token ties the
+// release to the claimer.
+func claimBatchSubmit(db *sql.DB, token string) bool {
+	var v string
+	err := db.QueryRow(`INSERT INTO meta(k,v) VALUES(?, ?)
+	  ON CONFLICT(k) DO UPDATE SET v=excluded.v
+	  WHERE CAST(substr(meta.v, instr(meta.v,'|')+1) AS INTEGER) <= ?
+	  RETURNING v`,
+		metaRecapBatchClaim,
+		token+"|"+strconv.FormatInt(time.Now().Add(batchClaimTTL).Unix(), 10),
+		time.Now().Unix()).Scan(&v)
+	return err == nil
+}
+
+// releaseBatchClaim drops the lease, but only ours — a malformed or foreign
+// value never matches the token prefix, so it can't be stolen on release.
+func releaseBatchClaim(db *sql.DB, token string) {
+	db.Exec(`DELETE FROM meta WHERE k=? AND substr(v, 1, instr(v,'|')-1) = ?`,
+		metaRecapBatchClaim, token)
 }
 
 // batchRecapProvider resolves the provider the batch should use — the same
@@ -199,8 +236,15 @@ func submitRecapBatch(cfg Config, p Provider, excerpts []string) (string, error)
 type orBatchGetResp struct {
 	Status  string `json:"status"`
 	Results []struct {
-		CustomID string          `json:"custom_id"`
-		Body     json.RawMessage `json:"body"`
+		CustomID string `json:"custom_id"`
+		// Exactly one of response/error is populated per result.
+		Response *struct {
+			StatusCode int             `json:"status_code"`
+			Body       json.RawMessage `json:"body"`
+		} `json:"response"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	} `json:"results"`
 	Error *struct {
 		Message string `json:"message"`
@@ -303,26 +347,32 @@ func collectPendingBatch(db *sql.DB, cfg Config, p Provider, pend *pendingRecapB
 	for _, s := range pend.Sessions {
 		byID[s.CustomID] = s
 	}
+	// Same wall-clock budget as the inline pass: up to maxBatchRecaps Jev
+	// quality calls run synchronously here, so past the deadline the rest
+	// are written unscored rather than stalling the invoking UI load.
+	deadline := time.Now().Add(45 * time.Second)
 	collected := make(map[string]collectedRecap, len(got.Results))
 	for _, r := range got.Results {
 		s, ok := byID[r.CustomID]
-		if !ok {
+		if !ok || r.Response == nil || r.Error != nil {
 			continue
 		}
-		text := sanitizeRecap(batchResultText(r.Body))
+		text := sanitizeRecap(batchResultText(r.Response.Body))
 		if text == "" {
 			continue // not cacheable — a later pass retries it
 		}
 		// Same quality scoring the inline path applies, minus regeneration —
 		// a second batch for low scores isn't worth the complexity.
 		var quality *float64
-		if scores, _, err := decide(db, cfg, "agent_recap",
-			boundState("project: "+scrubText(s.Source)+"\nrecap: "+text, 2000),
-			map[string]string{
-				"quality": "Does this recap accurately and specifically describe what the session accomplished, without vagueness or invented detail?",
-			}); err == nil {
-			if q, ok := scores["quality"]; ok {
-				quality = &q
+		if time.Now().Before(deadline) {
+			if scores, _, err := decide(db, cfg, "agent_recap",
+				boundState(s.State+"\nrecap: "+text, 2000),
+				map[string]string{
+					"quality": "Does this recap accurately and specifically describe what the session accomplished, without vagueness or invented detail?",
+				}); err == nil {
+				if q, ok := scores["quality"]; ok {
+					quality = &q
+				}
 			}
 		}
 		sess := AgentSession{File: s.Path, Source: s.Source, Start: s.Start}
@@ -428,10 +478,30 @@ func attachRecapsBatch(db *sql.DB, cfg Config, sessions []AgentSession, order []
 			Mtime:    afterFP.Mtime,
 			Size:     afterFP.Size,
 			Worthy:   worthy,
+			State:    state,
 		})
 	}
 	if len(excerpts) == 0 {
 		return
+	}
+	// Sole-submitter lease across the submit+save window. A second
+	// recap-enabled command racing this pass loses the claim and returns
+	// rather than orphaning a batch. A process that dies between the
+	// provider accepting the POST and savePendingBatch leaves an
+	// unreachable in-flight batch — it expires provider-side and the
+	// resubmission after lease expiry costs one duplicate job, which is
+	// the accepted residual without a provider-side idempotency key.
+	token := fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
+	if !claimBatchSubmit(db, token) {
+		return
+	}
+	defer releaseBatchClaim(db, token)
+	// Re-check under the lease: the state we validated above may have
+	// changed while a peer held the slot.
+	if pend, ok := loadPendingBatch(db); ok {
+		if pend.ID != "" || (pend.LastAttempt > 0 && time.Since(time.Unix(pend.LastAttempt, 0)) < batchSubmitBackoff) {
+			return
+		}
 	}
 	pend := &pendingRecapBatch{LastAttempt: time.Now().Unix()}
 	id, err := submitRecapBatch(cfg, p, excerpts)

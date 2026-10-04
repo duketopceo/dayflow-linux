@@ -21,7 +21,7 @@ Last updated: 2026-10-03.
 - Opt-in knowledge-brain sync: `dayflow sync` pushes one distilled markdown doc per day (journal + agent workstreams) to a configured Kurultai `/ingest` endpoint; content-hash dedup; no frames/transcripts/raw turns (#45).
 - Genericized sync transport: `knowledge_transport` picks `http` (direct POST to `knowledge_url`) or `ssh` (docker-exec relay for loopback-only brains); all endpoint/secret fields required in user config — no personal infra in source (#48).
 - Kurultai-side `remote_ingest` feature flag (duketopceo/kurultai#406): secret-authenticated non-loopback `/ingest`, default-off, audit-logged; enabled on the personal deployment service.
-- Batch agent recaps: `agent_recap_batch` submits uncached sessions as one OpenRouter Batch API job (~50% off, async) and collects results on the next pass; per-call-site routing lets `agent_recap`/`agent_briefing` run on a different model than chat.
+- Batch agent recaps: `agent_recap_batch` submits uncached sessions as one OpenRouter Batch API job (~50% off, async) and collects results on a later pass once the job completes; per-call-site routing lets `agent_recap`/`agent_briefing` run on a different model than chat.
 
 ## Next
 
@@ -29,7 +29,7 @@ Last updated: 2026-10-03.
    `knowledge_transport: http`, sync verified landing `lane: "trusted"` in
    default search.
 2. Per-agent-conversation playback ranges (upstream `AgentPlaybackView` parity; stats half shipped in #44).
-3. v1.6.0 tag — everything on the list is shipped; cut when ready.
+3. v1.6.0 tag — everything on the list except the playback item above is shipped; cut when ready.
 4. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
 
 Resolved dead-ends: Flow parity (upstream Flow is a hosted waitlist product, nothing local to port); Fable integration (declined).

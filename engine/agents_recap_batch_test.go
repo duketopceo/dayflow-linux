@@ -55,7 +55,7 @@ func stubBatchesAPI(t *testing.T, status, results string) *batchStub {
 }
 
 func batchResultBody(customID, text string) string {
-	return `{"custom_id":"` + customID + `","body":{"choices":[{"message":{"content":"` + text + `"}}]}}`
+	return `{"custom_id":"` + customID + `","response":{"status_code":200,"body":{"choices":[{"message":{"content":"` + text + `"}}]}}}`
 }
 
 // TestBatchSubmitThenCollect exercises the two-pass lifecycle: pass one
@@ -296,5 +296,75 @@ func TestCallChatModelPerTaskRouting(t *testing.T) {
 	if _, _, _, err := callChatModel(db, cfg, "chat",
 		[]orMessage{{Role: "user", Content: []orContent{{Type: "text", Text: "hi"}}}}); err != nil {
 		t.Fatalf("chat call: %v", err)
+	}
+}
+
+// TestBatchErrorResultSkipped — a per-item error (rate limit, refusal)
+// doesn't poison the batch: good results still collect, errored custom_ids
+// are skipped rather than cached as empty.
+func TestBatchErrorResultSkipped(t *testing.T) {
+	cfg := testEnv(t)
+	cfg.AgentRecapBatch = true
+	scriptedDecisions(t, cannedDecisions(map[string]float64{"worthy": 0.9, "quality": 0.9}))
+	results := "[" + batchResultBody("0", "Good recap.") +
+		`,{"custom_id":"1","error":{"message":"rate_limit_exceeded"}}` + "]"
+	stub := stubBatchesAPI(t, "completed", results)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	paths := []string{writeClaudeTranscript(t, t.TempDir(), 4), writeClaudeTranscript(t, t.TempDir(), 4)}
+	pend := &pendingRecapBatch{ID: "batch_t1", SubmittedAt: 1, Sessions: []batchSession{
+		{CustomID: "0", Path: paths[0], Source: "claude", State: "s0"},
+		{CustomID: "1", Path: paths[1], Source: "claude", State: "s1"},
+	}}
+	savePendingBatch(db, pend)
+
+	bp, ok := batchRecapProvider(cfg)
+	if !ok {
+		t.Fatal("batch provider ineligible under test env")
+	}
+	collected, inFlight := collectPendingBatch(db, cfg, bp, pend)
+	if inFlight {
+		t.Fatal("completed batch reported in-flight")
+	}
+	if stub.polls.Load() != 1 {
+		t.Fatalf("expected 1 poll, got %d", stub.polls.Load())
+	}
+	if len(collected) != 1 || collected[paths[0]].text != "Good recap." {
+		t.Fatalf("collected=%+v", collected)
+	}
+	var stored string
+	db.QueryRow(`SELECT recap FROM agent_recaps WHERE path=?`, paths[1]).Scan(&stored)
+	if stored != "" {
+		t.Fatalf("errored result cached: %q", stored)
+	}
+}
+
+// TestBatchClaimBlocksConcurrentSubmit — a live claim turns a second
+// would-be submitter away; after release the slot is claimable again.
+func TestBatchClaimBlocksConcurrentSubmit(t *testing.T) {
+	testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if !claimBatchSubmit(db, "a") {
+		t.Fatal("first claim rejected")
+	}
+	if claimBatchSubmit(db, "b") {
+		t.Fatal("concurrent claim accepted under live lease")
+	}
+	releaseBatchClaim(db, "a")
+	if !claimBatchSubmit(db, "b") {
+		t.Fatal("claim after release rejected")
+	}
+	// A foreign release can't free our lease.
+	releaseBatchClaim(db, "a")
+	if claimBatchSubmit(db, "c") {
+		t.Fatal("claim accepted after foreign release")
 	}
 }
