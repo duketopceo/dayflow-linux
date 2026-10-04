@@ -19,18 +19,19 @@ Last updated: 2026-10-03.
 - Complete local agent-chat indexing: FTS5 over all five harnesses, bounded retrieval feeding `ask`/chat; runaway safeguards (deadlines, byte budgets, watermarks, partial-write safety).
 - Keyring-outage hardening: pre-flight key check + auto-heal so a locked omaseal can't silently starve summarization (#41).
 - Opt-in knowledge-brain sync: `dayflow sync` pushes one distilled markdown doc per day (journal + agent workstreams) to a configured Kurultai `/ingest` endpoint; content-hash dedup; no frames/transcripts/raw turns (#45).
+- Genericized sync transport: `knowledge_transport` picks `http` (direct POST to `knowledge_url`) or `ssh` (docker-exec relay for loopback-only brains); all endpoint/secret fields required in user config — no personal infra in source (#48).
+- Kurultai-side `remote_ingest` feature flag (duketopceo/kurultai#406): secret-authenticated non-loopback `/ingest`, default-off, audit-logged; enabled on the personal deployment service.
 
 ## Next
 
-1. Remote-authenticated ingest — kurultai-private PR opens `/ingest` to
-   secret-authenticated non-loopback callers behind an env flag; dayflow swaps
-   the SSH-relay transport for direct HTTPS and conforms the payload to the
-   quality gate (trusted lane). Plan: `docs/plans/2026-10-02-001-feat-remote-ingest-trusted-sync-plan.md`
-   (kept out of this public repo — lives in kurultai-private).
+1. Deploy + flip — redeploy kurultai on the brain host, switch local config
+   `knowledge_transport` to `http`, verify a sync lands `lane: "trusted"`
+   (payload is already quality-gate-conformant). Plan:
+   `docs/plans/2026-10-02-001-feat-remote-ingest-trusted-sync-plan.md`
+   (kept out of this public repo — lives in the kurultai repo set).
 2. Per-agent-conversation playback ranges (upstream `AgentPlaybackView` parity; stats half shipped in #44).
-3. Scrub personal deployment identifiers from code/docs/UI — knowledge sync is generic infrastructure; personal endpoints belong in user config, not source.
-4. v1.6.0 tag — cut when items 1–3 land.
-5. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
+3. v1.6.0 tag — cut after the deploy flip is verified.
+4. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
 
 Resolved dead-ends: Flow parity (upstream Flow is a hosted waitlist product, nothing local to port); Fable integration (declined).
 
