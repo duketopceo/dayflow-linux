@@ -552,7 +552,7 @@ func polishBriefing(db *sql.DB, cfg Config, b *agentBriefing, polishKey string) 
 	if db == nil {
 		return
 	}
-	if _, ok := chatEgressOK(cfg); !ok {
+	if _, ok := chatEgressOK(cfg, "agent_briefing"); !ok {
 		return
 	}
 	if polishKey != "" {

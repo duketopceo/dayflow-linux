@@ -417,14 +417,17 @@ const maxNewRecaps = 8
 
 // chatEgressOK gates every agent-transcript egress path (session recaps and
 // the briefing polish): off under DisableJudges (read-only MCP), under the
-// durable agent_recaps opt-out, and when the chat provider is a minutes-scale
-// cli — one exec could stall the whole view, so the pass degrades to
-// cache/deterministic-only rather than starve on a hanging subprocess.
-func chatEgressOK(cfg Config) (Provider, bool) {
+// durable agent_recaps opt-out, and when the provider the call site would
+// actually route to is a minutes-scale cli — one exec could stall the whole
+// view, so the pass degrades to cache/deterministic-only rather than starve
+// on a hanging subprocess. task is the call-site route key ("agent_recap",
+// "agent_briefing") so a task_provider override can't sneak a cli past the
+// gate while "chat" stays on a fast provider.
+func chatEgressOK(cfg Config, task string) (Provider, bool) {
 	if cfg.DisableJudges || !cfg.AgentRecaps {
 		return Provider{}, false
 	}
-	chatP, err := providerForTask(cfg, "chat")
+	chatP, err := providerForTask(cfg, chatRoute(cfg, task))
 	if err != nil || chatP.Kind == "cli" {
 		return chatP, false
 	}
@@ -467,13 +470,22 @@ func attachRecaps(db *sql.DB, cfg Config, sessions []AgentSession, srcs ...agent
 	}
 	// no-egress contexts, the durable opt-out, and minutes-scale cli
 	// providers serve cache only.
-	chatP, ok := chatEgressOK(cfg)
+	chatP, ok := chatEgressOK(cfg, "agent_recap")
 	if !ok {
 		return
 	}
 	sort.Slice(order, func(a, b int) bool {
 		return sessions[order[a]].Messages > sessions[order[b]].Messages
 	})
+	// Batch mode: uncached sessions go out as one OpenRouter batch job and
+	// are collected on a later pass. Falls through to the inline loop when
+	// the routed recap provider isn't batch-capable (non-OpenRouter or cli).
+	if cfg.AgentRecapBatch {
+		if bp, ok := batchRecapProvider(cfg); ok {
+			attachRecapsBatch(db, cfg, sessions, order, srcs, bp)
+			return
+		}
+	}
 	// Wall-clock budget: each session can cost up to ~5 blocking model calls;
 	// bound the whole pass so a hanging provider can't stall the UI load that
 	// invoked this. Skipped sessions trickle-fill on later views.
