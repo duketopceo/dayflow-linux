@@ -195,9 +195,9 @@ func TestMCPReadOnlyNoJudgeEgress(t *testing.T) {
 		fmt.Fprint(w, `{"model":"m","answers":{},"usage":{}}`)
 	}))
 	defer srv.Close()
-	old := decisionsURL
-	decisionsURL = srv.URL
-	t.Cleanup(func() { decisionsURL = old })
+	old := decisionsURLOverride
+	decisionsURLOverride = srv.URL + "/decisions"
+	t.Cleanup(func() { decisionsURLOverride = old })
 
 	// seed a done non-idle block yesterday so worthyBlocks would judge
 	y := time.Now().AddDate(0, 0, -1)

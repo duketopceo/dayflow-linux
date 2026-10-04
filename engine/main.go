@@ -453,6 +453,9 @@ func main() {
 		if masked.OpenRouterAPIKey != "" {
 			masked.OpenRouterAPIKey = "***redacted***"
 		}
+		if masked.DecisionsAPIKey != "" {
+			masked.DecisionsAPIKey = "***redacted***"
+		}
 		for i := range masked.Providers {
 			if masked.Providers[i].APIKey != "" {
 				masked.Providers[i].APIKey = "***redacted***"

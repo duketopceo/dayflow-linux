@@ -46,12 +46,15 @@ type Config struct {
 	FilterInappropriate  bool       `json:"filter_inappropriate"` // redact adult/explicit content
 	Debug                bool       `json:"debug"`                // verbose engine log to debug.log
 	Categories           []Category `json:"categories"`
-	ClassificationPrompt string     `json:"classification_prompt"` // extra instructions for the vision model
-	JevClassification    bool       `json:"jev_classification"`    // use Jev for category/productive (default true)
-	AgentRecaps          bool       `json:"agent_recaps"`          // generate agent-session recaps (default false — opt-in; recaps send bounded scrubbed transcript excerpts to the chat provider + decisions endpoint)
-	AgentRecapBatch      bool       `json:"agent_recap_batch"`     // submit uncached recaps as one OpenRouter batch (~50% off, async) instead of inline calls; requires an OpenRouter-routed provider for agent_recap
-	ClassificationModel  string     `json:"classification_model"`  // Jev model slug; default typesafe/jev-1.13
-	Providers            []Provider `json:"providers,omitempty"`   // multi-provider list; empty = migrated from legacy keys
+	ClassificationPrompt string     `json:"classification_prompt"`       // extra instructions for the vision model
+	JevClassification    bool       `json:"jev_classification"`          // use Jev for category/productive (default true)
+	AgentRecaps          bool       `json:"agent_recaps"`                // generate agent-session recaps (default false — opt-in; recaps send bounded scrubbed transcript excerpts to the chat provider + decisions endpoint)
+	AgentRecapBatch      bool       `json:"agent_recap_batch"`           // submit uncached recaps as one OpenRouter batch (~50% off, async) instead of inline calls; requires an OpenRouter-routed provider for agent_recap
+	ClassificationModel  string     `json:"classification_model"`        // Jev model slug; default typesafe/jev-1.13
+	DecisionsURL         string     `json:"decisions_url"`               // Jev decisions endpoint; empty = OpenRouter. A /v1 base or */chat/completions URL selects the chat transport
+	DecisionsModel       string     `json:"decisions_model,omitempty"`   // model sent to the decisions endpoint; empty = classification_model
+	DecisionsAPIKey      string     `json:"decisions_api_key,omitempty"` // key for a non-OpenRouter decisions endpoint; empty = no Authorization header
+	Providers            []Provider `json:"providers,omitempty"`         // multi-provider list; empty = migrated from legacy keys
 	Routing              Routing    `json:"routing,omitempty"`
 	// Pricing maps a model slug to USD per 1M tokens (prompt+completion
 	// combined). `dayflow usage` renders dollar estimates only when set;
@@ -229,6 +232,7 @@ func loadConfig() (Config, error) {
 		cfg.Provider = "openrouter"
 	}
 	cfg.APIBaseURL = normalizeAPIBaseURL(cfg.APIBaseURL)
+	cfg.DecisionsURL = normalizeAPIBaseURL(cfg.DecisionsURL)
 	if cfg.SiteName == "" {
 		cfg.SiteName = defaultSiteName
 	}
@@ -317,10 +321,12 @@ func patchConfig(patch string) error {
 	if err := json.Unmarshal([]byte(patch), &patchMap); err != nil {
 		return fmt.Errorf("patch must be a JSON object: %w", err)
 	}
-	if v, ok := patchMap["openrouter_api_key"]; ok {
-		var s string
-		if json.Unmarshal(v, &s) == nil && s == "***redacted***" {
-			delete(patchMap, "openrouter_api_key")
+	for _, k := range []string{"openrouter_api_key", "decisions_api_key"} {
+		if v, ok := patchMap[k]; ok {
+			var s string
+			if json.Unmarshal(v, &s) == nil && s == "***redacted***" {
+				delete(patchMap, k)
+			}
 		}
 	}
 	// The panel round-trips providers with masked api_key fields — and strips
@@ -365,10 +371,12 @@ func patchConfig(patch string) error {
 			}
 		}
 	}
-	if v, ok := patchMap["api_base_url"]; ok {
-		var s string
-		if json.Unmarshal(v, &s) == nil {
-			patchMap["api_base_url"] = json.RawMessage(`"` + normalizeAPIBaseURL(s) + `"`)
+	for _, k := range []string{"api_base_url", "decisions_url"} {
+		if v, ok := patchMap[k]; ok {
+			var s string
+			if json.Unmarshal(v, &s) == nil {
+				patchMap[k] = json.RawMessage(`"` + normalizeAPIBaseURL(s) + `"`)
+			}
 		}
 	}
 	baseJSON, err := json.Marshal(cfg)
@@ -436,7 +444,8 @@ func writeDefaultConfig() error {
 // jpeg_quality, frame_max_dim, keep_frames, retention_days, ignore_apps (comma list),
 // openrouter_api_key, output, capture_command, max_storage_mb, max_frames_mb,
 // max_db_mb, auto_pause_locked, filter_inappropriate, debug, notifications.enabled,
-// notifications (JSON object — deeper keys belong to `config patch`).
+// notifications (JSON object — deeper keys belong to `config patch`),
+// classification_model, decisions_url, decisions_model, decisions_api_key.
 func setConfigValue(key, value string) error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -552,6 +561,12 @@ func setConfigValue(key, value string) error {
 		}
 	case "classification_model":
 		cfg.ClassificationModel = value
+	case "decisions_url":
+		cfg.DecisionsURL = normalizeAPIBaseURL(value)
+	case "decisions_model":
+		cfg.DecisionsModel = value
+	case "decisions_api_key":
+		cfg.DecisionsAPIKey = value
 	case "categories":
 		if err := json.Unmarshal([]byte(value), &cfg.Categories); err != nil {
 			return fmt.Errorf("categories must be a JSON array of {name, description, color?}: %w", err)

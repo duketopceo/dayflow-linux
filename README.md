@@ -63,7 +63,7 @@ The script fetches the `amd64`/`arm64` release binary, verifies it against the r
 - Ignored apps are skipped at capture time — their frames never touch disk.
 - Frames are deleted after summarization unless `keep_frames` is on; `max_frames_mb`/`max_db_mb` cap each pool; `retention_days` prunes by age on top.
 - The FTS index follows deletes — `dayflow scrub` removes the text from the journal *and* the index, including the `block_edits` overlay.
-- Agent recaps are **off by default**: enabling them sends a bounded, scrubbed transcript excerpt (paths → `~`, token shapes → `[redacted]`) to your chat provider and OpenRouter's decisions endpoint. Jev classification (`jev_classification`, default on) sends small per-block descriptors to the same endpoint — set `false` to keep every block local.
+- Agent recaps are **off by default**: enabling them sends a bounded, scrubbed transcript excerpt (paths → `~`, token shapes → `[redacted]`) to your chat provider and the decisions endpoint (OpenRouter by default — `decisions_url` can keep it local). Jev classification (`jev_classification`, default on) sends small per-block descriptors to the same endpoint — set `false` to keep every block local.
 - Everything lives in `~/.local/share/dayflow/` — `rm -rf` wipes all data.
 
 Plain-language version: [PRIVACY.md](PRIVACY.md).
@@ -136,11 +136,27 @@ All query commands accept `--json`.
 | `notifications` | `{enabled:true, classes:{stall:true}}` | desktop notifications; `classes` gates `stall`/`paused`/`recovered`/`standup`/`goal` via `config patch` |
 | `pricing` | `{}` | model slug → USD/1M tok; `usage` renders `$` only for configured models. E.g. `dayflow config patch '{"pricing":{"google/gemma-4-31b-it":0.09}}'` |
 | `openrouter_api_key` | `""` | API key (or `OPENROUTER_API_KEY` env, or `~/.config/openrouter/keys.json`) |
-| `jev_classification` | `true` | Jev calibrated judgments — category, merge, quality, triage, forecast. Egresses small descriptors to OpenRouter's decisions endpoint; `false` disables Jev classification (summarization still uses your configured chat provider unless that provider is local) |
+| `jev_classification` | `true` | Jev calibrated judgments — category, merge, quality, triage, forecast. Sends small descriptors to the decisions endpoint (OpenRouter by default — `decisions_url` can keep it local); `false` disables Jev classification (summarization still uses your configured chat provider unless that provider is local) |
 | `agent_recaps` | `false` | opt-in: recap generation egresses a bounded, scrubbed excerpt to the chat provider + decisions endpoint |
 | `agent_recap_batch` | `false` | submit uncached recaps as one OpenRouter Batch API job (~50% off, async up to 24h) instead of inline calls; results land on the next briefing pass. Requires the `agent_recap` route to resolve to an OpenRouter endpoint — point `routing.task_provider.agent_recap` at a batch-capable model to run recaps on a different (cheaper or smarter) model than chat |
 | `classification_model` | `typesafe/jev-1.13` | Jev model slug |
+| `decisions_url` | `""` | Jev decisions endpoint; empty = OpenRouter. A `/v1` base or `…/chat/completions` URL (e.g. `http://127.0.0.1:11434/v1`) routes judgments through that chat model instead; any other shape is POSTed the native decisions contract |
+| `decisions_model` | `""` | model slug sent to the decisions endpoint; falls back to `classification_model` — set it when a local chat endpoint needs its own model name |
+| `decisions_api_key` | `""` | API key for a non-OpenRouter decisions endpoint; empty sends no `Authorization` header |
 | `site_name` | `dayflow-linux` | X-Title header for OpenRouter |
+
+### Fully local
+
+Every model call — vision summaries, chat/recaps, and Jev judgments — can run against a local OpenAI-compatible server (Ollama, llama.cpp, LM Studio) so nothing egresses:
+
+```sh
+dayflow config set api_base_url http://127.0.0.1:11434/v1    # vision + chat summaries
+dayflow config set model <local-vision-model>
+dayflow config set decisions_url http://127.0.0.1:11434/v1 # Jev judgments → one chat call
+dayflow config set decisions_model <local-judge-model>
+```
+
+In a multi-provider setup, route the tasks instead: `dayflow provider add ollama local`, then point `routing.task_provider` entries (or `routing.primary`) at it via `config patch`. The chat transport compiles each judgment batch into a single chat request that must answer with a `{"question": 0-1}` JSON score map — a small local judge won't match calibrated `typesafe/jev-1.13` scores, but all judgments are advisory and every heuristic fallback still applies. Verify locality with `dayflow usage`: `llm_calls` records the decisions endpoint host as each `judge:` call's provider.
 
 ## Upgrading
 
