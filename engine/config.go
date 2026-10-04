@@ -48,6 +48,7 @@ type Config struct {
 	Categories           []Category `json:"categories"`
 	ClassificationPrompt string     `json:"classification_prompt"`       // extra instructions for the vision model
 	JevClassification    bool       `json:"jev_classification"`          // use Jev for category/productive (default true)
+	AgentCompletions     bool       `json:"agent_completions"`           // record agent final replies immediately (hooks + opt-in watcher; default false)
 	AgentRecaps          bool       `json:"agent_recaps"`                // generate agent-session recaps (default false — opt-in; recaps send bounded scrubbed transcript excerpts to the chat provider + decisions endpoint)
 	AgentRecapBatch      bool       `json:"agent_recap_batch"`           // submit uncached recaps as one OpenRouter batch (~50% off, async) instead of inline calls; requires an OpenRouter-routed provider for agent_recap
 	ClassificationModel  string     `json:"classification_model"`        // Jev model slug; default typesafe/jev-1.13
@@ -572,6 +573,12 @@ func setConfigValue(key, value string) error {
 			return fmt.Errorf("jev_classification must be true or false")
 		}
 		cfg.JevClassification = b
+	case "agent_completions":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.AgentCompletions = b
 	case "agent_recaps":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
