@@ -49,7 +49,8 @@ type Provider struct {
 }
 
 // Routing decides which provider serves which task.
-// TaskProvider keys: vision, summary, detailed, chat, review, standup.
+// TaskProvider keys: vision, summary, detailed, chat, review, standup,
+// classification, agent_recap, agent_briefing.
 type Routing struct {
 	Primary      string            `json:"primary,omitempty"`
 	Secondary    string            `json:"secondary,omitempty"`
@@ -371,7 +372,7 @@ func findProvider(cfg Config, id string) *Provider {
 	return nil
 }
 
-var providerTasks = []string{"vision", "summary", "detailed", "chat", "review", "standup", "classification"}
+var providerTasks = []string{"vision", "summary", "detailed", "chat", "review", "standup", "classification", "agent_recap", "agent_briefing"}
 
 func isProviderTask(s string) bool {
 	for _, t := range providerTasks {
@@ -606,7 +607,11 @@ func runProvider(cfg Config, args []string, jsonOut bool) error {
 		var p Provider
 		if isProviderTask(args[1]) {
 			var err error
-			p, err = providerForTask(cfg, args[1])
+			route := args[1]
+			if route == "agent_recap" || route == "agent_briefing" {
+				route = chatRoute(cfg, route)
+			}
+			p, err = providerForTask(cfg, route)
 			if err != nil {
 				return err
 			}
