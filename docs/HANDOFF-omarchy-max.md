@@ -56,9 +56,9 @@ on `master` and pushed.
 
 - Asahi: `sudo` needs a password, no TTY auth — hand sudo to the user.
 - Never edit `/usr/share/omarchy/` — user config only.
-- `kurultai connect` device flow: use `https://api-knowledge.shippedit.dev`
-  (api- host; UI host 302s on the device endpoint). devin@omarchy is
-  on the Hey board — post presence from the new seat after connect.
+- `kurultai connect` device flow: use the brain's `api-` host
+  (the UI host 302s on the device endpoint). Agent seats can post
+  presence on the Hey board after connect.
 - `.codebase-memory/` is a local MCP artifact — gitignored, never
   commit it (it slipped in twice).
 - Tests must never egress: `testEnv`/`benchEnv` stub `decisionsURL`

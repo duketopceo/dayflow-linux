@@ -191,13 +191,21 @@ dayflow sync                 # push today (manual)
 dayflow sync 2026-09-30 --json
 ```
 
-Transport: the hosted brain's `/ingest` is loopback-only, so the push
-relays through SSH into the container (`ssh <host> docker exec -i …`); the
-ingest secret travels on stdin, never argv. Tunables (defaults target
-Ulaanbaatar): `knowledge_ssh_host` = `server-001`, `knowledge_container` =
-`kurultai-personal`, `knowledge_port` = `8421`, `knowledge_secret_ref` =
-`omaseal://kurultai/personal-ingest-secret`. Atoms land in the quarantine
-lane until a Kurultai patch adds authenticated remote ingest + trust.
+Transports (`knowledge_transport`):
+
+- `"http"` (default) — direct `POST <knowledge_url>/ingest`, secret in the
+  `Authorization` header. Requires `knowledge_url` and a brain that
+  accepts authenticated remote ingest.
+- `"ssh"` — fallback for brains whose `/ingest` is loopback-only: relays
+  through `ssh <knowledge_ssh_host> docker exec -i <knowledge_container>`
+  into the container's loopback. Requires `knowledge_ssh_host` and
+  `knowledge_container` (`knowledge_port` defaults to `8421`); the secret
+  travels on stdin, never argv.
+
+Both transports require `knowledge_secret_ref` — an
+`omaseal://service/account` reference (or a literal secret). Nothing is
+baked in: with `knowledge_sync` off, or any required field unset, sync
+refuses loudly (`dayflow sync`) or skips silently (export tail).
 
 ## MCP / agent access
 

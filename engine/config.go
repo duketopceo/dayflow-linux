@@ -60,15 +60,17 @@ type Config struct {
 	PanelExpanded bool               `json:"panel_expanded"` // remember the panel Expand/Shrink toggle
 	DisableJudges bool               `json:"-"`              // runtime-only: read-only MCP sessions must not egress
 
-	// Knowledge sync — opt-in push of distilled atoms to a Kurultai brain
-	// via SSH relay into the container's loopback /ingest. Off by default:
-	// enabling it is consent to journal text leaving the machine.
-	// Defaults target Ulaanbaatar (knowledge.shippedit.dev on server-001).
+	// Knowledge sync — opt-in push of distilled atoms to a Kurultai brain.
+	// Off by default: enabling it is consent to journal text leaving the
+	// machine. All endpoint details are user config — no personal
+	// infrastructure is baked into the binary.
 	KnowledgeSync      bool   `json:"knowledge_sync"`
-	KnowledgeSSHHost   string `json:"knowledge_ssh_host,omitempty"`   // default server-001
-	KnowledgeContainer string `json:"knowledge_container,omitempty"`  // default kurultai-personal
-	KnowledgePort      int    `json:"knowledge_port,omitempty"`       // default 8421
-	KnowledgeSecretRef string `json:"knowledge_secret_ref,omitempty"` // default omaseal://kurultai/personal-ingest-secret
+	KnowledgeTransport string `json:"knowledge_transport,omitempty"`  // "http" (default) | "ssh"
+	KnowledgeURL       string `json:"knowledge_url,omitempty"`        // brain base URL — required for http
+	KnowledgeSSHHost   string `json:"knowledge_ssh_host,omitempty"`   // required for ssh
+	KnowledgeContainer string `json:"knowledge_container,omitempty"`  // required for ssh
+	KnowledgePort      int    `json:"knowledge_port,omitempty"`       // default 8421 (ssh only)
+	KnowledgeSecretRef string `json:"knowledge_secret_ref,omitempty"` // required: "omaseal://service/account" or literal
 
 	Notifications NotificationConfig `json:"notifications"` // desktop notifications: master switch + per-class gates
 }

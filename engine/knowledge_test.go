@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -129,10 +132,142 @@ func TestSyncKnowledgeFailureNotRecorded(t *testing.T) {
 func TestSSHIngestPushRequiresSecret(t *testing.T) {
 	testEnv(t)
 	cfg := defaultConfig()
+	cfg.KnowledgeSSHHost = "brain-host"
+	cfg.KnowledgeContainer = "brain-container"
 	// Point the ref at an account that does not exist.
 	cfg.KnowledgeSecretRef = "omaseal://kurultai/definitely-not-a-real-account-xyz"
 	if _, err := sshIngestPush(cfg); err == nil {
 		t.Fatal("expected error when secret is unresolvable")
+	}
+}
+
+func TestSSHIngestPushRequiresExplicitConfig(t *testing.T) {
+	testEnv(t)
+	cfg := defaultConfig()
+	cfg.KnowledgeSecretRef = "literal-secret"
+	if _, err := sshIngestPush(cfg); err == nil || !strings.Contains(err.Error(), "knowledge_ssh_host") {
+		t.Fatalf("missing host should fail loudly, got %v", err)
+	}
+	cfg.KnowledgeSSHHost = "brain-host"
+	if _, err := sshIngestPush(cfg); err == nil || !strings.Contains(err.Error(), "knowledge_container") {
+		t.Fatalf("missing container should fail loudly, got %v", err)
+	}
+}
+
+func TestHTTPIngestPushSendsContract(t *testing.T) {
+	testEnv(t)
+	var gotAuth, gotAgent, gotNS, gotCT, gotName, gotFormat, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotAgent = r.Header.Get("x-kurultai-agent-id")
+		gotNS = r.Header.Get("x-kurultai-namespace")
+		gotCT = r.Header.Get("Content-Type")
+		gotName = r.URL.Query().Get("name")
+		gotFormat = r.URL.Query().Get("format")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := defaultConfig()
+	cfg.KnowledgeURL = srv.URL
+	cfg.KnowledgeSecretRef = "literal-secret"
+	push, err := httpIngestPush(cfg)
+	if err != nil {
+		t.Fatalf("httpIngestPush: %v", err)
+	}
+	if err := push("dayflow/2026-10-01.md", []byte("doc body")); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if gotAuth != "Bearer literal-secret" || gotAgent != "dayflow" || gotNS != "dayflow" ||
+		gotName != "dayflow/2026-10-01.md" || gotFormat != "md" || gotBody != "doc body" {
+		t.Fatalf("contract wrong: auth=%q agent=%q ns=%q name=%q format=%q body=%q",
+			gotAuth, gotAgent, gotNS, gotName, gotFormat, gotBody)
+	}
+	if !strings.HasPrefix(gotCT, "text/markdown") {
+		t.Fatalf("content-type %q", gotCT)
+	}
+}
+
+func TestHTTPIngestPushErrors(t *testing.T) {
+	testEnv(t)
+	cfg := defaultConfig()
+	cfg.KnowledgeSecretRef = "literal-secret"
+	if _, err := httpIngestPush(cfg); err == nil || !strings.Contains(err.Error(), "knowledge_url") {
+		t.Fatalf("missing url should fail, got %v", err)
+	}
+	cfg.KnowledgeURL = "not a url"
+	if _, err := httpIngestPush(cfg); err == nil {
+		t.Fatal("invalid url should fail")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	cfg.KnowledgeURL = srv.URL
+	push, _ := httpIngestPush(cfg)
+	if err := push("dayflow/x.md", []byte("x")); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("non-2xx should surface status, got %v", err)
+	}
+}
+
+func TestKnowledgePushForTransport(t *testing.T) {
+	testEnv(t)
+	cfg := defaultConfig()
+	cfg.KnowledgeTransport = "carrier-pigeon"
+	if _, err := knowledgePushFor(cfg); err == nil || !strings.Contains(err.Error(), "unknown") {
+		t.Fatalf("unknown transport should fail loudly, got %v", err)
+	}
+	cfg.KnowledgeTransport = ""
+	if _, err := knowledgePushFor(cfg); err == nil || !strings.Contains(err.Error(), "knowledge_url") {
+		t.Fatalf("empty transport defaults to http, got %v", err)
+	}
+	cfg.KnowledgeTransport = "ssh"
+	cfg.KnowledgeSecretRef = "literal-secret"
+	if _, err := knowledgePushFor(cfg); err == nil || !strings.Contains(err.Error(), "knowledge_ssh_host") {
+		t.Fatalf("ssh transport should require host, got %v", err)
+	}
+}
+
+// TestKnowledgeDocSectionFloor: the brain quality-gates each chunked
+// section (tags + ~80 trimmed chars). Every ##/### section we emit must
+// carry enough body to clear it.
+func TestKnowledgeDocSectionFloor(t *testing.T) {
+	emptyAgentDirs(t)
+	cfg := testEnv(t)
+	db, _ := openDB()
+	defer db.Close()
+
+	day := testDay()
+	doc := string(knowledgeDocFor(db, cfg, day))
+	if !strings.Contains(doc, "tags: dayflow") {
+		t.Fatal("frontmatter tags missing — gate's first check would quarantine")
+	}
+	sections := 0
+	for _, chunk := range strings.Split(doc, "\n## ") {
+		body := chunk
+		if i := strings.Index(chunk, "\n"); i >= 0 {
+			body = chunk[i+1:]
+		}
+		// Split off any ### subsection — it gates independently.
+		if i := strings.Index(body, "\n### "); i >= 0 {
+			body = body[:i]
+		}
+		trimmed := strings.TrimSpace(body)
+		if strings.HasPrefix(chunk, "---") || strings.HasPrefix(chunk, "# Dayflow") {
+			continue
+		}
+		if strings.TrimSpace(strings.SplitN(chunk, "\n", 2)[0]) == "" {
+			continue
+		}
+		sections++
+		if len([]rune(trimmed)) < 80 {
+			t.Fatalf("section body under 80 chars would quarantine: %q", trimmed)
+		}
+	}
+	if sections == 0 {
+		t.Fatal("no ## sections found — doc shape changed?")
 	}
 }
 
