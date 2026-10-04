@@ -46,7 +46,7 @@ QtObject {
     # No real configuration, capture, provider or systemd command can run.
     (bin_dir / 'dayflow').write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"providers":[],"presets":[],"agents":{}}\'\n')
     (bin_dir / 'dayflow').chmod(0o700)
-    harness = Path(__file__).with_name('fit.qml').read_text()
+    harness = Path(__file__).with_name('fit-completions.qml').read_text()
     (root / 'shell.qml').write_text(harness.replace('OUTPUT_PATH', json.dumps(str(args.output.resolve()))))
     env = os.environ.copy()
     env['PATH'] = str(bin_dir) + ':' + env['PATH']
