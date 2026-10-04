@@ -8,8 +8,9 @@ Item {
   signal closeRequested()
   readonly property var pages: ["today", "standup", "chat", "week", "agents", "context", "timelapse", "settings"]
   readonly property bool ready: dayflow && !dayflow.engineMissing && dayflow.configured
-  readonly property string health: !dayflow ? "CONNECTING" : dayflow.engineMissing ? "ENGINE MISSING" : !dayflow.configured ? "SETUP REQUIRED" : dayflow.errorText !== "" ? "NEEDS ATTENTION" : dayflow.paused ? "CAPTURE PAUSED" : dayflow.captureState === "recording" ? "RECORDING" : "CAPTURE " + dayflow.captureState.toUpperCase()
-  readonly property color healthTint: ready && !dayflow.paused && dayflow.captureState === "recording" && dayflow.errorText === "" ? Color.accent : Color.urgent
+  readonly property bool summaryFailed: dayflow && (dayflow.blocks || []).some(function(block) {return block.status === "failed"})
+  readonly property string health: !dayflow ? "CONNECTING" : dayflow.engineMissing ? "ENGINE MISSING" : !dayflow.configured ? "SETUP REQUIRED" : dayflow.errorText !== "" ? "NEEDS ATTENTION" : dayflow.paused ? "CAPTURE PAUSED" : summaryFailed ? "SUMMARY FAILED" : dayflow.captureState === "recording" ? "RECORDING" : "CAPTURE " + dayflow.captureState.toUpperCase()
+  readonly property color healthTint: ready && !dayflow.paused && dayflow.captureState === "recording" && !summaryFailed && dayflow.errorText === "" ? Color.accent : Color.urgent
   readonly property real trackedMinutes: dayflow ? (dayflow.spans || []).reduce(function(sum, span) { return sum + Number(span.minutes || 0) }, 0) : 0
   readonly property real focusMinutes: dayflow ? (dayflow.spans || []).reduce(function(sum, span) { return sum + (span.productive ? Number(span.minutes || 0) : 0) }, 0) : 0
   DashboardController { id: auxiliary; dayflow: root.dayflow }
@@ -111,7 +112,7 @@ Item {
     }
     PagedText {
       width: parent.width; dayflow: root.dayflow; bodyHeight: statusDrawer.height - 124
-      text: [root.health, "Provider: " + root.dayflow.modelName, "Storage: " + (root.dayflow.storageText || "—"), "Current app: " + (root.dayflow.activeApp || "—"), "Ignoring: " + root.dayflow.ignoredApps.join(", "), "Engine v" + root.dayflow.engineVersion + " · Panel v" + root.dayflow.pluginVersion, root.dayflow.errorText, root.dayflow.notice, root.dayflow.installErr].filter(function(value) { return !!value }).join("\n\n")
+      text: [root.health, "Provider: " + root.dayflow.modelName, "Storage: " + (root.dayflow.storageText || "—"), "Current app: " + (root.dayflow.activeApp || "—"), "Ignoring: " + root.dayflow.ignoredApps.join(", "), "Engine v" + root.dayflow.engineVersion + " · Panel v" + root.dayflow.pluginVersion, "Capture: " + root.dayflow.captureState, (root.dayflow.blocks || []).filter(function(block){return block.status === "failed"}).map(function(block){return block.error || "Summary failed"}).join("\n"), root.dayflow.errorText, root.dayflow.notice, root.dayflow.installErr].filter(function(value) { return !!value }).join("\n\n")
     }
   }
 }

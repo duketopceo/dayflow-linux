@@ -21,7 +21,7 @@ Column {
   readonly property string displayedText: editor.text
   signal edited(string value)
   signal accepted(string value)
-  spacing: Style.space(3)
+  spacing: 3
 
   function rebuild() {
     if (width <= 0) return

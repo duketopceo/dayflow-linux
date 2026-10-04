@@ -13,6 +13,7 @@ parser.add_argument('--source', type=Path, default=Path(__file__).resolve().pare
 parser.add_argument('--output', type=Path, default=Path('/tmp/dayflow-dashboard-fit'))
 parser.add_argument('--native', action='store_true', help='Use the current graphical session instead of offscreen Qt')
 parser.add_argument('--filter', default='', help='Only case names containing this text')
+parser.add_argument('--scale',type=float,default=1,help='Theme spacing scale')
 parser.add_argument('--demo', action='store_true', help='Use shareable synthetic demo data')
 parser.add_argument('--font-size', type=int, default=12)
 args = parser.parse_args()
@@ -36,6 +37,7 @@ QtObject {
 ''')
     style_path = root / 'Commons/Style.qml'
     style_path.write_text(style_path.read_text().replace('property int body: 12', f'property int body: {args.font_size}').replace('property int caption: 12', f'property int caption: {args.font_size}'))
+    style_path.write_text(style_path.read_text().replace('return value', f'return value * {args.scale}'))
     (root / 'Commons/Color.qml').write_text('''pragma Singleton
 import QtQuick
 QtObject {

@@ -167,6 +167,7 @@ ShellRoot {
     model.agentsError=test.mode === "error" ? Array(40).join("Agent source unavailable: complete diagnostic.\n") : ""
 
     model.engineMissing=test.mode === "install";model.configured=test.mode !== "onboarding"
+    model.blocks=test.mode === "summaryfailed" ? [{status:"failed",error:Array(30).join("Local provider unreachable.\n")}] : [{},{}]
     model.errorText=test.mode === "error" ? Array(30).join("Long diagnostic: all information is retained.\n") : ""
     model.notice=test.mode === "error" ? model.errorText : ""
     model.spans=test.mode === "empty" ? [] : [{title:Array(25).join("Complete work title. "),summary:Array(80).join("Screen summary evidence.\n"),start:"18:00",end:"18:15",minutes:15,count:1,category:"coding",appName:"Terminal",productive:true,children:[{activities:[{app:"Terminal",title:Array(30).join("Full activity detail. ")}]}]}]
@@ -176,7 +177,7 @@ ShellRoot {
       model.completions=[{source:"claude",project:"~/Projects/example",summary:"Implemented the requested fix and verified the result.",completed_at:1791126000},{source:"codex",project:"~/Projects/dayflow-linux",summary:"Finished the interface review. All dashboard pages fit without scrolling, including long summaries and action results. The changes are ready for review.",completed_at:1791129600}]
       var slots=[];for(var i=0;i<24;i++)slots.push({time:(9+Math.floor(i/4))+":"+String((i%4)*15).padStart(2,"0"),category:i<10 ? "coding" : i<15 ? "research" : i<21 ? "coding" : ""});model.workflow=Object.assign({},model.workflow,{slots:slots})
     }
-    Qt.callLater(function(){var page=findPage(dashboard);if(!page)return;if(test.tab === "settings") {page.presets=[{name:"Gemma 3",slug:"gemma3:4b",notes:Array(30).join("Complete preset notes. ")}];page.providers=[{id:"local",name:Array(20).join("Local provider "),prompt_overrides:{title_prompt:Array(40).join("Preserve every instruction.\n")}}]};if(test.section !== undefined)page.section=test.section;if(test.tab === "chat" && test.mode !== "empty"){page.conversations=[{id:1,title:Array(30).join("A saved conversation ")}];page.chatMessages=[{role:"user",content:"A question"},{role:"assistant",content:Array(80).join("Complete model answer.\n")}]}if(test.mode === "edit")page.beginEdit();if(test.mode === "calendar")page.calendarOpen=true;if(test.step !== undefined){page.step=test.step;page.testResult=model.errorText || Array(30).join("Check result: complete detail.\n")};if(test.status){function reveal(item){if(item.objectName === "statusDrawer")item.visible=true;for(var child of item.children || [])reveal(child)}reveal(dashboard)}})
+    Qt.callLater(function(){var page=findPage(dashboard);if(!page)return;if(test.tab === "settings") {page.presets=[{name:"Gemma 3",slug:"gemma3:4b",notes:Array(30).join("Complete preset notes. ")}];page.providers=[{id:"local",name:Array(20).join("Local provider "),prompt_overrides:{title_prompt:Array(40).join("Preserve every instruction.\n")}}]};if(test.section !== undefined)page.section=test.section;if(test.tab === "chat" && test.mode !== "empty"){page.conversations=[{id:1,title:Array(30).join("A saved conversation ")}];page.chatMessages=[{role:"user",content:"A question"},{role:"assistant",content:Array(80).join("Complete model answer.\n")}]}if(test.mode === "keyeditor")page.showKey=true;if(test.mode === "edit")page.beginEdit();if(test.mode === "calendar")page.calendarOpen=true;if(test.step !== undefined){page.step=test.step;page.testResult=model.errorText || Array(30).join("Check result: complete detail.\n")};if(test.status){function reveal(item){if(item.objectName === "statusDrawer")item.visible=true;for(var child of item.children || [])reveal(child)}reveal(dashboard)}})
   }
   Timer {
     interval: 200
@@ -214,6 +215,7 @@ ShellRoot {
       for(var section of ["Activity","Trends","Forecast","Review"])list.push({name:prefix+"-week-"+section,width:size.width,height:size.height,light:light,tab:"week",section:section})
       for(var mode of ["edit","calendar","install"])list.push({name:prefix+"-today-"+mode,width:size.width,height:size.height,light:light,tab:"today",mode:mode})
       list.push({name:prefix+"-status-error",width:size.width,height:size.height,light:light,tab:"today",mode:"error",status:true})
+      for(var mode of ["summaryfailed","keyeditor"])list.push({name:prefix+"-"+mode,width:size.width,height:size.height,light:light,tab:mode === "keyeditor" ? "settings" : "today",mode:mode})
       for(var step=0;step<5;step++)list.push({name:prefix+"-setup-"+step,width:size.width,height:size.height,light:light,tab:"today",mode:"onboarding",step:step})
     }
     var hours=[];for(var h=0;h<24;h++)hours.push({hour:h,category:h>8 && h<17 ? "coding" : "",minutes:h>8 && h<17 ? 45 : 0})

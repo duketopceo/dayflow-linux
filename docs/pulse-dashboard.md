@@ -11,7 +11,7 @@ Overview displays captured activity, screen summaries and finished agent replies
 separately. Reply records follow the latest completion until you browse an older
 record; **Latest** resumes following. Timeline refreshes every two seconds on
 Overview and every five seconds on other pages while either surface is open.
-Capture status refreshes every five seconds. Finished turns are not proof that an
+Capture status refreshes every five seconds. Failed summary blocks turn the status badge red and their complete error appears in Status / details. Finished turns are not proof that an
 entire project is complete; see [completion recording](immediate-completions.md).
 
 Long histories, results, provider names and editable text use explicit record and
@@ -40,7 +40,7 @@ configuration is introduced by the interface change.
 
 ```sh
 python tests/ui/verify-dashboard.py
-python tests/ui/verify-dashboard.py --filter 1280x720-dark --font-size 16
+python tests/ui/verify-dashboard.py --filter 1280x720-dark --font-size 16 --scale 1.333333
 python tests/ui/verify-fit.py
 python tests/ui/verify-completions.py
 ```

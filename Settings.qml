@@ -200,6 +200,7 @@ Item {
         CompactButton {required property string modelData; dayflow:root.dayflow; text:modelData; active:root.section===modelData; onClicked:root.section=modelData}}
     CompactButton {dayflow:root.dayflow; text:"Save settings"; active:true; enabled:!providerSetProc.running && root.pendingProviderWrites.length===0; onClicked:root.dayflow.saveConfig()}
     CompactButton {dayflow:root.dayflow; text:"Reload"; onClicked:root.dayflow.loadConfig()}
+    CompactButton {visible:root.section === "Provider";dayflow:root.dayflow;text:root.showKey ? "Hide key" : "Edit key";onClicked:root.showKey=!root.showKey}
   }
   Row {
     y:38; width:parent.width; height:parent.height-y; spacing:12
@@ -213,7 +214,6 @@ Item {
         Field {label:"API URL"; key:"api_base_url"}
         Field {label:"API key"; key:"openrouter_api_key"; secret:!root.showKey}
         Field {label:"App name"; key:"site_name"; fallback:"dayflow-linux"}
-        CompactButton {dayflow:root.dayflow; text:root.showKey ? "Hide key" : "Edit key"; onClicked:root.showKey=!root.showKey}
       }
       Column {
         visible:root.section === "Capture"; width:parent.width; spacing:4

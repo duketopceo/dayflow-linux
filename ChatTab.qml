@@ -133,7 +133,7 @@ Item {
     Column {
       width: (parent.width-parent.spacing)*0.64; height: parent.height; spacing: 10
       DashboardCard {
-        id: history; width: parent.width; height: 114; dayflow: root.dayflow; title: "Saved conversations"
+        id: history; width: parent.width; height: 124; dayflow: root.dayflow; title: "Saved conversations"
         Row {
           width: parent.width; spacing: 6
           CompactButton { dayflow: root.dayflow; text: "‹"; enabled: root.conversationIndex>0; onClicked: root.conversationIndex-- }

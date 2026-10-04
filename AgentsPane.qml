@@ -125,7 +125,7 @@ Item {
     Column {
       width: (parent.width-parent.spacing)*0.63; height: parent.height; spacing: 10
       RecordCard {
-        id: threads; width: parent.width; height: parent.height*0.50; dayflow: pane.dayflow; title: "Threads"
+        id: threads; width: parent.width; height: (parent.height-parent.spacing)/2; dayflow: pane.dayflow; title: "Threads"
         records: streams.current.threads || []
         tint: pane.statusColor(current.status)
         formatRecord: function(record) {return [record.source+" · "+pane.statusLabel(record.status), record.title,record.latest_outcome,Qt.formatTime(new Date(record.started_at*1000),"hh:mm")+"–"+Qt.formatTime(new Date(record.ended_at*1000),"hh:mm")].filter(function(v){return !!v}).join("\n\n")}
