@@ -40,9 +40,10 @@ callers keep their heuristic fallbacks.
 ## Caveats recorded
 
 - A small local judge (e.g. a 4B chat model) will not match calibrated
-  `typesafe/jev-1.13` scores. All consumers already treat missing/low
-  scores as advisory, so the blast radius of a weak judge is "Jev quiet",
-  never a wrong verdict. A real quality comparison is deferred follow-up.
+  `typesafe/jev-1.13` scores. Missing/failed judgments fall back to
+  heuristics, but a valid score is applied — so a weak judge degrades
+  verdict quality rather than failing safe. A real quality comparison is
+  deferred follow-up.
 - `decisions_model` exists so a local slug does not collide with the Jev
   slug that `classification_model` carries.
 - Non-OpenRouter endpoints get no `Authorization` header unless

@@ -906,6 +906,26 @@ func TestDecideCustomEndpointAuth(t *testing.T) {
 	}
 }
 
+// A URL containing "openrouter.ai" as a path or prefix on another host must
+// not receive the provider-chain key or attribution headers — only the
+// hostname gates OpenRouter behavior.
+func TestDecideSpoofedOpenRouterHost(t *testing.T) {
+	testEnv(t)
+	srv, reqs := recordingServer(t, 200,
+		`{"model":"m","answers":{"a":{"type":"noul","noul":0.7}},"usage":{}}`)
+	useConfigDecisions(t)
+	cfg := Config{OpenRouterAPIKey: "k", JevClassification: true,
+		DecisionsURL: srv.URL + "/openrouter.ai/api/alpha/decisions"}
+
+	if _, _, err := decide(nil, cfg, "k", "s", map[string]string{"a": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	r := (*reqs)[0]
+	if r.Auth != "" || r.Referer != "" || r.Title != "" {
+		t.Fatalf("spoofed host got OpenRouter headers: %+v", r)
+	}
+}
+
 // Fully local: a chat-shaped decisions_url answers every judgment on
 // loopback — no Authorization, no attribution, and llm_calls names only
 // local providers.

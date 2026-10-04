@@ -123,7 +123,7 @@ Probe result (this session): the existing `jev-shim` on `127.0.0.1:8931` is **no
 ## Risks & Dependencies
 
 - **Local judge quality.** A 4B local model scoring `noul` questions won't match calibrated `typesafe/jev-1.13` — mitigated by keeping scores advisory (all existing consumers already treat missing/low scores as fallback signals; nothing hard-depends on Jev accuracy). Doc notes the quality trade-off; a real comparison is deferred.
-- **Prompt-format drift.** qwen3/Ornith variants may wrap JSON in think-tags or prose — the lenient parser covers the common cases; a hard-fail still lands on the heuristic fallback, so the blast radius is "Jev silent" not "wrong verdict."
+- **Prompt-format drift.** qwen3/Ornith variants may wrap JSON in think-tags or prose — the lenient parser covers the common cases; a hard-fail still lands on the heuristic fallback, so a malformed judge means "Jev silent"; a valid-but-inaccurate score is applied, so the residual risk is reduced judgment quality, not crashes.
 - **`classification_model` reused as local slug** — if a user sets `decisions_url` local but leaves `classification_model` as `typesafe/jev-1.13`, the local endpoint gets a nonsense model name; `decisions_model` exists so they don't collide, and docs call this out.
 - The **`classification` TaskProvider key** already exists in `providerForTask`'s keychain (`jevAPIKey` consults it) — no routing-table changes needed; docs should mention `task_provider.classification` can point the *key resolution* at a provider, though `decisions_url` is the real knob.
 

@@ -156,7 +156,7 @@ dayflow config set decisions_url http://127.0.0.1:11434/v1 # Jev judgments → o
 dayflow config set decisions_model <local-judge-model>
 ```
 
-In a multi-provider setup, route the tasks instead: `dayflow provider add ollama local`, then point `routing.task_provider` entries (or `routing.primary`) at it via `config patch`. The chat transport compiles each judgment batch into a single chat request that must answer with a `{"question": 0-1}` JSON score map — a small local judge won't match calibrated `typesafe/jev-1.13` scores, but all judgments are advisory and every heuristic fallback still applies. Verify locality with `dayflow usage`: `llm_calls` records the decisions endpoint host as each `judge:` call's provider.
+In a multi-provider setup, route the tasks instead: `dayflow provider add ollama local`, then point `routing.task_provider` entries (or `routing.primary`) at it via `config patch`. The chat transport compiles each judgment batch into a single chat request that must answer with a `{"question": 0-1}` JSON score map — a small local judge won't match calibrated `typesafe/jev-1.13` scores — heuristic fallbacks apply when a judgment fails or a score is missing, but a valid score is applied, so a weak judge means lower-quality category/productivity verdicts, not a broken journal. Verify locality with `dayflow usage`: `llm_calls` records the decisions endpoint host as each `judge:` call's provider.
 
 ## Upgrading
 

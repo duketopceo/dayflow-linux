@@ -84,6 +84,18 @@ func decisionsModel(cfg Config) string {
 	return defaultJevModel
 }
 
+// isOpenRouterHost reports whether endpoint's hostname is OpenRouter — the
+// credential/attribution gate. A substring match would send the provider
+// chain key to any URL containing "openrouter.ai" (e.g. a path on a mirror).
+func isOpenRouterHost(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h == "openrouter.ai" || strings.HasSuffix(h, ".openrouter.ai")
+}
+
 // decisionsKey resolves the credential for a decisions-class endpoint: an
 // explicit decisions_api_key always wins; otherwise the provider chain
 // applies on OpenRouter only — other endpoints send no Authorization header.
@@ -91,7 +103,7 @@ func decisionsKey(cfg Config, endpoint string) (string, error) {
 	if cfg.DecisionsAPIKey != "" {
 		return cfg.DecisionsAPIKey, nil
 	}
-	if !strings.Contains(endpoint, "openrouter.ai") {
+	if !isOpenRouterHost(endpoint) {
 		return "", nil
 	}
 	if k := jevAPIKey(cfg); k != "" {
@@ -127,7 +139,7 @@ func decisionsRoundTrip(db *sql.DB, cfg Config, kind, provider, model, endpoint 
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	if strings.Contains(endpoint, "openrouter.ai") {
+	if isOpenRouterHost(endpoint) {
 		setOpenRouterHeaders(req, cfg.SiteName)
 	}
 
@@ -144,7 +156,7 @@ func decisionsRoundTrip(db *sql.DB, cfg Config, kind, provider, model, endpoint 
 		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, int(time.Since(start).Milliseconds()), "error", err.Error())
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode/100 != 2 {
 		msg := fmt.Sprintf("decisions API %d: %s", resp.StatusCode, truncate(string(raw), 200))
 		logLLMCall(db, "judge:"+kind, provider, model, 0, 0, int(time.Since(start).Milliseconds()), "error", msg)
 		return nil, fmt.Errorf("%s", msg)
@@ -181,7 +193,7 @@ func decide(db *sql.DB, cfg Config, kind, state string, questions map[string]str
 	// The provider column names the vendor on OpenRouter and the endpoint
 	// host elsewhere — `dayflow usage` can then show judgment locality.
 	provider := "typesafe"
-	if !strings.Contains(endpoint, "openrouter.ai") {
+	if !isOpenRouterHost(endpoint) {
 		provider = decisionsProvider(endpoint)
 	}
 	start := time.Now()
