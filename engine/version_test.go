@@ -9,7 +9,7 @@ import (
 )
 
 // The release version is repeated in three places by design (manifest for the
-// plugin loader, the Go const for the binary, pluginVersion in DashboardState.qml for
+// plugin loader, the Go const for the binary, pluginVersion in Panel.qml for
 // drift warnings). This test is the consistency check so a bump can't land in
 // only two of the three.
 func TestVersionConsistency(t *testing.T) {
@@ -29,16 +29,16 @@ func TestVersionConsistency(t *testing.T) {
 		t.Errorf("manifest.json version %q != engine version %q", m.Version, version)
 	}
 
-	panel, err := os.ReadFile(filepath.Join(root, "DashboardState.qml"))
+	panel, err := os.ReadFile(filepath.Join(root, "Panel.qml"))
 	if err != nil {
-		t.Fatalf("DashboardState.qml: %v", err)
+		t.Fatalf("Panel.qml: %v", err)
 	}
 	re := regexp.MustCompile(`pluginVersion:\s*"([^"]+)"`)
 	mm := re.FindSubmatch(panel)
 	if mm == nil {
-		t.Fatal("DashboardState.qml: pluginVersion not found")
+		t.Fatal("Panel.qml: pluginVersion not found")
 	}
 	if string(mm[1]) != version {
-		t.Errorf("DashboardState.qml pluginVersion %q != engine version %q", mm[1], version)
+		t.Errorf("Panel.qml pluginVersion %q != engine version %q", mm[1], version)
 	}
 }

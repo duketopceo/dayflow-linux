@@ -8,7 +8,6 @@ Column {
   property var dayflow: null
   property string text: ""
   property bool readOnly: true
-  property bool acceptOnBlur: true
   property bool showApplyButton: true
   property int bodyHeight: Style.space(54)
   readonly property int effectiveBodyHeight: Math.max(bodyHeight, Math.ceil(Math.max(12, Style.font.body) * 1.5) + Style.space(10))
@@ -21,7 +20,7 @@ Column {
   readonly property string displayedText: editor.text
   signal edited(string value)
   signal accepted(string value)
-  spacing: 3
+  spacing: Style.space(3)
 
   function rebuild() {
     if (width <= 0) return
@@ -61,11 +60,10 @@ Column {
     desiredCursor = -1
   }
   onTextChanged: rebuild()
-  onWidthChanged: layoutTimer.restart()
-  onEffectiveBodyHeightChanged: layoutTimer.restart()
+  onWidthChanged: Qt.callLater(rebuild)
+  onEffectiveBodyHeightChanged: Qt.callLater(rebuild)
   onPageChanged: syncEditor()
-  Component.onCompleted: layoutTimer.restart()
-  Timer { id: layoutTimer; interval: 0; onTriggered: root.rebuild() }
+  Component.onCompleted: Qt.callLater(rebuild)
 
   Text {
     id: measure
@@ -73,12 +71,12 @@ Column {
     width: Math.max(1, root.width - Style.space(10))
     font: editor.font
     textFormat: Text.PlainText
-    wrapMode: Text.Wrap
+    wrapMode: Text.WrapAnywhere
   }
   Rectangle {
     width: parent.width
     height: root.effectiveBodyHeight
-    radius: 8
+    radius: Style.cornerRadius
     color: root.dayflow ? root.dayflow.fgFill(0.04) : "transparent"
     border.color: root.dayflow ? root.dayflow.fgFill(0.12) : Color.muted
     TextEdit {
@@ -89,7 +87,7 @@ Column {
       readOnly: root.readOnly
       selectByMouse: true
       textFormat: TextEdit.PlainText
-      wrapMode: TextEdit.Wrap
+      wrapMode: TextEdit.WrapAnywhere
       color: root.dayflow ? root.dayflow.foreground : Color.foreground
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Math.max(12, Style.font.body)
@@ -99,7 +97,7 @@ Column {
         root.desiredCursor = r.start + cursorPosition
         root.edited(root.text.substring(0, r.start) + text + root.text.substring(r.end))
       }
-      onActiveFocusChanged: if (!activeFocus && !root.readOnly && root.acceptOnBlur) root.accepted(root.text)
+      onActiveFocusChanged: if (!activeFocus && !root.readOnly) root.accepted(root.text)
       Keys.onPressed: function(event) {
         if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
           root.accepted(root.text); event.accepted = true

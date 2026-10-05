@@ -1,6 +1,5 @@
 import QtQuick
 import Quickshell
-import qs.Commons
 
 ShellRoot {
   id: runner
@@ -119,7 +118,6 @@ ShellRoot {
     stage.width = test.width - 120
     stage.height = test.height - 180
     model.light = test.light
-    Color.light = test.light
     model.foreground = test.light ? "#202020" : "#e4e4e4"
     model.dim = test.light ? "#505050" : "#a5a5a5"
     model.notice = test.error ? Array(60).join("Long error: complete diagnostic line.\n") : ""
