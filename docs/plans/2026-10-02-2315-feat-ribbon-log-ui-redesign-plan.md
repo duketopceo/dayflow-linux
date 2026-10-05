@@ -2,6 +2,7 @@
 title: Ribbon Log UI and Asset Redesign - Plan
 type: feat
 date: 2026-10-02
+refreshed: 2026-10-05
 origin: DESIGN.md
 artifact_contract: ce-unified-plan/v1
 product_contract_source: ce-plan-bootstrap
@@ -30,7 +31,7 @@ execution: code
 
 ### Summary
 
-Rebuild the Dayflow plugin's visual and interaction layer around one idea: the day drawn as a vertical ribbon of category color with dense, keyboard-navigable mono rows beside it. The popup becomes a Today-only quick view. Full View becomes the app and hosts Week, Search, Standup, Chat, Agents, and Settings. All colors come from theme roles through a token layer, so the plugin works on light themes. A small custom asset set (app mark, 12-glyph Nerd Font set, theme-mapped category hues, social card, marketplace previews, typographic empty states) replaces today's mixed glyphs and emoji.
+Rebuild the Dayflow plugin's visual and interaction layer around one idea: the day drawn as a vertical ribbon of category color with dense, keyboard-navigable mono rows beside it. The popup becomes a Week glance with quick actions (refreshed 2026-10-05, was Today-only). Full View becomes the app and hosts one tab set built once: Today, Week, Standup, Ask, Agents, Replay, Settings, with Search as a Ctrl+K overlay. See the Refresh section. All colors come from theme roles through a token layer, so the plugin works on light themes. A small custom asset set (app mark, 12-glyph Nerd Font set, theme-mapped category hues, social card, marketplace previews, typographic empty states) replaces today's mixed glyphs and emoji.
 
 ### Problem Frame
 
@@ -58,8 +59,8 @@ The audit in `DESIGN.md` section 2 found five cross-cutting failures. About 28 l
 
 **Popup**
 
-- R10. The popup shows Today only: a header with date, total, and a pause toggle; the ribbon and rows; a 7-day strip; exactly three footer actions (`Summarize now`, `Copy today`, `Open Dayflow`); and an overflow menu holding the `Copy week` and `Ignore app` actions (`DESIGN.md` P0.3). Selecting a day in the 7-day strip sets the popup's day.
-- R11. Standup, Chat, Week, Agents, and Settings leave the popup. Each one stays reachable as an overflow-menu entry that opens Full View on that destination (see Q2).
+- R10. **[Superseded 2026-10-05 by R26.]** The popup shows Today only: a header with date, total, and a pause toggle; the ribbon and rows; a 7-day strip; exactly three footer actions (`Summarize now`, `Copy today`, `Open Dayflow`); and an overflow menu holding the `Copy week` and `Ignore app` actions (`DESIGN.md` P0.3). Selecting a day in the 7-day strip sets the popup's day.
+- R11. **[Changed 2026-10-05: tabs leave the popup; overflow entries open the matching Full View tab.]** Standup, Chat, Week, Agents, and Settings leave the popup. Each one stays reachable as an overflow-menu entry that opens Full View on that destination (see Q2).
 
 **Rows, ribbon, keyboard**
 
@@ -69,10 +70,10 @@ The audit in `DESIGN.md` section 2 found five cross-cutting failures. About 28 l
 
 **Full View**
 
-- R15. Full View's rail hosts Today, Week, Search, Standup, Chat, Agents, Context, and Settings. Today uses three columns (ribbon with hour ticks, rows, detail) at 1280 px and wider, two columns (ribbon and rows together, then detail) from 980 to 1279 px, and stacks the detail below the rows under 980 px.
+- R15. **[Changed 2026-10-05: rail is Today, Week, Standup, Ask, Agents, Replay, Settings; Search is an overlay, Context folds into Week. `Ctrl+1` to `Ctrl+7`.]** Full View's rail hosts Today, Week, Search, Standup, Chat, Agents, Context, and Settings. Today uses three columns (ribbon with hour ticks, rows, detail) at 1280 px and wider, two columns (ribbon and rows together, then detail) from 980 to 1279 px, and stacks the detail below the rows under 980 px.
 - R16. The Week pane shows 7 vertical ribbons side by side plus one stacked category bar. The donut and treemap move to an Analytics sub-view. Selecting a day column opens Today on that date.
-- R17. Search (`/`) queries the journal and agent sessions and groups results by day. Enter on a journal hit jumps to that Today row, and Enter on an agent hit opens the Agents pane at that session.
-- R18. Timelapse playback becomes a frame scrubber under the selected row. When `playback` is off, the scrubber shows a locked state that explains how to enable it.
+- R17. **[Changed 2026-10-05: Search is a `Ctrl+K` overlay, not a rail tab; `/` opens it too.]** Search (`/`) queries the journal and agent sessions and groups results by day. Enter on a journal hit jumps to that Today row, and Enter on an agent hit opens the Agents pane at that session.
+- R18. **[Changed 2026-10-05: the scrubber is the Replay tab; `space` on a Today row opens Replay at that block.]** Timelapse playback becomes a frame scrubber under the selected row. When `playback` is off, the scrubber shows a locked state that explains how to enable it.
 
 **Settings and onboarding**
 
@@ -88,6 +89,8 @@ The audit in `DESIGN.md` section 2 found five cross-cutting failures. About 28 l
 **Copy and states**
 
 - R24. Every screen designs its empty, loading, partial, error, and success states. Empty and error states are typographic: one specific mono line plus the outline mark, never illustration. UI copy has no emoji and no em or en dashes.
+- R26. **(Added 2026-10-05.)** The popup is a Week glance modeled on Dayflow macOS's week grid: header with the week range and tracked total, seven day columns of duration-scaled ribbons on one shared hour axis, and a quick-action row (`Pause capture`, `Copy standup`, `Open Full View`). Clicking a day column or block opens Full View on Today at that date or block. No LLM call and no frame load on open.
+- R27. **(Added 2026-10-05.)** One implementation per surface. Today and Week exist once, as Full View tabs built on `Ribbon`, `LogRow`, and `WeekStrip`; the popup reuses `WeekStrip`. A hidden tab is unloaded (`Loader`), each tab loads its data on first open, nothing calls an LLM on tab open (Ask answers from a local recap first and calls a model only on request), and timelapse frames load only in Replay.
 - R25. Motion follows `DESIGN.md` section 8 durations and drops to 0 when the reduced-motion flag is set or Hyprland animations are disabled.
 
 ### Acceptance Examples
@@ -125,7 +128,7 @@ The audit in `DESIGN.md` section 2 found five cross-cutting failures. About 28 l
 
 - Q1 (blocking for U5 and U17 merge only). Brand independence: `ROADMAP.md` says upstream (dayflow.so) owns the brand. Is a distinct mark acceptable for the Linux port, or should it ship a neutral "Dayflow for Linux" wordmark and defer to upstream's icon? The plan builds a distinct mark that does not imitate upstream's. The mark lives in `assets/icon/`, so swapping it touches only U5 and U17 outputs.
 - Q3 (blocking for U4 merge only). Recording and stalled share a color on stock themes. Omarchy's `shell.toml` template sets `bar.active` to the theme's `red`, which is also `urgent`, so with R8 as written the only difference at bar size is glyph shape. Options: keep `Color.bar.active` for recording (the Omarchy convention, per `DESIGN.md`'s decision ledger) and accept glyph-only separation, or render recording in a neutral role (`df.fg`) so the urgent color means stalled only.
-- Q2 (blocking for U10 merge only). Popup tab cut: remove Chat, Settings, Standup, and Agents from the popup entirely, or keep a slim `More` route? The plan's default is in Assumptions.
+- Q2 **[Resolved 2026-10-05: popup is a Week glance with quick actions; no tabs, overflow entries open Full View.]** (was: blocking for U10 merge only). Popup tab cut: remove Chat, Settings, Standup, and Agents from the popup entirely, or keep a slim `More` route? The plan's default is in Assumptions.
 
 ### Sources
 
@@ -192,7 +195,7 @@ Bar state mapping (R8):
 
 ### Assumptions
 
-- Q2 default: the popup removes the five tabs. The overflow menu lists the destination entries `Standup`, `Chat`, `Week`, `Agents`, and `Settings`, each of which opens Full View on that pane, plus the R10 actions `Copy week` and `Ignore app`. This covers both readings of Q2 (no tabs, but a reachable route) and can be undone in one file.
+- Q2 default **[superseded 2026-10-05, see R26]**: the popup removes the five tabs. The overflow menu lists the destination entries `Standup`, `Chat`, `Week`, `Agents`, and `Settings`, each of which opens Full View on that pane, plus the R10 actions `Copy week` and `Ignore app`. This covers both readings of Q2 (no tabs, but a reachable route) and can be undone in one file.
 - `DESIGN.md` Q3: times default to 24h. Settings › Advanced exposes a 12h/24h choice. Times are formatted on the UI side from raw timestamps (KTD7), never parsed from the engine's preformatted `3:04 PM` strings.
 - `DESIGN.md` Q4: when a theme lacks a mapped key (`brown`, `bright_magenta`), the fallback chain is the next key in the 6.2 row, then the ANSI slot (blue→`color4`, green→`color2`, yellow→`color3`, red→`color1`, magenta→`color5`, cyan→`color6`, bright_magenta→`color13`), then the engine default hex. All of them pass through contrast correction.
 - `DESIGN.md` Q5: frame retention stays opt-in. The scrubber shows a locked state (R18). Changing retention defaults is a privacy decision that is out of scope.
@@ -203,11 +206,52 @@ Bar state mapping (R8):
 
 ### Sequencing
 
+Phase order refreshed 2026-10-05: P0 unchanged; P1 becomes U7, U21 (lazy tab host), U8, U18, U11 (Week), U20 (Context into Week), U22 (Ask), U9, U12 (Ctrl+K overlay), U10 (Week glance popup), then U19 (delete duplicates, last in P1); P2 is U13 (Replay), U14, U15, U16, U17. Original order follows.
+
 Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View becomes the app): U7, U8, U18, U9, U10, U11, U12. Phase P2 (depth): U13, U14, U15, U16, U17. U2 gates every UI unit. U7 gates every unit that draws rows. U8, U9, and U18 gate U10. U6 does not wait on Q1: it references the icon by name (`-i dayflow`), and the icon appears once U5 merges.
 
 ---
 
+## Refresh 2026-10-05 (user-directed)
+
+The merge of #58 (Pulse dashboard) and its revert #60 left the UI as: bar widget, popup (`Panel.qml`) with tabs today/standup/chat/week/agents/settings, and Full View with today/week/timelapse/context/agents. Today and Week are implemented twice (`TodayTab` 507 vs `TodayPane` 137; `WeekTab` 819 vs `WeekPane` 452). These decisions are settled:
+
+1. The popup becomes a Week glance, modeled on Dayflow macOS (R26, U10).
+2. One tab set, built once: Today, Week (with the Context category flow as a section), Standup, Ask (local recap first, LLM only on request), Agents, Replay (frame scrubber), Settings. Search is a `Ctrl+K` overlay. Onboarding is a 3-step overlay. The popup is the Week glance plus pause capture, copy standup, and open Full View.
+3. Stay lightweight (R27): shared components (U7), lazy per-tab data (U21), hidden tabs unloaded, no LLM call on tab open, frames load only in Replay, duplicates deleted (U19).
+
+### What we mirror from Dayflow macOS, and what we do not
+
+Findings come from the upstream SwiftUI source (`JerryZLiu/Dayflow`) and its README. Upstream's menu-bar popup is a small action menu, not a timeline, so the Week glance is modeled on its main-window Week view instead.
+
+- Menu bar (`Dayflow/Dayflow/Menu/StatusMenuView.swift`): a 200 to 210 pt wide menu with a pause section (15 min, 30 min, 1 hour, indefinite), a countdown badge while paused, Open Dayflow, Open Recordings, Check for Updates, and Quit. It has no timeline or week content. We mirror: pause as the first control, a visible paused state, and Open Full View. We do not mirror: Check for Updates and Quit Completely (the bar widget and systemd own those), Dock icon handling, and `NSWorkspace` folder opening.
+- Week view (`Views/UI/MainView/WeekTimelineGridView.swift`, `WeekTimelineActivityCard.swift`): seven equal day columns beside a 48 pt time column, a 22 pt day header, one shared hour axis (111 pt per hour, 4 AM to 4 AM), cards scaled to duration with a 16 pt minimum, selected-day highlight, auto-scroll to the relevant hour, and click on a card to select it (hover expands it). Cards are nearly square (radius 2) with a 5 pt accent bar and a dashed border for failed items. We mirror: seven columns on one shared hour axis, duration-scaled blocks with a minimum height, click-through to the day and block, failed blocks outlined. We do not mirror: pixel sizes (the popup is narrower), hover-lift shadows, and upstream's palette and fonts (Scope Boundaries).
+- Sidebar (`SidebarView.swift`): Timeline, Daily, Weekly, Chat, Flow, Agents, Settings, Support. Our tab set follows the same shape: Today and Week as the time views, Ask for chat, Agents, Settings. Flow lives inside Week for us (U20).
+- Weekly review (README): "your week at a glance: when you were focused, where time went, which apps dominated, and what pulled you off track". The popup glance carries focus pattern and category mix; app dominance and distraction detail stay in Full View Week.
+- Not found: no screenshot or documentation describes a compact week popup in the macOS app, so the glance is our adaptation of its Week view, not a copy.
+
+Sources: [Dayflow README](https://github.com/JerryZLiu/Dayflow), [StatusMenuView.swift](https://github.com/JerryZLiu/Dayflow/blob/main/Dayflow/Dayflow/Menu/StatusMenuView.swift), [WeekTimelineGridView.swift](https://github.com/JerryZLiu/Dayflow/blob/main/Dayflow/Dayflow/Views/UI/MainView/WeekTimelineGridView.swift), [WeekTimelineActivityCard.swift](https://github.com/JerryZLiu/Dayflow/blob/main/Dayflow/Dayflow/Views/UI/MainView/WeekTimelineActivityCard.swift), [SidebarView.swift](https://github.com/JerryZLiu/Dayflow/blob/main/Dayflow/Dayflow/Views/UI/MainView/SidebarView.swift), [product details](https://www.dayflow.so/product-details/).
+
+### Tab map
+
+| Tab | Contents | Source files merged | Data loaded when |
+|---|---|---|---|
+| Today | Ribbon, `LogRow` list, detail column, edit flow | `TodayTab.qml` + `TodayPane.qml` into `TodayPane.qml` | First open of Full View (default tab); refreshes on day change |
+| Week | Seven day ribbons, stacked category bar, calendar heat; Flow section (category-flow canvas); Analytics sub-view | `WeekTab.qml` + `WeekPane.qml` + `ContextPane.qml` + `CalendarPicker.qml` | First open of Week; Flow data on first open of the Flow section |
+| Standup | Standup draft and daily workflow grid, copy | `StandupTab.qml`, `DailyWorkflowGrid.qml` | First open of Standup; reads the existing draft, no model call |
+| Ask | Local recap, then chat input | `ChatTab.qml` into `AskPane.qml` | Recap from local data on first open; model call only on submit |
+| Agents | Workstream rows, per-source stats, briefing | `AgentsTab.qml` + `AgentsPane.qml` + `AgentBriefingLoader.qml` | First open of Agents (briefing keeps its 300 s watchdog) |
+| Replay | Frame scrubber, locked state when playback is off | `TimelapsePane.qml` into `ReplayPane.qml` + `FrameScrubber.qml` | Frames load only when Replay is open on a block |
+| Settings | Capture, Model, Privacy, Categories, Agents, Advanced | `Settings.qml`, `SettingsField.qml` | First open of Settings |
+| (overlay) Search | `Ctrl+K` journal and agent search | new `SearchOverlay.qml` | On submit only |
+| (overlay) Onboarding | 3 steps | `Onboarding.qml` | First run only |
+| (popup) Week glance | `WeekStrip`, pause, copy standup, open Full View | `Panel.qml`, `PopupBody.qml`, `TodayTab`/`WeekTab` deleted | On popup open: one week summary call, no model call, no frames |
+
+---
+
 ## Implementation Units
+
+Units are never renumbered. **[Changed]** marks units whose scope moved in the 2026-10-05 refresh; U19 to U22 are new.
 
 | U-ID | Title | Key files | Depends on |
 |---|---|---|---|
@@ -218,17 +262,21 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 | U5 | App mark, desktop entry, icon install | `assets/icon/`, `scripts/assets/build.sh`, `scripts/install.sh` | U1 |
 | U6 | Notifications rework | `engine/notify.go`, `engine/capture.go` | U1 |
 | U7 | Shared Ribbon, LogRow, WeekStrip, duration format | `Ribbon.qml`, `LogRow.qml`, `WeekStrip.qml`, `Format.js` | U2 |
-| U8 | Full View rail and hosted Standup and Chat | `FullView.qml` | U7 |
-| U18 | Today pane, edit flow, keyboard model | `TodayPane.qml`, `KeyModel.js`, `ShortcutSheet.qml` | U8 |
+| U8 | **[Changed]** Full View tab set (Today, Week, Standup, Ask, Agents, Replay, Settings) and hosted Standup and Ask | `FullView.qml`, `TabHost.qml` | U7, U21 |
+| U18 | **[Changed]** Today tab (single implementation), edit flow, keyboard model | `TodayPane.qml`, `KeyModel.js`, `ShortcutSheet.qml` | U8 |
 | U9 | Settings in Full View on qs.Ui kit | `Settings.qml`, `SettingsField.qml`, `FullView.qml` | U8 |
-| U10 | Popup becomes Today only | `Panel.qml`, `PopupBody.qml`, `TodayTab.qml`, `DayNavRow.qml`, `manifest.json` | U8, U9, U18 |
-| U11 | Week pane ribbons and calendar heat | `WeekPane.qml`, `WeekTab.qml`, `CalendarPicker.qml` | U7 |
-| U12 | Search pane | `SearchPane.qml`, `FullView.qml`, `engine/main.go` | U18 |
-| U13 | Frame scrubber replaces Timelapse pane | `FrameScrubber.qml`, `TimelapsePane.qml` | U18 |
-| U14 | Agents and Context panes on tokens and rows | `AgentsPane.qml`, `ContextPane.qml` | U7 |
-| U15 | Onboarding in 3 steps | `Onboarding.qml` | U1, U7 |
+| U10 | **[Changed]** Popup becomes a Week glance with quick actions | `Panel.qml`, `PopupBody.qml`, `WeekStrip.qml`, `manifest.json` | U8, U9, U18, U11 |
+| U11 | **[Changed]** Week tab: ribbons, calendar heat, hosts Context flow | `WeekPane.qml`, `CalendarPicker.qml` (WeekTab.qml deleted by U19) | U7, U21 |
+| U12 | **[Changed]** Search as a Ctrl+K overlay | `SearchOverlay.qml`, `FullView.qml`, `engine/main.go` | U18 |
+| U13 | **[Changed]** Replay tab: frame scrubber replaces Timelapse | `ReplayPane.qml`, `FrameScrubber.qml`, `TimelapsePane.qml` (deleted) | U18, U21 |
+| U14 | **[Changed]** Agents pane on tokens and rows (Context moves to U20) | `AgentsPane.qml`, `AgentBriefingLoader.qml` | U7 |
+| U15 | **[Unchanged scope]** Onboarding as a 3-step overlay | `Onboarding.qml` | U1, U7 |
 | U16 | TUI and CLI ribbon | `engine/tui.go`, `engine/main.go` | U2 |
 | U17 | Social card, marketplace previews, swatch sprite | `scripts/preview/scenes/`, `preview.png`, `docs/assets/` | U5, U10, U18, U11 |
+| U19 | **(Added)** Remove duplicate Today and Week implementations (about 1,500 lines) | `TodayTab.qml`, `WeekTab.qml`, `AgentsTab.qml`, `Panel.qml`, `TimelapsePane.qml`, `DayNavRow.qml` | U10, U11, U18 |
+| U20 | **(Added)** Fold ContextPane's category flow into Week | `WeekPane.qml`, `CategoryFlow.qml`, `ContextPane.qml` (deleted) | U11 |
+| U21 | **(Added)** Lazy tab host: Loader per tab, first-open data load | `TabHost.qml`, `FullView.qml` | U7 |
+| U22 | **(Added)** Ask tab: local recap first, LLM only on request | `AskPane.qml` (from `ChatTab.qml`) | U21 |
 
 ### U1. Fixture day, sandbox preview harness, UI lint gate
 
@@ -428,6 +476,8 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 
 ### U8. Full View rail and hosted Standup and Chat
 
+> **Refresh 2026-10-05:** Rail becomes the tab set Today, Week, Standup, Ask, Agents, Replay, Settings (`Ctrl+1` to `Ctrl+7`). Context is not a tab (U20), Search is an overlay (U12), Timelapse is Replay (U13). `openOn(tab)` accepts those seven names; `context`, `search`, `timelapse`, and `chat` map to Week, the overlay, Replay, and Ask. Tab bodies mount through `TabHost` (U21). Chat content is reused as Ask (U22). Tests: `Ctrl+7` selects Settings; `openOn("context")` selects Week.
+
 **Goal:** Give Full View the R15 rail, and host Standup and Chat there before the popup drops them.
 
 **Requirements:** R15.
@@ -448,6 +498,8 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 **Verification:** Shots of the rail with Standup and Chat on `vantablack` and `flexoki-light`. Standup and Chat behave the same as in the popup today.
 
 ### U18. Today pane, edit flow, keyboard model
+
+> **Refresh 2026-10-05:** Today is the single implementation (R27). `TodayPane.qml` is built on `Ribbon` and `LogRow`; `TodayTab.qml` (507 lines) is deleted in U19. The scrubber slot is removed from the detail column; `space` opens Replay instead. Tab cycle covers rail, rows, and detail only.
 
 **Goal:** Build the Full View Today pane and the shared keyboard model.
 
@@ -482,6 +534,8 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 
 ### U9. Settings in Full View on qs.Ui kit
 
+> **Refresh 2026-10-05:** Settings is the last rail tab. Onboarding (U15) is unaffected.
+
 **Goal:** Move settings out of the popup into Full View with live apply and progressive disclosure.
 
 **Requirements:** R19.
@@ -501,6 +555,8 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 **Verification:** Settings render on both themes with no hand-rolled control left (grep for `MouseArea` toggles). Live apply is visible in `dayflow config` output.
 
 ### U10. Popup becomes Today only
+
+> **Refresh 2026-10-05:** The popup is a Week glance (R26), not Today-only. Body: week header and total, `WeekStrip` of seven day ribbons on a shared hour axis, and three quick actions (`Pause capture`, `Copy standup`, `Open Full View`). Clicking a day opens Full View Today on that date; clicking a block opens Today with that block selected. The overflow menu keeps `Copy week`, `Ignore app`, and destination entries that call `openOn`. Popup keys: `h/l` change week, `j/k` select day, `Enter` opens it, `p` pause, `s` copy standup, `o` Full View. The R10 Today-only header and footer are dropped; AE5 still holds. Add test: popup open performs no `dayflow ask` or frames call. Q2 is resolved by this decision.
 
 **Goal:** Turn the popup into a glance-and-act view of today.
 
@@ -536,6 +592,8 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 
 ### U11. Week pane ribbons and calendar heat
 
+> **Refresh 2026-10-05:** Week is built once as a tab. Seven ribbons share one hour axis (same geometry the popup glance reuses via `WeekStrip`). The tab hosts a Flow section (U20). `WeekTab.qml` (819 lines) is deleted in U19, so work here targets `WeekPane.qml` only. Data loads on first open.
+
 **Goal:** Show the week as 7 comparable ribbons, and show which days hold data.
 
 **Requirements:** R16. `DESIGN.md` P2.6.
@@ -555,6 +613,8 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 **Verification:** Shots on both themes at 840x560 and 1280x800.
 
 ### U12. Search pane
+
+> **Refresh 2026-10-05:** Search is a `Ctrl+K` overlay (and `/`), mounted once above every tab, not a rail destination. Rename `SearchPane.qml` to `SearchOverlay.qml`. Behavior, grouping, and jump targets are unchanged; the overlay closes on jump. Test: `Ctrl+K` toggles it from any tab and `Escape` returns focus to the prior tab.
 
 **Goal:** Search the journal and agent sessions, then jump to the matching moment.
 
@@ -578,6 +638,8 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 
 ### U13. Frame scrubber replaces Timelapse pane
 
+> **Refresh 2026-10-05:** Replay is a rail tab (`ReplayPane.qml`) that hosts `FrameScrubber`. It is the only place frames load (R27). `space` on a Today row switches to Replay at that block. The locked state (AE6) shows inside Replay. `TimelapsePane.qml` is deleted here.
+
 **Goal:** Put the screen recording one keypress behind every row.
 
 **Requirements:** R18. Covers AE6.
@@ -597,6 +659,8 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 
 ### U14. Agents and Context panes on tokens and rows
 
+> **Refresh 2026-10-05:** Context is no longer a pane here; U20 moves its category-flow canvas into Week and deletes `ContextPane.qml`. Only Agents remains in this unit.
+
 **Goal:** Bring the remaining panes into the Ribbon Log language.
 
 **Requirements:** R1, R12. `DESIGN.md` P2.1 and S10.
@@ -614,6 +678,8 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 **Verification:** Shots on both themes. Lint is clean.
 
 ### U15. Onboarding in 3 steps
+
+> **Refresh 2026-10-05:** Scope unchanged. It is a 3-step overlay shown over Full View on first run.
 
 **Goal:** Reach first value faster, and preview what Dayflow will show.
 
@@ -672,6 +738,81 @@ Phase P0 (identity and theming): U1, U2, U3, U4, U5, U6. Phase P1 (Full View bec
 **Test scenarios:** Test expectation: none. These are generated assets, checked by the visual review below.
 
 **Verification:** Every image comes from fixture data, has no emoji, and passes R2 contrast. The sizes are `preview.png` at the marketplace's expected 560x786 or larger, and the social card at 1280x640. `scripts/assets/build.sh` regenerates them reproducibly.
+
+### U19. Remove duplicate Today and Week implementations
+
+**Goal:** Delete the second copy of Today and Week once the shared components and tabs replace them (about 1,500 lines).
+
+**Requirements:** R27.
+
+**Dependencies:** U10, U11, U18.
+
+**Files:** Delete `TodayTab.qml` (507), `WeekTab.qml` (819), `AgentsTab.qml`, `TimelapsePane.qml` (if still present), and the tab code in `Panel.qml` that only they used. Keep `DayNavRow.qml` only if the Today tab imports it. Modify `Panel.qml` and `PopupBody.qml` to drop the references.
+
+**Approach:** Land last in P1. Before deleting, grep that no file imports or instantiates the removed components, and diff each deleted file's features against its replacement to confirm nothing is dropped (copy-to-clipboard actions, ignore-app, calendar picker). Record the line count removed in the PR.
+
+**Test scenarios:**
+- `rg "TodayTab|WeekTab|AgentsTab|TimelapsePane"` returns nothing outside git history and this plan.
+- Existing popup actions (`Copy today`, `Copy week`, `Ignore app`) still work through their new homes.
+- `qmllint` is clean on every remaining file.
+
+**Verification:** Net line count drops by at least 1,400. `scripts/lint-ui.sh` and the keyboard walkthrough pass.
+
+### U20. Fold ContextPane into Week
+
+**Goal:** Show the category-flow canvas as a section of the Week tab instead of a separate destination.
+
+**Requirements:** R15, R16, R27.
+
+**Dependencies:** U11.
+
+**Files:** Create `CategoryFlow.qml` from the canvas code in `ContextPane.qml`. Modify `WeekPane.qml`. Delete `ContextPane.qml`.
+
+**Approach:** Week gets two sections, "Days" (ribbons and stacked bar) and "Flow" (category-flow canvas), switched by a kit `ButtonGroup`. Flow loads its data only when first shown. Label colors come from tokens.
+
+**Test scenarios:**
+- Flow does not request its data until its section is first selected.
+- `openOn("context")` selects Week with Flow shown.
+- An empty week shows the R24 empty line in Flow.
+
+**Verification:** Shots of both Week sections on both themes.
+
+### U21. Lazy tab host
+
+**Goal:** Make Full View light: one active tab, first-open data load, unload on hide.
+
+**Requirements:** R27.
+
+**Dependencies:** U7.
+
+**Files:** Create `TabHost.qml`. Modify `FullView.qml`.
+
+**Approach:** Each tab body is a `Loader` with `active` bound to "is the current tab". A tab calls its own `refresh()` on first activation and on a "stale" signal, not on construction. Hidden tabs are unloaded, with the small selection state (day, row) held in `FullView`. No tab calls an LLM on open. Overlays (Search, Onboarding, shortcut sheet) are separate loaders.
+
+**Test scenarios:**
+- Opening Full View starts exactly one tab's data calls.
+- Switching tabs deactivates the previous loader and does not re-run a tab's load if its data is fresh.
+- No `ask` or model call happens on any tab open (stub the engine and assert).
+
+**Verification:** Idle memory of Full View with Today open is no higher than the current Full View with Today open; record both numbers in the PR.
+
+### U22. Ask tab: local recap first, LLM on request
+
+**Goal:** Turn the Chat tab into Ask, which shows a recap built from local data and calls a model only when the user asks.
+
+**Requirements:** R27.
+
+**Dependencies:** U21.
+
+**Files:** Rename and modify `ChatTab.qml` to `AskPane.qml`.
+
+**Approach:** On first open, Ask renders a local recap (totals, top categories, last blocks) from existing engine output with no model call. The input box sends a question to `dayflow ask` only on submit. Provider selection and cost hints stay as in ChatTab.
+
+**Test scenarios:**
+- Opening Ask makes no `ask` call and shows the recap.
+- Submitting a question makes exactly one call; failure keeps the typed text and offers Retry.
+
+**Verification:** Engine call log shows zero model calls for a session that only opens tabs.
 
 ---
 

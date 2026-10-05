@@ -4,7 +4,7 @@ A private, automatic work journal for Linux (Omarchy/Hyprland, any wlroots
 compositor). Port of [Dayflow](https://www.dayflow.so/) (macOS). Current
 release: **v1.5.0** (master is ahead of the tag; v1.6.0 pending).
 
-Last updated: 2026-10-03.
+Last updated: 2026-10-05.
 
 ## Shipped
 
@@ -24,6 +24,8 @@ Last updated: 2026-10-03.
 - Batch agent recaps: `agent_recap_batch` submits uncached sessions as one OpenRouter Batch API job (~50% off, async) and collects results on a later pass once the job completes; per-call-site routing lets `agent_recap`/`agent_briefing` run on a different model than chat.
 
 ## Next
+
+0. **Ribbon Log UI, refreshed 2026-10-05** ([plan](docs/plans/2026-10-02-2315-feat-ribbon-log-ui-redesign-plan.md)): after the Pulse dashboard (#58) was reverted (#60), build one tab set once. Full View tabs: Today, Week (with the category flow folded in), Standup, Ask, Agents, Replay, Settings; Search is a Ctrl+K overlay; onboarding is a 3-step overlay. The popup becomes a Week glance (modeled on upstream's week grid) with pause, copy standup, and open Full View. Order: P0 identity and theming (U1-U6), then P1 shared components and lazy tab host (U7, U21), Today/Week/Ask/Settings tabs (U18, U11, U20, U22, U9), Ctrl+K search (U12), Week-glance popup (U10), delete duplicate Today/Week code (U19, about 1,500 lines); then P2 Replay, Agents polish, onboarding, TUI ribbon, marketing assets (U13-U17). Lightweight rule: lazy per-tab data, hidden tabs unloaded, no LLM call on tab open, frames only in Replay. Next up: U1 (fixture day and preview harness).
 
 1. ~~Deploy + flip~~ — done: kurultai redeployed with `remote_ingest`, local
    `knowledge_transport: http`, sync verified landing `lane: "trusted"` in
