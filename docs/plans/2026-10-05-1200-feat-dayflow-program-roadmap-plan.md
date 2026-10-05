@@ -141,7 +141,7 @@ Statuses use: Shipped, Partial, Not started, In review. Evidence is cited in eac
 | ID | Band | Workstream | Title | Status | Depends on |
 |---|---|---|---|---|---|
 | U1 | Now | UI | Ribbon Log P0: fixture day, tokens, purge literals, bar states, app mark, notifications (Ribbon U1-U6) | Not started (plan in review, #61) | none |
-| U2 | Next | UI | Ribbon Log P1: shared components, lazy tab host, Today/Week/Ask/Settings tabs, Ctrl+K search, Week-glance popup, duplicate deletion (Ribbon U7, U21, U18, U11, U20, U22, U9, U12, U10, U19) | Not started | U1, U13 |
+| U2 | Next | UI | Ribbon Log P1: shared components, lazy tab host, Today/Week/Ask/Settings tabs, Ctrl+K search, Week-glance popup, duplicate deletion (Ribbon U7, U21, U8, U18, U11, U20, U22, U9, U12, U10, U19) | Not started | U1, U13 |
 | U3 | Next | UI | Ribbon Log P2: Replay, Agents polish, onboarding overlay, TUI ribbon, marketing assets (Ribbon U13-U17) | Not started | U2 |
 | U4 | Now | Engine | Capture portability: doctor-verified `capture_command` recipes, compositor focus spike | Partial | none |
 | U5 | Now | CI | Close CI coverage gaps | Partial | none |
@@ -170,7 +170,7 @@ Statuses use: Shipped, Partial, Not started, In review. Evidence is cited in eac
 - **Goal:** theming, glyphs, fixture day, bar states, app mark, notifications, so everything later renders on any Omarchy theme.
 - **Requirements:** R1, R9.
 - **Dependencies:** none. Blockers: child Q1 and Q3 hold Ribbon U5 and U4 respectively.
-- **Child plan order (summary):** P0 identity and theming (Ribbon U1-U6); P1 shared components and lazy tab host (U7, U21), Today/Week/Ask/Settings tabs (U18, U11, U20, U22, U9), Ctrl+K search (U12), Week-glance popup (U10), delete duplicate Today/Week code (U19); P2 Replay, Agents polish, onboarding, TUI ribbon, assets (U13-U17). Next up in the child plan: its U1.
+- **Child plan order (summary):** P0 identity and theming (Ribbon U1-U6); P1 shared components and lazy tab host (U7, U21), the tab rail (U8), Today/Week/Ask/Settings tabs (U18, U11, U20, U22, U9), Ctrl+K search (U12), Week-glance popup (U10), delete duplicate Today/Week code (U19); P2 Replay, Agents polish, onboarding, TUI ribbon, assets (U13-U17). Next up in the child plan: its U1.
 - **Files:** per child plan (`Tokens.qml`, `Glyphs.js`, `BarWidget.qml`, `engine/devseed.go`, `scripts/preview/`, `scripts/lint-ui.sh`). Not created yet in this tree.
 - **Status and evidence:** Not started. Child plan refreshed by #61; the refreshed `ROADMAP.md` line 0 says "Next up: U1".
 - **Test scenarios:** per child plan U1 (fixture day renders in two themes, one light; lint gate returns no literal colors).
