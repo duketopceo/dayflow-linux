@@ -691,10 +691,10 @@ Flickable {
 
           Repeater {
             model: [
-              { label: "Title prompt", key: "title_prompt", field: "title" },
-              { label: "Summary prompt", key: "summary_prompt", field: "summary" },
-              { label: "Detailed prompt", key: "detailed_prompt", field: "detailed" },
-              { label: "Chat prompt", key: "chat_prompt", field: "chat" }
+              { label: "Title prompt", key: "title_prompt" },
+              { label: "Summary prompt", key: "summary_prompt" },
+              { label: "Detailed prompt", key: "detailed_prompt" },
+              { label: "Chat prompt", key: "chat_prompt" }
             ]
             delegate: Column {
               id: ovField
@@ -720,7 +720,7 @@ Flickable {
                   id: ovInput
                   anchors.fill: parent
                   anchors.margins: Style.space(5)
-                  text: (provBlock.prov.prompt_overrides && provBlock.prov.prompt_overrides[ovField.spec.field]) || ""
+                  text: (provBlock.prov.prompt_overrides && provBlock.prov.prompt_overrides[ovField.spec.key]) || ""
                   color: dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body

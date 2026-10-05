@@ -156,7 +156,7 @@ FloatingWindow {
   // makes onExited keep the timeout message instead of overwriting it.
   Timer {
     id: agentsWatchdog
-    interval: 75000
+    interval: 300000
     running: agentsProc.running
     repeat: false
     onTriggered: {
