@@ -34,9 +34,7 @@ QtObject {
     (root / 'Commons/Color.qml').write_text('''pragma Singleton
 import QtQuick
 QtObject {
- property bool light: false
- property color foreground: light ? "#202020" : "#e4e4e4"
- property QtObject popups: QtObject {property color background: light ? "#f5f5f5" : "#171b24"; property color text: foreground}
+ property color foreground: "#e4e4e4"
  property color muted: "#a5a5a5"
  property color dim: muted
  property color accent: "#7aa2f7"

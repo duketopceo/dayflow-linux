@@ -7,10 +7,9 @@ Rectangle {
   property string text: ""
   property bool active: false
   signal clicked()
-  implicitWidth: label.implicitWidth + 14
-  implicitHeight: 26
-  radius: 8
-  Behavior on color { ColorAnimation { duration: 120 } }
+  implicitWidth: label.implicitWidth + Style.space(14)
+  implicitHeight: Style.space(26)
+  radius: Style.cornerRadius
   color: dayflow ? (active ? dayflow.accentFill(0.16) : dayflow.btnBg(mouse.containsMouse)) : "transparent"
   border.color: dayflow ? dayflow.accentFill(active ? 0.6 : 0.25) : Color.accent
   opacity: enabled ? 1 : 0.45
