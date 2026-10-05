@@ -17,6 +17,7 @@ parser.add_argument('--scale',type=float,default=1,help='Theme spacing scale')
 parser.add_argument('--demo', action='store_true', help='Use shareable synthetic demo data')
 parser.add_argument('--font-size', type=int, default=12)
 parser.add_argument('--minimum-window', action='store_true', help='Verify the 1100x660 floating window with its 16px margins')
+parser.add_argument('--surface-switch', action='store_true', help='Check explicit app opening, return and close using the real state and window')
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='dayflow-ui-') as directory:
@@ -27,6 +28,33 @@ with tempfile.TemporaryDirectory(prefix='dayflow-ui-') as directory:
     (root / 'Ui').mkdir()
     (root / 'Ui/qmldir').write_text('module qs.Ui\nPlaceholder 1.0 Placeholder.qml\n')
     (root / 'Ui/Placeholder.qml').write_text('import QtQuick\nQtObject {}\n')
+    if args.surface_switch:
+        (root / 'Ui/qmldir').write_text('module qs.Ui\nPanel 1.0 Panel.qml\nKeyboardPanel 1.0 KeyboardPanel.qml\nPanelKeyCatcher 1.0 PanelKeyCatcher.qml\n')
+        (root / 'Ui/Panel.qml').write_text('''import QtQuick
+Item {
+ property var bar: null
+ property string moduleName: ""
+ property bool manageIpc: false
+ readonly property bool opened: controller.open
+ property QtObject controller: QtObject {
+  property bool open: false
+  function show() { open=true }
+  function hide() { open=false }
+ }
+}
+''')
+        (root / 'Ui/KeyboardPanel.qml').write_text('''import QtQuick
+Item {
+ property var anchorItem; property var owner; property var bar; property bool open:false
+ property var focusTarget; property real contentWidth; property real contentHeight
+ width:contentWidth; height:contentHeight; visible:open
+ function fittedContentWidth(value){return 1400}
+ function fittedContentHeight(value){return 780}
+}
+''')
+        (root / 'Ui/PanelKeyCatcher.qml').write_text('''import QtQuick
+Item { signal closeRequested(); signal tabRequested(int direction) }
+''')
     (root / 'Commons/qmldir').write_text('module qs.Commons\nsingleton Style 1.0 Style.qml\nsingleton Color 1.0 Color.qml\n')
     (root / 'Commons/Style.qml').write_text('''pragma Singleton
 import QtQuick
@@ -57,7 +85,7 @@ QtObject {
     # No real configuration, capture, provider or systemd command can run.
     (bin_dir / 'dayflow').write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"providers":[],"presets":[],"agents":{}}\'\n')
     (bin_dir / 'dayflow').chmod(0o700)
-    harness = Path(__file__).with_name('fit-dashboard.qml').read_text()
+    harness = Path(__file__).with_name('surface-switch.qml' if args.surface_switch else 'fit-dashboard.qml').read_text()
     (root / 'shell.qml').write_text(harness.replace('OUTPUT_PATH', json.dumps(str(args.output.resolve()))).replace('CASE_FILTER',json.dumps(args.filter)).replace('DEMO_MODE','true' if args.demo else 'false').replace('MINIMUM_WINDOW','true' if args.minimum_window else 'false'))
     env = os.environ.copy()
     env['PATH'] = str(bin_dir) + ':' + env['PATH']
@@ -75,5 +103,5 @@ QtObject {
     if result.returncode or failures or 'FIT_COMPLETE' not in log:
         raise SystemExit('\n'.join(failures) or log[-5000:])
     summaries = [line[line.index('FIT_RESULT'): ] for line in log.splitlines() if 'FIT_RESULT' in line]
-    print(f'{len(summaries)} complete dashboard scenarios passed')
+    print('Explicit surface switching checks passed' if args.surface_switch else f'{len(summaries)} complete dashboard scenarios passed')
     print('All runtime fit checks passed; captures:', args.output)

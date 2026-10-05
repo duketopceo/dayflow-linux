@@ -127,6 +127,19 @@ Ui.Panel {
     dayflow.controller.hide()
   }
 
+  // Only the explicit dashboard action switches surfaces. Opening the bar
+  // plugin, refreshing data and changing tabs never create an app window.
+  function openApp() {
+    close()
+    fullViewOpen = true
+  }
+
+  function returnToPlugin() {
+    fullViewOpen = false
+    // The app Loader is destroyed first; the popup keeps this shared state.
+    Qt.callLater(function() { dayflow.open() })
+  }
+
   function switchPanel(direction) {
     if (dayflow.bar && typeof dayflow.bar.switchPanelFrom === "function")
       return dayflow.bar.switchPanelFrom(dayflow.hostWidget || dayflow, direction)
