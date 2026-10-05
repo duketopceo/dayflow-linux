@@ -2,16 +2,16 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Ui
 
-Item {
+Flickable {
   id: root
   property var dayflow: parent && parent.panel ? parent.panel : null
   width: parent.width
-  implicitHeight: col.implicitHeight
+  implicitHeight: Math.min(col.implicitHeight, Style.space(360))
   height: implicitHeight
-  property int cardIndex: 0
-  readonly property int cardCount: dayflow ? dayflow.spans.length : 0
-  onCardCountChanged: cardIndex = Math.max(0,Math.min(cardIndex,cardCount-1))
+  contentHeight: col.implicitHeight
+  clip: true
 
   Column {
     id: col
@@ -23,8 +23,6 @@ Item {
       pal: dayflow
       active: dayflow.timelineLoading
     }
-
-    CompletionFeed { width: parent.width; dayflow: root.dayflow; records: root.dayflow.completions || []; visible: records.length > 0 }
 
     // ---- day switcher ----
     Row {
@@ -206,7 +204,7 @@ Item {
     }
 
     Text {
-      visible: dayflow.spans.length === 0 && dayflow.completions.length === 0 && dayflow.errorText === "" && dayflow.configured
+      visible: dayflow.spans.length === 0 && dayflow.errorText === "" && dayflow.configured
       width: parent.width
       text: "Nothing summarized yet — blocks land once per block interval (15 min by default)."
       textFormat: Text.PlainText
@@ -216,15 +214,8 @@ Item {
       wrapMode: Text.WordWrap
     }
 
-    Row {
-      visible: root.cardCount > 0
-      spacing: Style.space(5)
-      CompactButton { dayflow: root.dayflow; text: "‹"; enabled: root.cardIndex > 0; onClicked: root.cardIndex-- }
-      Text { anchors.verticalCenter: parent.verticalCenter; text: "Screen summaries · " + (root.cardIndex+1) + " / " + root.cardCount; color: root.dayflow.dim; font.family: root.dayflow.fontFamily; font.pixelSize: Math.max(12,Style.font.caption) }
-      CompactButton { dayflow: root.dayflow; text: "›"; enabled: root.cardIndex+1 < root.cardCount; onClicked: root.cardIndex++ }
-    }
     Repeater {
-      model: dayflow.spans.slice(root.cardIndex, root.cardIndex+1)
+      model: dayflow.spans
 
       delegate: Rectangle {
         id: cardRoot
@@ -355,9 +346,30 @@ Item {
             }
           }
 
-          PagedText {
-            width: parent.width; dayflow: root.dayflow; bodyHeight: Style.space(54)
-            text: modelData.title + "\n" + modelData.summary
+            Text {
+              width: parent.width
+            text: modelData.title
+            textFormat: Text.PlainText
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.body
+              font.bold: true
+              wrapMode: Text.WordWrap
+              maximumLineCount: 2
+              elide: Text.ElideRight
+          }
+
+          Text {
+            width: parent.width
+            text: modelData.summary
+            textFormat: Text.PlainText
+            color: dayflow.foreground
+            opacity: 0.75
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.body
+            wrapMode: Text.WordWrap
+            maximumLineCount: 3
+            elide: Text.ElideRight
           }
 
           // ---- inline edit form (title, category, productive) ----
@@ -492,14 +504,35 @@ Item {
             }
           }
 
-          PagedText {
-            width: parent.width; dayflow: root.dayflow; bodyHeight: Style.space(26)
-            text: modelData.count > 1
-              ? (modelData.children || []).map(function(c) { return c.start + " " + c.title }).join("\n")
-              : (((modelData.children || [])[0] || {}).activities || []).map(function(a) { return root.dayflow.appDisplayName(a.app) + " · " + a.title }).join("\n")
-            visible: text !== ""
+          // Merged span: one row per underlying 15-min block.
+          Repeater {
+            model: modelData.count > 1 ? modelData.children : []
+
+            delegate: Text {
+              width: parent.width
+              text: "· " + modelData.start + " " + modelData.title
+              textFormat: Text.PlainText
+              color: dayflow.dim
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
           }
 
+          // Single block: per-app segments as before.
+          Repeater {
+            model: modelData.count === 1 ? (modelData.children[0].activities || []) : []
+
+            delegate: Text {
+              width: parent.width
+              text: dayflow.appDisplayName(modelData.app) + " · " + modelData.title
+              textFormat: Text.PlainText
+              color: dayflow.dim
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+          }
         }
       }
     }

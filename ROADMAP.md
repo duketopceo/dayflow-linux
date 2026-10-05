@@ -14,7 +14,7 @@ Last updated: 2026-10-03.
 - OpenRouter app attribution (`HTTP-Referer` + `X-Title`) on every call, including model listing (#46).
 - macOS-parity v1.3; v1.4 facelift; completion program (focus capture, notifications, FTS5 search, usage stats, drift-watch) merged.
 - Omarchy marketplace listing (`io.github.duketopceo.dayflow`) with automated install: `scripts/install.sh` pins the engine binary to the plugin's manifest version, verifies SHA256SUMS before placing it in `~/.local/bin`, and enables the systemd user units; the widget surfaces a one-click install when the binary is missing.
-- Agents pane (FullView) + Agents tab (compact panel); per-source conversation stats — sessions, active time, turns (#42, #44).
+- Agents pane (FullView); per-source conversation stats — sessions, active time, turns (#42, #44).
 - Agents briefing watchdog raised 75s→300s with a "still working" hint — fixes the pane never loading while live sessions invalidate the fingerprint mid-build (#43).
 - Complete local agent-chat indexing: FTS5 over all five harnesses, bounded retrieval feeding `ask`/chat; runaway safeguards (deadlines, byte budgets, watermarks, partial-write safety).
 - Keyring-outage hardening: pre-flight key check + auto-heal so a locked omaseal can't silently starve summarization (#41).
