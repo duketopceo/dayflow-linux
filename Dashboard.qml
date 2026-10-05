@@ -44,7 +44,8 @@ Item {
         }
         CompactButton { dayflow: root.dayflow; text: root.dayflow.paused ? "Resume" : "Pause"; enabled: root.ready; onClicked: root.dayflow.toggleCapture() }
         CompactButton { dayflow: root.dayflow; text: "Refresh"; onClicked: root.dayflow.refreshAll() }
-        CompactButton { dayflow: root.dayflow; text: root.floating ? "Close" : "Full window"; onClicked: { if (root.floating) root.closeRequested(); else { root.dayflow.fullViewOpen = true; root.dayflow.close() } } }
+        CompactButton { objectName: "surfaceSwitch"; dayflow: root.dayflow; text: root.floating ? "Back to plugin" : "Pop out to app"; onClicked: { if (root.floating) root.dayflow.returnToPlugin(); else root.dayflow.openApp() } }
+        CompactButton { visible: root.floating; dayflow: root.dayflow; text: "Close"; onClicked: root.closeRequested() }
       }
     }
     Row {

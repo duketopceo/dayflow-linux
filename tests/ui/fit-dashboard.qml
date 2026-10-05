@@ -89,6 +89,8 @@ ShellRoot {
     function saveDraft(){}
     function refreshAll(){}
     function close(){}
+    function openApp(){fullViewOpen=true}
+    function returnToPlugin(){fullViewOpen=false}
     function toggleCapture(){}
     function ignoreCurrentApp(){}
     function summarizeNow(){}
@@ -113,7 +115,7 @@ ShellRoot {
       x: 40; y: 90
       width: window.width - 80
       height: window.height - 180
-      Dashboard { id: dashboard; anchors.fill:parent; dayflow:model }
+      Dashboard { id: dashboard; anchors.fill:parent; dayflow:model; floating:MINIMUM_WINDOW }
     }
     PagedText {
       id: textProbe

@@ -11,7 +11,7 @@ FloatingWindow {
   implicitWidth: 1440
   implicitHeight: 820
   minimumSize: Qt.size(1100, 660)
-  visible: dayflow !== null
+  visible: dayflow !== null && dayflow.fullViewOpen
   Loader {
     anchors.fill: parent; anchors.margins: 16
     active: root.dayflow !== null

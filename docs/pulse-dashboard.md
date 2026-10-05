@@ -5,6 +5,11 @@ wide cards, prominent live status and compact navigation. It uses the current
 Omarchy popup palette and font. Overview, Standup, Chat, Week, Agents, Context,
 Timelapse and Settings are available on both surfaces.
 
+The plugin popup is the default surface. **Pop out to app** opens the standalone
+window only when selected. **Back to plugin** closes that window and reopens the
+popup on the same page; **Close** dismisses the window. Opening the plugin,
+changing tabs or refreshing data never opens the app automatically.
+
 ![Dayflow dashboard with synthetic demonstration data](images/pulse-dashboard.png)
 
 Overview displays captured activity, screen summaries and finished agent replies
@@ -42,6 +47,7 @@ configuration is introduced by the interface change.
 python tests/ui/verify-dashboard.py
 python tests/ui/verify-dashboard.py --filter 1280x720-dark --font-size 16 --scale 1.333333
 python tests/ui/verify-dashboard.py --minimum-window --font-size 14 --scale 1.166667
+python tests/ui/verify-dashboard.py --surface-switch
 python tests/ui/verify-fit.py
 python tests/ui/verify-completions.py
 ```
