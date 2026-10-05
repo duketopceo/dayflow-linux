@@ -41,10 +41,18 @@ release.
    the GitHub release. `scripts/install.sh` pins plugin manifest → release.
 5. **Known regressions accepted on restore** (flag in PR body): Settings can
    overflow small panels again (the bug #55 addressed); `decisions_url`,
-   `knowledge_transport`, `agent_completions`, provider prompt overrides have
+   `knowledge_transport`, `agent_completions` have
    no Settings fields (CLI/`config.json` only — README config table covers
    them); compact-panel Agents tab and completion feed disappear (engine
-   keeps recording; `dayflow` CLI still surfaces them).
+   keeps recording; `dayflow` CLI still surfaces them). Erratum: provider
+   prompt overrides DO have classic Settings fields (the advanced editor
+   predates the pin) — remove them from this list.
+   Carries forward (surgical, keep the bug dead without the new look):
+   #52 `delete patch.providers`/`delete patch.routing` in saveConfig;
+   #43 watchdog interval 75s→300s in FullView (the fix lived in
+   AgentBriefingLoader.qml, which the restore deletes); `prompt_overrides`
+   display reads `spec.key` (master's fix — the pinned `spec.field` names
+   were never emitted by the engine).
 
 ## Requirements traceability
 

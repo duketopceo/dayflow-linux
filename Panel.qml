@@ -170,6 +170,7 @@ Panel {
   function saveConfig() {
     var patch = dayflow.cloneConfig(dayflow.configDraft)
     if (patch.openrouter_api_key === "***redacted***") delete patch.openrouter_api_key
+    if (patch.decisions_api_key === "***redacted***") delete patch.decisions_api_key
     // Advanced provider fields are saved independently. Round-tripping this
     // stale snapshot would undo prompt overrides written since loadConfig.
     delete patch.providers

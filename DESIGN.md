@@ -69,7 +69,7 @@ Verdicts: **keep** (works, polish only), **rework** (right job, wrong form),
 | S4 | Standup | `StandupTab.qml`, `DailyWorkflowGrid.qml` | Draft fields, copy, 15-min grid | Good job, wrong home: a tab. `✓` text glyph | **rework** (becomes a sheet/command) |
 | S5 | Chat | `ChatTab.qml` | Q&A over journal | Unlikely to be used at 540 px; competes with MCP + CLI which do this better | **cut from popup**, keep in Full View |
 | S6 | Week | `WeekTab.qml`, `WeekPane.qml` | Week list with colored bars, donut, treemap, trends | Popup week view is a flat text list; analytics only legible in Full View | **rework**: popup gets a 7-day strip only |
-| S7 | Agents | `AgentsPane.qml` | Workstream briefing, status chips with hardcoded RGB | Hardcoded status colors (blue/green/red/gray) ignore theme; strong content, weak hierarchy | **rework** |
+| S7 | Agents | `AgentsTab.qml`, `AgentsPane.qml`, `AgentBriefingLoader.qml` | Workstream briefing, status chips with hardcoded RGB | Hardcoded status colors (blue/green/red/gray) ignore theme; strong content, weak hierarchy | **rework** |
 | S8 | Full View window | `FullView.qml` | 840x560 min floating window, left rail (`Today Week Timelapse Context Agents`) | Right structure. Missing: search, a real time axis, keyboard nav, and it duplicates the popup instead of deepening it | **keep shell, redo panes** |
 | S9 | Timelapse | `TimelapsePane.qml` | Frame playback (opt-in retention) | Hardcoded `"black"` background; playback disconnected from the timeline (cannot scrub from a card) | **rework**: becomes the scrubber under the ribbon |
 | S10 | Context shifts | `ContextPane.qml` | Canvas flow of app switches | Hardcoded `Qt.rgba(0.8,0.8,0.85,0.9)` label color breaks light themes | **rework** |
