@@ -5,17 +5,17 @@
   "version": "1.5.0",
   "author": "lukedaduke",
   "license": "MIT",
-  "description": "Private, automatic work journal for Omarchy and Hyprland. Records your screen, summarizes every 15-minute block with a vision model, and shows a timeline plus standup and insights in the bar panel.",
+  "description": "Private work journal with a Pulse-style dashboard, live capture status, immediate agent replies, standup, chat and weekly insights.",
   "kinds": [
     "bar-widget"
   ],
   "activation": "on-demand",
   "entryPoints": {
-    "barWidget": "BarWidget.qml"
+    "barWidget": "DashboardBar.qml"
   },
   "barWidget": {
     "displayName": "Dayflow",
-    "description": "Automatic work journal with standup updates, focus analytics, and pause/resume from the bar.",
+    "description": "Live work dashboard, agent completions, standup, analytics and playback, with pause/resume from the bar.",
     "category": "Productivity",
     "allowMultiple": false,
     "defaultSection": "right"
