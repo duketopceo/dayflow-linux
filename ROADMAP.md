@@ -2,11 +2,11 @@
 
 A private, automatic work journal for Linux (Omarchy/Hyprland, any wlroots
 compositor). Port of [Dayflow](https://www.dayflow.so/) (macOS). Current
-release: **v1.5.0** (master is ahead of the tag; v1.6.0 pending).
+release: **v1.6.0** (tag pending; master = release content).
 
 Last updated: 2026-10-05.
 
-## Shipped
+## Shipped — v1.6.0
 
 - 10s capture → dedupe → 15-min vision-model summaries (OpenRouter, ~$0.09/M tokens), local-first storage.
 - Jev classification for category + productive flag; opt-in agent-session recaps (Claude Code, Codex, OpenCode, Devin, Cursor).
@@ -29,8 +29,9 @@ Last updated: 2026-10-05.
    `knowledge_transport: http`, sync verified landing `lane: "trusted"` in
    default search.
 2. Per-agent-conversation playback ranges (upstream `AgentPlaybackView` parity; stats half shipped in #44).
-3. v1.6.0 tag — everything on the list except the playback item above is shipped; cut when ready.
-4. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
+3. Classic-UI polish/redesign — gated track (U3 of the v1.6.0 plan): dense, specific, not bloated; design brief first, incremental on the classic architecture.
+4. Open issues: #2 morning/evening reflections UI, #3 summary quality ratings, #4 streaming chat.
+5. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
 
 Resolved dead-ends: Flow parity (upstream Flow is a hosted waitlist product, nothing local to port); Fable integration (declined).
 

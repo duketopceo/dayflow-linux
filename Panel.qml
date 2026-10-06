@@ -58,7 +58,7 @@ Panel {
   property bool fullViewOpen: false
   // Bump with manifest.json version — compared against the engine's
   // reported version to warn when the plugin and binary drift apart.
-  readonly property string pluginVersion: "1.5.0"
+  readonly property string pluginVersion: "1.6.0"
   property string engineVersion: ""
   // Engine install state: statusProc's FailedToStart path sets
   // engineMissing (binary absent → InstallPrompt surface instead of
