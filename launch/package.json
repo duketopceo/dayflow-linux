@@ -1,0 +1,21 @@
+{
+  "name": "dayflow-launch-video",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dayflow for Linux launch video — 'what did you actually do today'. Isolated Remotion project; never shipped in the engine or plugin.",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts DayflowLaunch out/dayflow-launch.mp4",
+    "qc": "bash scripts/qc.sh"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.532",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "remotion": "4.0.532"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.0",
+    "typescript": "5.8.3"
+  }
+}
