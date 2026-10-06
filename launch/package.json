@@ -1,0 +1,21 @@
+{
+  "name": "dayflow-launch-video",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Dayflow for Linux launch video — 'the day that writes itself'. Isolated Remotion project; never shipped in the engine or plugin.",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts DayflowLaunchV2 out/dayflow-v2-16x9.mp4",
+    "qc": "bash scripts/qc.sh"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.532",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "remotion": "4.0.532"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.0",
+    "typescript": "5.8.3"
+  }
+}
