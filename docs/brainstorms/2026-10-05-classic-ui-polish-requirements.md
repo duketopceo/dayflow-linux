@@ -8,7 +8,7 @@ Tighten the classic Dayflow popup UI — the v1.6.0 baseline — into a "tight a
 
 ## Problem Frame
 
-The classic popup is the daily surface again after two rejected alternatives — the Pulse dashboard read as "huge and empty and overdone, not tight and neat." Three concrete gaps remain: ~39 hand-rolled card literals re-derive the same visual loosely across 12 files; every tab renders a four-row bottom chrome stack (quick-action Flow, version banner, status caption, notice text); and `Settings.qml` both overflows small panels and fields only ~16 of ~30 engine config keys — `decisions_url`, `knowledge_transport`, `agent_completions`, `ignore_apps`, `jev_classification`, `classification_model`, `routing`, `providers` are CLI-only today.
+The classic popup is the daily surface again after two rejected alternatives — the Pulse dashboard read as "huge and empty and overdone, not tight and neat." Three concrete gaps remain: ~39 hand-rolled card literals re-derive the same visual loosely across 12 files; every tab renders a four-row bottom chrome stack (quick-action Flow, version banner, status caption, notice text); and `Settings.qml` both overflows small panels and fields only ~16 of ~44 json-tagged engine config keys — `decisions_url`, `knowledge_transport`, `agent_completions`, `ignore_apps`, `jev_classification`, `classification_model`, `routing`, `providers` are CLI-only today.
 
 ## Key Decisions
 
