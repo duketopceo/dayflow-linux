@@ -14,7 +14,6 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
   property var blocks: []
-  property var completions: []
   property string dateLabel: ""
   property bool paused: false
   property bool configured: true
@@ -77,20 +76,6 @@ Panel {
       decodeURIComponent(String(Qt.resolvedUrl("scripts/install.sh")).replace(/^file:\/\//, ""))
   readonly property bool engineInstalling: engineInstallProc.running
 
-  // Agents tab briefing state — AgentBriefingLoader is shared with
-  // FullView's rail section; the aliases give AgentsTab the same
-  // host.* surface the pane already uses there.
-  AgentBriefingLoader {
-    id: agentLoader
-    panel: dayflow
-  }
-  readonly property alias agentBriefing: agentLoader.briefing
-  readonly property alias agentSources: agentLoader.sources
-  readonly property alias agentRecapsEnabled: agentLoader.recapsEnabled
-  readonly property alias agentsLoading: agentLoader.loading
-  readonly property alias agentsError: agentLoader.error
-  function agentsLoad(refresh) { agentLoader.load(refresh) }
-
   function lastLine(t) {
     var lines = String(t).split("\n").filter(function(l) { return l.trim() !== "" })
     return lines.length ? lines[lines.length - 1].trim() : ""
@@ -143,12 +128,6 @@ Panel {
       if (!weeklyProc.running) weeklyProc.running = true
     } else if (tab === "settings") {
       if (!configProc.running) configProc.running = true
-    } else if (tab === "agents") {
-      // Lazy + staleness-aware: load once, reload when the viewed day
-      // drifted since the briefing was fetched.
-      if (dayflow.agentBriefing === null ||
-          (dayflow.agentBriefing.day || "") !== dayflow.viewDateStr())
-        dayflow.agentsLoad(false)
     }
     // "chat" loads its own processes when the Loader instantiates ChatTab
   }
@@ -161,13 +140,6 @@ Panel {
     if (dayflow.engineMissing) return
     dayflow.loadTimeline()
     refreshForTab(dayflow.currentTab)
-  }
-
-  Timer {
-    interval: 2000
-    repeat: true
-    running: dayflow.opened && dayflow.currentTab === "today" && !dayflow.engineMissing
-    onTriggered: if (!timelineProc.running) dayflow.loadTimeline()
   }
 
   onCurrentTabChanged: refreshForTab(currentTab)
@@ -198,6 +170,7 @@ Panel {
   function saveConfig() {
     var patch = dayflow.cloneConfig(dayflow.configDraft)
     if (patch.openrouter_api_key === "***redacted***") delete patch.openrouter_api_key
+    if (patch.decisions_api_key === "***redacted***") delete patch.decisions_api_key
     // Advanced provider fields are saved independently. Round-tripping this
     // stale snapshot would undo prompt overrides written since loadConfig.
     delete patch.providers
@@ -373,7 +346,6 @@ Panel {
     try {
       var d = JSON.parse(raw)
       dayflow.blocks = d.blocks || []
-      dayflow.completions = d.completions || []
       // Engine-merged cards (mergeCards in Go), newest first to match the
       // timeline's previous display order. null distinguishes a missing
       // key (older binary) from a genuinely empty array.
@@ -397,7 +369,6 @@ Panel {
       dayflow.syncSkewError()
     } catch (e) {
       dayflow.blocks = []
-      dayflow.completions = []
       dayflow.spans = []
       dayflow.errorText = "could not read timeline"
     }
@@ -1196,7 +1167,7 @@ Panel {
     bar: dayflow.bar
     open: dayflow.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(dayflow.currentTab === "settings" && dayflow.configured ? Style.space(1180) : (dayflow.expanded ? Style.space(780) : Style.space(620)))
+    contentWidth: panel.fittedContentWidth(dayflow.expanded ? Style.space(780) : Style.space(540))
     contentHeight: panel.fittedContentHeight(content.implicitHeight)
 
     PanelKeyCatcher {
@@ -1321,7 +1292,7 @@ Panel {
           spacing: Style.space(4)
 
           Repeater {
-            model: ["today", "standup", "chat", "week", "agents", "settings"]
+            model: ["today", "standup", "chat", "week", "settings"]
 
             delegate: Rectangle {
               height: Style.space(26)
@@ -1362,16 +1333,19 @@ Panel {
 
         // ---- error / not-configured states ----
         Column {
-          visible: (dayflow.errorText !== "" && dayflow.currentTab !== "settings") || !dayflow.configured
+          visible: dayflow.errorText !== "" || !dayflow.configured
           width: parent.width - content.leftPadding - content.rightPadding
           spacing: Style.space(4)
 
-          PagedText {
+          Text {
             visible: dayflow.errorText !== ""
             width: parent.width
-            dayflow: tabLoader.panel
-            bodyHeight: Style.space(26)
             text: "! " + dayflow.errorText
+            textFormat: Text.PlainText
+            color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.body
+            wrapMode: Text.WordWrap
           }
 
           Text {
@@ -1400,7 +1374,6 @@ Panel {
             if (dayflow.currentTab === "standup") return "StandupTab.qml"
             if (dayflow.currentTab === "chat") return "ChatTab.qml"
             if (dayflow.currentTab === "week") return "WeekTab.qml"
-            if (dayflow.currentTab === "agents") return "AgentsTab.qml"
             return "Settings.qml"
           }
           source: pickSource()
@@ -1607,14 +1580,18 @@ Panel {
           elide: Text.ElideRight
         }
 
-        PagedText {
-          visible: dayflow.notice !== "" && dayflow.currentTab !== "settings"
+        Text {
+          visible: dayflow.notice !== ""
           width: parent.width - content.leftPadding - content.rightPadding
-          dayflow: tabLoader.panel
-          bodyHeight: Style.space(26)
           text: dayflow.notice
+          textFormat: Text.PlainText
+          color: dayflow.noticeIsError && Color.urgent !== undefined
+            ? Color.urgent
+            : (Color.accent !== undefined ? Color.accent : dayflow.foreground)
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
         }
-
       }
     }
   }

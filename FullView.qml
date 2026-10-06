@@ -38,19 +38,138 @@ FloatingWindow {
   }
 
   // ---- agents pane state ----
-  // Briefing machinery lives in AgentBriefingLoader (shared with the
-  // compact panel's Agents tab); these forwards keep the AgentsPane host
-  // contract intact.
-  AgentBriefingLoader {
-    id: agentLoader
-    panel: root.dayflow
+  // The day's briefing payload from `dayflow briefing --json`:
+  // {day, mode, recaps_enabled, workstreams[], sources[]} — null until the
+  // first load so the pane can distinguish "not loaded" from "empty day".
+  property var agentBriefing: null
+  // Per-source scan status ({source, sessions, status, note?, drift?}) —
+  // surfaced so an unavailable or drifted store doesn't read as a quiet day.
+  property var agentSources: []
+  // recaps_enabled from briefing --json. Defaults true so a pre-field binary
+  // doesn't flash the opt-in hint; false only when the engine says so.
+  property bool agentRecapsEnabled: true
+  property bool agentsLoading: false
+  property string agentsError: ""
+
+  function agentsLoad(refresh) {
+    if (!root.dayflow) return
+    root.dayflow.uilog("agents load " + root.dayflow.viewDateStr() + (refresh ? " (refresh)" : ""))
+    root.agentsRun = root.agentsRun + 1
+    root.agentsTimedOut = false
+    var cmd = ["dayflow", "briefing", root.dayflow.viewDateStr(), "--json"]
+    if (refresh) cmd.push("--refresh")
+    agentsProc.command = cmd
+    root.agentsLoading = true
+    if (agentsProc.running) {
+      if (refresh === true || root.agentsPending !== "refresh")
+        root.agentsPending = refresh === true ? "refresh" : "load"
+    } else {
+      // Stamp the run on the process only at actual start — callbacks from a
+      // still-terminating previous run then fail the runId check.
+      agentsProc.runId = root.agentsRun
+      agentsProc.running = true
+    }
   }
-  readonly property alias agentBriefing: agentLoader.briefing
-  readonly property alias agentSources: agentLoader.sources
-  readonly property alias agentRecapsEnabled: agentLoader.recapsEnabled
-  readonly property alias agentsLoading: agentLoader.loading
-  readonly property alias agentsError: agentLoader.error
-  function agentsLoad(refresh) { agentLoader.load(refresh) }
+
+  // Runs the pending reload/refresh recorded by agentsLoad when a process
+  // was mid-flight. A queued refresh outranks a queued load.
+  function agentsDrainPending() {
+    var pending = root.agentsPending
+    root.agentsPending = ""
+    if (pending !== "") root.agentsLoad(pending === "refresh")
+  }
+
+  Process {
+    id: agentsProc
+    property int runId: 0
+    command: ["dayflow", "briefing", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        // Stale callbacks from a previous process (or a watchdog-killed run)
+        // carry old results — ignore them so a fresh run's state and the
+        // timeout message survive. (streamFinished can fire on exit.)
+        if (agentsProc.runId !== root.agentsRun || root.agentsTimedOut) return
+        root.agentsLoading = false
+        try {
+          var d = JSON.parse(text)
+          // Day changed mid-run — this payload is for the old day; the
+          // queued reload (drained on exit) owns state now.
+          if (root.dayflow && d.day !== root.dayflow.viewDateStr()) return
+          root.agentBriefing = d
+          root.agentSources = d.sources || []
+          root.agentRecapsEnabled = d.recaps_enabled !== false
+          root.agentsError = ""
+        } catch (e) {
+          root.agentBriefing = null
+          root.agentSources = []
+          root.agentsError = "could not load agent briefing"
+        }
+      }
+    }
+    onExited: function(exitCode) {
+      if (agentsProc.runId !== root.agentsRun) {
+        // A previous process's exit — never touch the new run's state, but
+        // still service the queued reload it was waiting on.
+        Qt.callLater(root.agentsDrainPending)
+        return
+      }
+      root.agentsLoading = false
+      if (exitCode !== 0 && !root.agentsTimedOut) {
+        root.agentBriefing = null
+        root.agentSources = []
+        root.agentsError = "agent briefing failed"
+      }
+      // Defer the drain until every callback for this dead run has fired —
+      // restarting here would restamp runId and let the old run's remaining
+      // callbacks (exited/runningChanged/streamFinished) misattribute to it.
+      Qt.callLater(root.agentsDrainPending)
+    }
+    // FailedToStart emits neither exited nor streamFinished — clear the
+    // flag and drain the queue so the bar never sticks.
+    onRunningChanged: {
+      if (!agentsProc.running) {
+        if (agentsProc.runId !== root.agentsRun) {
+          Qt.callLater(root.agentsDrainPending)
+          return
+        }
+        root.agentsLoading = false
+        // If neither exited nor streamFinished ran (FailedToStart — e.g.
+        // dayflow missing from PATH), no callback sets an error: check
+        // after they settle so the pane reports failure, not blank.
+        Qt.callLater(function() {
+          if (agentsProc.runId === root.agentsRun && !agentsProc.running
+              && root.agentBriefing === null && root.agentsError === ""
+              && root.agentsPending === "")
+            root.agentsError = "agent briefing failed"
+        })
+        Qt.callLater(root.agentsDrainPending)
+      }
+    }
+  }
+
+  // Watchdog: the engine bounds recap generation internally (~45s), but a
+  // wedged provider or hung scan could still outlive it — kill the process
+  // and surface the metadata-only state rather than spinning forever.
+  // agentsPending is cleared BEFORE stopping so onRunningChanged doesn't
+  // see a queued reload and restart the proc it just killed; agentsTimedOut
+  // makes onExited keep the timeout message instead of overwriting it.
+  Timer {
+    id: agentsWatchdog
+    interval: 300000
+    running: agentsProc.running
+    repeat: false
+    onTriggered: {
+      if (root.dayflow) root.dayflow.uilog("agents watchdog: killing hung agentsProc")
+      root.agentsPending = ""
+      root.agentsTimedOut = true
+      agentsProc.running = false
+      root.agentsLoading = false
+      root.agentBriefing = null
+      root.agentSources = []
+      root.agentsError = "agent briefing timed out"
+    }
+  }
 
   // ---- context-shift graph ----
   // Bipartite flow: same categories on both columns, links sized by minutes.
@@ -82,6 +201,9 @@ FloatingWindow {
   property string tlError: ""
 
   property bool tlPending: false
+  property string agentsPending: ""
+  property bool agentsTimedOut: false
+  property int agentsRun: 0
 
   function tlLoad() {
     if (!root.dayflow) return
@@ -363,8 +485,16 @@ FloatingWindow {
       root.tlFrames = []
       root.tlIndex = 0
       root.tlPlaying = false
-      // The loader invalidates stale briefing state itself on dayOffset —
-      // hosts only decide whether the now-visible section needs a reload.
+      root.agentBriefing = null
+      root.agentSources = []
+      root.agentsError = ""
+      // Invalidate any in-flight briefing run — its payload is for the old
+      // day. Queue a reload so fresh data is ready whichever section the
+      // user lands on; the run's exit drains this.
+      if (root.agentsLoading) {
+        root.agentsRun = root.agentsRun + 1
+        if (root.agentsPending !== "refresh") root.agentsPending = "load"
+      }
       if (root.section === "timelapse") root.tlLoad()
       if (root.section === "agents") root.agentsLoad(false)
     }

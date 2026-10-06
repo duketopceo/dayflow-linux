@@ -65,61 +65,6 @@ Column {
     return t
   }
 
-  // Per-source aggregates: sessions, active span, turn count — the "stats
-  // by AI conversation" strip. Derived from the same payload, no extra
-  // process.
-  // Clamp to the briefing day — sessions persist across days, so a raw
-  // started_at→ended_at span overcounts massively.
-  readonly property var sourceStats: sourceStatsOf(workstreams)
-  function sourceStatsOf(ws) {
-    var dayStart = 0, dayEnd = 0
-    if (pane.briefing && pane.briefing.day) {
-      var d = new Date(pane.briefing.day + "T00:00:00")
-      dayStart = d.getTime() / 1000
-      dayEnd = dayStart + 86400
-    }
-    var bySrc = {}
-    var order = []
-    for (var i = 0; i < ws.length; i++) {
-      var ths = ws[i].threads || []
-      for (var j = 0; j < ths.length; j++) {
-        var th = ths[j]
-        var src = th.source || "unknown"
-        if (bySrc[src] === undefined) { bySrc[src] = { source: src, sessions: 0, minutes: 0, turns: 0 }; order.push(src) }
-        var agg = bySrc[src]
-        agg.sessions++
-        // Turns carry the session's condensed narrative, not just today —
-        // only timestamps inside the briefing day count toward span/turns.
-        var trn = th.turns || []
-        var lo = 0, hi = 0
-        var dayTurns = 0
-        for (var t = 0; t < trn.length; t++) {
-          var ts = trn[t].ts || 0
-          if (ts <= 0 || (dayStart > 0 && (ts < dayStart || ts >= dayEnd))) continue
-          dayTurns++
-          if (lo === 0 || ts < lo) lo = ts
-          if (ts > hi) hi = ts
-        }
-        if (lo === 0) {
-          lo = dayStart > 0 ? Math.max(th.started_at, dayStart) : th.started_at
-          hi = dayEnd > 0 ? Math.min(th.ended_at, dayEnd) : th.ended_at
-        }
-        if (hi > lo) agg.minutes += Math.round((hi - lo) / 60)
-        agg.turns += dayTurns
-      }
-    }
-    var out = []
-    for (var k = 0; k < order.length; k++) out.push(bySrc[order[k]])
-    out.sort(function(a, b) { return b.minutes - a.minutes })
-    return out
-  }
-  function fmtMinutes(mins) {
-    if (mins < 60) return mins + "m"
-    var h = Math.floor(mins / 60)
-    var m = mins % 60
-    return m > 0 ? h + "h" + (m < 10 ? "0" : "") + m + "m" : h + "h"
-  }
-
   DayNavRow {
     width: parent.width
     dayflow: pane.dayflow
@@ -184,49 +129,10 @@ Column {
     }
   }
 
-  // Stats by AI conversation — sessions, active time, and turns per source.
-  Flow {
-    width: parent.width
-    spacing: Style.space(6)
-    visible: pane.sourceStats.length > 0 && host !== null && !host.agentsLoading
-
-    Repeater {
-      model: pane.sourceStats
-      delegate: Rectangle {
-        height: Style.space(22)
-        width: statLabel.implicitWidth + Style.space(12)
-        radius: Style.cornerRadius
-        color: pane.tint(pane.dayflow ? pane.dayflow.foreground : Qt.rgba(1,1,1,1), 0.06)
-        border.color: pane.tint(pane.dayflow ? pane.dayflow.foreground : Qt.rgba(1,1,1,1), 0.14)
-        Text {
-          id: statLabel
-          anchors.centerIn: parent
-          text: modelData.source + " · " +
-                modelData.sessions + (modelData.sessions === 1 ? " session · " : " sessions · ") +
-                pane.fmtMinutes(modelData.minutes) + " · " +
-                modelData.turns + " turns"
-          textFormat: Text.PlainText
-          color: pane.dayflow ? pane.dayflow.dim : "gray"
-          font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
-          font.pixelSize: Style.font.caption
-        }
-      }
-    }
-  }
-
   BusyBar {
     width: parent.width
     pal: pane.dayflow
     active: host !== null && host.agentsLoading
-  }
-
-  Text {
-    visible: host !== null && host.agentsLoading
-    text: "Rebuilding the day's briefing — can take a couple of minutes while sessions are active."
-    textFormat: Text.PlainText
-    color: pane.dayflow ? pane.dayflow.dim : "transparent"
-    font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
-    font.pixelSize: Style.font.caption
   }
 
   Text {
@@ -436,10 +342,7 @@ Column {
                     anchors.verticalCenter: headerRow.verticalCenter
                     text: Qt.formatTime(new Date(threadCard.modelData.started_at * 1000), "hh:mm") +
                           "–" +
-                          Qt.formatTime(new Date(threadCard.modelData.ended_at * 1000), "hh:mm") +
-                          (threadCard.modelData.ended_at > threadCard.modelData.started_at
-                            ? " · " + pane.fmtMinutes(Math.round((threadCard.modelData.ended_at - threadCard.modelData.started_at) / 60))
-                            : "")
+                          Qt.formatTime(new Date(threadCard.modelData.ended_at * 1000), "hh:mm")
                     textFormat: Text.PlainText
                     color: pane.dayflow ? pane.dayflow.dim : "gray"
                     font.family: pane.dayflow ? pane.dayflow.fontFamily : ""

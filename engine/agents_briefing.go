@@ -539,7 +539,7 @@ func applyBriefingPolish(b *agentBriefing, raw string) bool {
 }
 
 // polishDeadline bounds the whole polish call — retries and backoff
-// included — well under the pane's 75s watchdog, so a slow provider serves
+// included — well under the pane's 300s watchdog, so a slow provider serves
 // the deterministic briefing instead of a killed process.
 const polishDeadline = 55 * time.Second
 
