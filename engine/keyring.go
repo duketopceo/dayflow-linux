@@ -63,10 +63,16 @@ func keyringDel(account string) error {
 }
 
 // resolveProviderKey returns the effective API key for a provider: the stored
-// field first, then the OmaSeal account named after the provider id.
-func resolveProviderKey(p Provider) string {
+// field first, then the legacy top-level openrouter_api_key for openrouter
+// providers (migrateLegacyProviders only folds it in when Providers is empty —
+// a populated list whose entry lacks api_key still owns that key), then the
+// OmaSeal account named after the provider id.
+func resolveProviderKey(cfg Config, p Provider) string {
 	if p.APIKey != "" {
 		return p.APIKey
+	}
+	if p.Kind == "openrouter" && cfg.OpenRouterAPIKey != "" {
+		return cfg.OpenRouterAPIKey
 	}
 	if !providerNeedsAuth(p) || !keyringAvailable() {
 		return ""

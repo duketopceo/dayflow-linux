@@ -199,7 +199,7 @@ func configuredVisionProvider(cfg Config) (Provider, bool) {
 	if !providerNeedsAuth(p) {
 		return p, strings.TrimSpace(p.APIBaseURL) != ""
 	}
-	return p, resolveProviderKey(p) != ""
+	return p, resolveProviderKey(cfg, p) != ""
 }
 
 // providerNeedsAuth reports whether the provider should receive an
@@ -303,7 +303,7 @@ func callProviderChat(cfg Config, p Provider, messages []orMessage) (string, int
 
 // providerChatOnce performs a single request/response exchange.
 func providerChatOnce(cfg Config, p Provider, messages []orMessage) (string, int, int, error) {
-	apiKey := resolveProviderKey(p)
+	apiKey := resolveProviderKey(cfg, p)
 	if providerNeedsAuth(p) && apiKey == "" {
 		// Auth is required for every non-local/MCP provider. The old check also
 		// required an empty APIBaseURL, so a custom base URL with no key sent

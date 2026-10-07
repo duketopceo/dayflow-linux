@@ -604,7 +604,7 @@ func errorClass(e string) string {
 func jevAPIKey(cfg Config) string {
 	for _, task := range []string{"classification", "chat", "vision"} {
 		if p, err := providerForTask(cfg, task); err == nil {
-			if k := resolveProviderKey(p); k != "" {
+			if k := resolveProviderKey(cfg, p); k != "" {
 				return k
 			}
 		}

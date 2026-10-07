@@ -335,7 +335,7 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 	visionCfg.Model = visionProvider.Model
 	visionCfg.APIBaseURL = visionProvider.APIBaseURL
 	if providerNeedsAuth(visionProvider) {
-		visionCfg.OpenRouterAPIKey = resolveProviderKey(visionProvider)
+		visionCfg.OpenRouterAPIKey = resolveProviderKey(cfg, visionProvider)
 	}
 	vis, reachable := isVisionModel(visionCfg, visionProvider.Model)
 	if visionProvider.Kind == "cli" {

@@ -362,7 +362,7 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 	// its attempts and went dead during the outage. Fail the whole sweep
 	// instead: blocks stay pending and pick up on the next pass once the
 	// key resolves.
-	if providerNeedsAuth(vp) && resolveProviderKey(vp) == "" {
+	if providerNeedsAuth(vp) && resolveProviderKey(cfg, vp) == "" {
 		return 0, fmt.Errorf("no API key for provider %q — sweep aborted, no blocks touched", vp.ID)
 	}
 	// Auto-heal: blocks that died of exactly that outage are resurrected
