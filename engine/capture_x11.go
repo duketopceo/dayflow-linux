@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"math"
+	"time"
 
 	"github.com/jezek/xgb"
 	"github.com/jezek/xgb/xproto"
+	xdraw "golang.org/x/image/draw"
 )
 
 // x11Backend captures the X11 root window via pure-Go wire protocol (xgb —
@@ -17,55 +20,148 @@ import (
 // on first Grab so backend resolution is testable without an X server.
 type x11Backend struct {
 	jpegQuality int
+	frameMaxDim int
 	conn        *xgb.Conn
 }
 
 func (b *x11Backend) Name() string             { return "x11" }
 func (b *x11Backend) NeedsWaylandSocket() bool { return false }
 
+// dropConn releases a poisoned connection so the next grab reconnects
+// instead of failing on a dead socket forever.
+func (b *x11Backend) dropConn() {
+	if b.conn != nil {
+		b.conn.Close()
+		b.conn = nil
+	}
+}
+
 func (b *x11Backend) connect() error {
 	if b.conn != nil {
 		return nil
 	}
-	conn, err := xgb.NewConn()
-	if err != nil {
-		return fmt.Errorf("x11 connect: %w", err)
+	// NewConn blocks on the socket handshake — a remote TCP DISPLAY waits
+	// on kernel retransmit (~2min) otherwise, wedging the capture tick.
+	type res struct {
+		conn *xgb.Conn
+		err  error
 	}
-	b.conn = conn
-	return nil
+	ch := make(chan res, 1)
+	go func() {
+		c, err := xgb.NewConn()
+		ch <- res{c, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return fmt.Errorf("x11 connect: %w", r.err)
+		}
+		b.conn = r.conn
+		return nil
+	case <-time.After(grabFrameTimeout):
+		return fmt.Errorf("x11 connect: timed out after %s", grabFrameTimeout)
+	}
 }
+
+// x11MaxFrameBytes bounds the root geometry we will pull over the wire —
+// the argv path caps subprocess output at 64MB and this keeps an absurd
+// server-advertised root from allocating unboundedly.
+const x11MaxFrameBytes = 256 << 20
 
 func (b *x11Backend) Grab(_ *sql.DB) ([]byte, error) {
 	if err := b.connect(); err != nil {
 		return nil, err
 	}
-	// Screen geometry is re-read per grab — the setup reply is a cached
-	// getter, and a cached root shrinks silently under xrandr where a
-	// grown root errors and reconnects anyway.
+	// The root drawable comes from the connect-time setup reply (fixed);
+	// its GEOMETRY must be re-queried per grab — xproto.Setup reparses the
+	// cached setup bytes, so after an xrandr grow a cached width/height
+	// silently captures only the top-left crop. GetGeometry is a live
+	// round-trip.
 	s := xproto.Setup(b.conn).DefaultScreen(b.conn)
-	img, err := xproto.GetImage(b.conn, xproto.ImageFormatZPixmap,
-		xproto.Drawable(s.Root), 0, 0,
-		s.WidthInPixels, s.HeightInPixels, ^uint32(0)).Reply()
-	if err != nil {
-		// A dead server kills the conn — drop it so the next grab
-		// reconnects instead of failing on a poisoned socket forever.
-		b.conn.Close()
-		b.conn = nil
-		return nil, fmt.Errorf("x11 getimage: %w", err)
-	}
-	bpp, stride, err := xWireFormat(xproto.Setup(b.conn).PixmapFormats, img.Depth, int(s.WidthInPixels))
+	img, w, h, err := b.grabRoot(s)
 	if err != nil {
 		return nil, err
 	}
-	rgba, err := xImageToRGBA(img.Data, int(s.WidthInPixels), int(s.HeightInPixels), bpp, stride)
+	bpp, stride, err := xWireFormat(xproto.Setup(b.conn).PixmapFormats, img.Depth, w)
 	if err != nil {
 		return nil, err
+	}
+	rgba, err := xImageToRGBA(img.Data, w, h, bpp, stride)
+	if err != nil {
+		return nil, err
+	}
+	// Downscale to frame_max_dim before encoding — storedFrame would
+	// discard the full-res JPEG and re-encode after the same downscale,
+	// so encoding at store size stores Grab's bytes verbatim instead.
+	if b.frameMaxDim > 0 {
+		long := w
+		if h > w {
+			long = h
+		}
+		if long > b.frameMaxDim {
+			scale := float64(b.frameMaxDim) / float64(long)
+			dw, dh := int(math.Round(float64(w)*scale)), int(math.Round(float64(h)*scale))
+			if dw < 1 {
+				dw = 1
+			}
+			if dh < 1 {
+				dh = 1
+			}
+			dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+			xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), rgba, rgba.Bounds(), xdraw.Over, nil)
+			rgba = dst
+		}
 	}
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, rgba, &jpeg.Options{Quality: b.jpegQuality}); err != nil {
 		return nil, fmt.Errorf("x11 jpeg encode: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// grabRoot runs the GetGeometry→GetImage pair and bounds the combined
+// round-trip — Reply() waits on the conn's read channel with no deadline,
+// and the argv backends all honor grabFrameTimeout, so an unresponsive X
+// server must not park the whole capture loop (heartbeat, signals, and
+// retention share it).
+func (b *x11Backend) grabRoot(s *xproto.ScreenInfo) (*xproto.GetImageReply, int, int, error) {
+	type res struct {
+		img  *xproto.GetImageReply
+		w, h int
+		err  error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		geo, err := xproto.GetGeometry(b.conn, xproto.Drawable(s.Root)).Reply()
+		if err != nil {
+			ch <- res{err: fmt.Errorf("x11 getgeometry: %w", err)}
+			return
+		}
+		w, h := int(geo.Width), int(geo.Height)
+		if int64(w)*int64(h)*4 > x11MaxFrameBytes {
+			ch <- res{err: fmt.Errorf("x11 frame: root geometry %dx%d exceeds cap", w, h)}
+			return
+		}
+		img, err := xproto.GetImage(b.conn, xproto.ImageFormatZPixmap,
+			xproto.Drawable(s.Root), 0, 0,
+			uint16(w), uint16(h), ^uint32(0)).Reply()
+		if err != nil {
+			ch <- res{err: fmt.Errorf("x11 getimage: %w", err)}
+			return
+		}
+		ch <- res{img: img, w: w, h: h}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			b.dropConn()
+			return nil, 0, 0, r.err
+		}
+		return r.img, r.w, r.h, nil
+	case <-time.After(grabFrameTimeout):
+		b.dropConn() // unblocks the Reply goroutine's read
+		return nil, 0, 0, fmt.Errorf("x11 grab: timed out after %s", grabFrameTimeout)
+	}
 }
 
 func (b *x11Backend) Close() error {
@@ -95,8 +191,12 @@ func xWireFormat(fmts []xproto.Format, depth uint8, w int) (bpp, stride int, err
 		return 0, 0, fmt.Errorf("x11 frame: unsupported depth %d (bpp %d)", depth, bpp)
 	}
 	stride = w * bpp
-	if rem := stride % pad; rem != 0 {
-		stride += pad - rem
+	// pad < 8 bits divides to 0 — protocol-legal per the spec's bitfield
+	// and server-controlled, so guard rather than crash on %0.
+	if pad > 0 {
+		if rem := stride % pad; rem != 0 {
+			stride += pad - rem
+		}
 	}
 	return bpp, stride, nil
 }

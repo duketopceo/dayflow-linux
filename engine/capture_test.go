@@ -425,13 +425,32 @@ func captureJPEG(t *testing.T, db *sql.DB, cfg Config, frame []byte, lastHash *f
 	return captureOnce(db, cfg, &argvBackend{argv: []string{"cat", p}}, lastHash)
 }
 
+// stubSession fabricates a wayland socket under a private XDG_RUNTIME_DIR
+// so session detection sees real "socket truth" — a listener's file is a
+// genuine unix socket, unlike a plain file stub. Returns the runtime dir.
+func stubSession(t *testing.T, socketName string) string {
+	t.Helper()
+	rt := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", rt)
+	if socketName != "" {
+		ln, err := net.Listen("unix", filepath.Join(rt, socketName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+	}
+	return rt
+}
+
 // grimBackendForTest resolves the capture backend under a stubbed wlroots
 // session so detection selects the grim path on any host, including CI
 // runners with no Wayland env.
 func grimBackendForTest(t *testing.T, cfg Config) captureBackend {
 	t.Helper()
+	stubSession(t, "wayland-99")
 	t.Setenv("WAYLAND_DISPLAY", "wayland-99")
 	t.Setenv("XDG_CURRENT_DESKTOP", "Hyprland")
+	t.Setenv("DISPLAY", "")
 	b, err := resolveCaptureBackend(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -1061,6 +1080,33 @@ func TestAutoOutputGrimOFailureRetriesComposite(t *testing.T) {
 	}
 }
 
+func TestExplicitOutputGrimFailureNoCompositeRetry(t *testing.T) {
+	// The composite retry is an output=auto-only escape (resolve→exec
+	// race). An explicit -o failure is a real failure — one grim call,
+	// the error propagates, no retry.
+	cfg := testEnv(t)
+	cfg.Output = "eDP-1"
+	resetFocusState(t)
+	bin := t.TempDir()
+	fakeHyprctl(t, bin, `[{"name":"DP-3","focused":true}]`, false)
+	argvLog := fakeGrim(t, bin, frameFixture(t), true) // fails when -o present
+	t.Setenv("PATH", bin)
+
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	backend := grimBackendForTest(t, cfg)
+	if _, attempted, err := captureOnce(db, cfg, backend, nil); err == nil || !attempted {
+		t.Fatalf("explicit -o failure should propagate: attempted=%v err=%v", attempted, err)
+	}
+	lines := argvLines(t, argvLog)
+	if len(lines) != 1 || !strings.Contains(lines[0], "-o eDP-1") {
+		t.Fatalf("want exactly one -o eDP-1 grim call, got %v", lines)
+	}
+}
+
 func TestAutoOutputNegativeCache(t *testing.T) {
 	// After focusFailCeiling consecutive hyprctl failures the daemon stops
 	// execing `hyprctl monitors` for the rest of the run — one event, not
@@ -1264,8 +1310,10 @@ func TestResolveCaptureBackendSelection(t *testing.T) {
 
 	// A wlroots desktop with grim in PATH resolves to the grim backend for
 	// both auto and explicit outputs.
+	stubSession(t, "wayland-99")
 	t.Setenv("WAYLAND_DISPLAY", "wayland-99")
 	t.Setenv("XDG_CURRENT_DESKTOP", "Hyprland")
+	t.Setenv("DISPLAY", "")
 	for _, out := range []string{"auto", "DP-3"} {
 		cfg.Output = out
 		b, err := resolveCaptureBackend(cfg)
@@ -1290,6 +1338,13 @@ func TestResolveCaptureBackendSelection(t *testing.T) {
 	if len(ab.argv) != 2 || ab.argv[0] != "/bin/cat" {
 		t.Fatalf("capture_command argv should pass through: %v", ab.argv)
 	}
+
+	// A whitespace-only capture_command yields empty argv and would panic
+	// grabFrame's argv[0] index — reject at resolution instead.
+	cfg.CaptureCommand = "   "
+	if _, err := resolveCaptureBackend(cfg); err == nil {
+		t.Fatal("whitespace-only capture_command should error, not panic")
+	}
 }
 
 func TestResolveCaptureBackendDesktopDetection(t *testing.T) {
@@ -1297,6 +1352,8 @@ func TestResolveCaptureBackendDesktopDetection(t *testing.T) {
 	bin := t.TempDir()
 	fakeGrim(t, bin, frameFixture(t), false)
 	t.Setenv("PATH", bin)
+	stubSession(t, "wayland-0")
+	t.Setenv("DISPLAY", "")
 
 	// grim is installed but must NOT be selected on GNOME — it can't work
 	// there, so the backend errors until the portal backend lands.
@@ -1304,6 +1361,15 @@ func TestResolveCaptureBackendDesktopDetection(t *testing.T) {
 	t.Setenv("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")
 	if b, err := resolveCaptureBackend(cfg); err == nil {
 		t.Fatalf("GNOME resolved %T, want error — grim-in-PATH is a trap", b)
+	}
+
+	// A wlroots token wins even alongside a non-wlroots one —
+	// "sway:GNOME" is a common portal workaround, not a GNOME session.
+	t.Setenv("XDG_CURRENT_DESKTOP", "sway:GNOME")
+	if b, err := resolveCaptureBackend(cfg); err != nil {
+		t.Fatalf("sway:GNOME should resolve grim: %v", err)
+	} else if _, ok := b.(*grimBackend); !ok {
+		t.Fatalf("sway:GNOME resolved %T, want grimBackend", b)
 	}
 
 	// An unrecognized Wayland desktop still tries grim first.
@@ -1314,16 +1380,42 @@ func TestResolveCaptureBackendDesktopDetection(t *testing.T) {
 		t.Fatalf("river resolved %T, want grimBackend", b)
 	}
 
-	// No Wayland + DISPLAY set → X11 backend (lazy conn — no X needed).
+	// Same desktop with grim absent from PATH → clean error, not a
+	// silent x11 fallthrough (the XWayland root is not the desktop).
+	t.Setenv("PATH", t.TempDir())
+	if _, err := resolveCaptureBackend(cfg); err == nil {
+		t.Fatal("wlroots session without grim should error")
+	}
+	t.Setenv("PATH", bin)
+
+	// DISPLAY set + a live wayland socket but no WAYLAND_DISPLAY → the
+	// env wasn't imported; error rather than capture the XWayland root.
 	t.Setenv("WAYLAND_DISPLAY", "")
 	t.Setenv("DISPLAY", ":0")
+	if _, err := resolveCaptureBackend(cfg); err == nil {
+		t.Fatal("wayland socket + DISPLAY without WAYLAND_DISPLAY should error")
+	}
+
+	// DISPLAY set, no wayland socket at all → real X11 session.
+	stubSession(t, "")
 	if b, err := resolveCaptureBackend(cfg); err != nil {
 		t.Fatalf("X11 session should resolve: %v", err)
 	} else if _, ok := b.(*x11Backend); !ok {
 		t.Fatalf("X11 session resolved %T, want x11Backend", b)
 	}
 
+	// A STALE WAYLAND_DISPLAY (dead socket) with DISPLAY present is an
+	// X11 session — the user-manager env retains it across session
+	// switches. Must not park in the wayland branch.
+	t.Setenv("WAYLAND_DISPLAY", "wayland-dead")
+	if b, err := resolveCaptureBackend(cfg); err != nil {
+		t.Fatalf("stale WAYLAND_DISPLAY + DISPLAY should resolve x11: %v", err)
+	} else if _, ok := b.(*x11Backend); !ok {
+		t.Fatalf("stale WAYLAND_DISPLAY resolved %T, want x11Backend", b)
+	}
+
 	// Neither set → clear error.
+	t.Setenv("WAYLAND_DISPLAY", "")
 	t.Setenv("DISPLAY", "")
 	if _, err := resolveCaptureBackend(cfg); err == nil {
 		t.Fatal("no session env should error")

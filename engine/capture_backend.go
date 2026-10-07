@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -73,24 +74,53 @@ var knownNonWlrootsDesktop = map[string]bool{
 	"deepin": true,
 }
 
-func desktopIsKnownNonWlroots(desktop string) bool {
+// knownWlrootsDesktop wins over the non-wlroots list when both appear in a
+// colon list — "sway:GNOME" is a common xdg-desktop-portal workaround and
+// must not hard-error a working wlroots session.
+var knownWlrootsDesktop = map[string]bool{
+	"hyprland": true, "sway": true, "river": true, "wayfire": true,
+	"labwc": true, "niri": true, "dwl": true, "wlroots": true,
+}
+
+func desktopHasToken(desktop string, set map[string]bool) bool {
 	for _, tok := range strings.Split(strings.ToLower(desktop), ":") {
-		if knownNonWlrootsDesktop[strings.TrimSpace(tok)] {
+		if set[strings.TrimSpace(tok)] {
 			return true
 		}
 	}
 	return false
 }
 
-// grimSession reports whether this session would select the grim backend
-// before the PATH check — Wayland present, not a known non-wlroots
-// desktop, no capture_command override. resolveCaptureBackend adds the
-// LookPath on top; notify's quiet check uses this directly so stall
-// detection doesn't depend on grim being installed.
-func grimSession(cfg Config) bool {
-	return cfg.CaptureCommand == "" &&
-		os.Getenv("WAYLAND_DISPLAY") != "" &&
-		!desktopIsKnownNonWlroots(os.Getenv("XDG_CURRENT_DESKTOP"))
+// waylandSocketPresent reports whether a wayland socket actually exists —
+// either the WAYLAND_DISPLAY-named one or any wayland-* socket in
+// XDG_RUNTIME_DIR. Env vars are claims, sockets are truth: the user-manager
+// env keeps stale values across session-type switches, and unimported
+// sessions lack the vars entirely.
+func waylandSocketPresent() bool {
+	isSocket := func(path string) bool {
+		st, err := os.Stat(path)
+		return err == nil && st.Mode()&os.ModeSocket != 0
+	}
+	rt := os.Getenv("XDG_RUNTIME_DIR")
+	if disp := os.Getenv("WAYLAND_DISPLAY"); disp != "" {
+		if filepath.IsAbs(disp) {
+			if isSocket(disp) {
+				return true
+			}
+		} else if rt != "" && isSocket(filepath.Join(rt, disp)) {
+			return true
+		}
+	}
+	if rt == "" {
+		return false
+	}
+	matches, _ := filepath.Glob(filepath.Join(rt, "wayland-*"))
+	for _, m := range matches {
+		if isSocket(m) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveCaptureBackend picks the frame source for this session. Order per
@@ -102,11 +132,20 @@ func grimSession(cfg Config) bool {
 // falls to the pure-Go X11 backend.
 func resolveCaptureBackend(cfg Config) (captureBackend, error) {
 	if cfg.CaptureCommand != "" {
-		return &argvBackend{argv: strings.Fields(cfg.CaptureCommand)}, nil
+		if argv := strings.Fields(cfg.CaptureCommand); len(argv) > 0 {
+			return &argvBackend{argv: argv}, nil
+		}
+		return nil, fmt.Errorf("capture_command is whitespace-only — fix it in %s", configPath())
 	}
 	desktop := os.Getenv("XDG_CURRENT_DESKTOP")
-	if os.Getenv("WAYLAND_DISPLAY") != "" {
-		if !desktopIsKnownNonWlroots(desktop) {
+	// WAYLAND_DISPLAY claims a Wayland session; it only counts when its
+	// socket exists (the user-manager env keeps it stale after switching
+	// to X11) or when there is no competing DISPLAY (boot race — the
+	// socket may appear seconds after the daemon starts).
+	wayland := os.Getenv("WAYLAND_DISPLAY") != "" &&
+		(waylandSocketPresent() || os.Getenv("DISPLAY") == "")
+	if wayland {
+		if !desktopHasToken(desktop, knownNonWlrootsDesktop) || desktopHasToken(desktop, knownWlrootsDesktop) {
 			if _, err := exec.LookPath("grim"); err == nil {
 				return &grimBackend{cfg: cfg}, nil
 			}
@@ -115,7 +154,10 @@ func resolveCaptureBackend(cfg Config) (captureBackend, error) {
 		return nil, fmt.Errorf("no capture backend for Wayland session (XDG_CURRENT_DESKTOP=%q) — this compositor needs the portal backend (pending); set capture_command as a stopgap", desktop)
 	}
 	if os.Getenv("DISPLAY") != "" {
-		return &x11Backend{jpegQuality: cfg.JPEGQuality}, nil
+		if waylandSocketPresent() {
+			return nil, fmt.Errorf("a Wayland socket exists but WAYLAND_DISPLAY was not inherited — import it (systemctl --user import-environment WAYLAND_DISPLAY) rather than capturing the XWayland root")
+		}
+		return &x11Backend{jpegQuality: cfg.JPEGQuality, frameMaxDim: cfg.FrameMaxDim}, nil
 	}
 	return nil, fmt.Errorf("no graphical session (WAYLAND_DISPLAY and DISPLAY unset) — set capture_command in %s", configPath())
 }

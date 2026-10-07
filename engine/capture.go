@@ -853,11 +853,18 @@ func runDaemon(cfg Config) error {
 	}
 
 	backend, err := resolveCaptureBackend(cfg)
+	// daemon_start is logged BEFORE the resolve error return so a
+	// permanently-unresolvable session (e.g. GNOME until the portal
+	// backend lands) crash-loops under Restart=always with a visible
+	// unbroken-start run the stall detector can report — resolving after
+	// this line would leave zero rows and look like "never ran".
 	if err != nil {
+		logEvent(db, "daemon_start", "resolve failed: "+err.Error())
 		return err
 	}
-	defer backend.Close()
 	logEvent(db, "daemon_start", backend.Name())
+	defer func() { backend.Close() }() // closes whichever backend is current at exit, not the pre-reload one
+	metaSetBackendGate(db, backend)
 	cfgMtime := configMtime()
 
 	// SIGTERM/SIGINT (systemctl stop, Ctrl-C) is an intentional stop, not a
@@ -884,6 +891,7 @@ func runDaemon(cfg Config) error {
 			if nb, err := resolveCaptureBackend(cfg); err == nil {
 				backend.Close()
 				backend = nb
+				metaSetBackendGate(db, backend)
 			} else {
 				debugf(cfg, "config reloaded but backend kept (%v)", err)
 			}

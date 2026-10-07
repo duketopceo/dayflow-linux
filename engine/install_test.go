@@ -122,16 +122,31 @@ func TestUnitsNeverActivateGraphicalSession(t *testing.T) {
 
 // The capture daemon must see both display stacks: WAYLAND_DISPLAY via
 // PassEnvironment (never hardcoded — the socket name is compositor-chosen)
-// and DISPLAY/XAUTHORITY for X11 sessions.
+// and DISPLAY/XAUTHORITY for X11 sessions. The summarize oneshot needs
+// the session vars too so its stall-check socket probe sees the real
+// session rather than always reading "no socket".
 func TestCaptureUnitPassesDisplayEnv(t *testing.T) {
 	capture := unitSet()["dayflow-capture.service"]
 	if strings.Contains(capture, `Environment="WAYLAND_DISPLAY`) {
 		t.Error("unit must not hardcode WAYLAND_DISPLAY — socket name varies")
 	}
+	passEnv := func(unit, key string) bool {
+		for _, line := range strings.Split(unit, "\n") {
+			if strings.HasPrefix(line, "PassEnvironment=") && strings.Contains(line, key) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, key := range []string{"WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"} {
-		if !strings.Contains(capture, "PassEnvironment=") ||
-			!strings.Contains(strings.SplitN(strings.SplitN(capture, "PassEnvironment=", 2)[1], "\n", 2)[0], key) {
+		if !passEnv(capture, key) {
 			t.Errorf("capture unit PassEnvironment missing %s", key)
+		}
+	}
+	summarize := unitSet()["dayflow-summarize.service"]
+	for _, key := range []string{"WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"} {
+		if !passEnv(summarize, key) {
+			t.Errorf("summarize unit PassEnvironment missing %s", key)
 		}
 	}
 }

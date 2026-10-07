@@ -33,6 +33,15 @@ func TestXWireFormat(t *testing.T) {
 	if _, _, err := xWireFormat(fmts, 24, 0); err == nil {
 		t.Fatal("zero width should error")
 	}
+	// ScanlinePad < 8 bits (or 0) is server-controlled input — must not
+	// panic on the modulo; treated as unaligned.
+	fmts[0].BitsPerPixel = 32
+	for _, sp := range []uint8{0, 4} {
+		fmts[0].ScanlinePad = sp
+		if bpp, stride, err := xWireFormat(fmts, 24, 5); err != nil || bpp != 4 || stride != 20 {
+			t.Fatalf("ScanlinePad=%d: bpp=%d stride=%d err=%v", sp, bpp, stride, err)
+		}
+	}
 }
 
 func TestXImageToRGBA(t *testing.T) {
@@ -63,5 +72,17 @@ func TestXImageToRGBA(t *testing.T) {
 	// Short payload is an error, not a partial read.
 	if _, err := xImageToRGBA(data[:4], 2, 1, 3, 8); err == nil {
 		t.Fatal("short payload should error")
+	}
+}
+
+func TestX11GrabConnectError(t *testing.T) {
+	// A DISPLAY pointing at nothing must fail at Grab time, not resolve —
+	// the conn is lazy so detection never depends on a live X server.
+	t.Setenv("DISPLAY", "127.0.0.1:99")
+	b := &x11Backend{jpegQuality: 90}
+	if _, err := b.Grab(nil); err == nil {
+		t.Fatal("Grab to a dead DISPLAY should error")
+	} else if b.conn != nil {
+		t.Fatal("conn should stay nil after a failed connect")
 	}
 }
