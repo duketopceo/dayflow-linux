@@ -422,7 +422,21 @@ func captureJPEG(t *testing.T, db *sql.DB, cfg Config, frame []byte, lastHash *f
 	if err := os.WriteFile(p, frame, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return captureOnce(db, cfg, []string{"cat", p}, lastHash)
+	return captureOnce(db, cfg, &argvBackend{argv: []string{"cat", p}}, lastHash)
+}
+
+// grimBackendForTest resolves the capture backend under a stubbed wlroots
+// session so detection selects the grim path on any host, including CI
+// runners with no Wayland env.
+func grimBackendForTest(t *testing.T, cfg Config) captureBackend {
+	t.Helper()
+	t.Setenv("WAYLAND_DISPLAY", "wayland-99")
+	t.Setenv("XDG_CURRENT_DESKTOP", "Hyprland")
+	b, err := resolveCaptureBackend(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // lastStoredFrame decodes the most recently inserted frame file and checks
@@ -920,11 +934,8 @@ func TestAutoOutputFocusedMonitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	cmdArgs, err := resolveCaptureCommand(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, attempted, err := captureOnce(db, cfg, cmdArgs, nil); err != nil || !attempted {
+	backend := grimBackendForTest(t, cfg)
+	if _, attempted, err := captureOnce(db, cfg, backend, nil); err != nil || !attempted {
 		t.Fatalf("attempted=%v err=%v", attempted, err)
 	}
 	lines := argvLines(t, argvLog)
@@ -937,14 +948,14 @@ func TestAutoOutputFocusedMonitor(t *testing.T) {
 		t.Fatalf("capture_output events=%d, want 1", ev)
 	}
 	// Same output next tick: resolves again but does not re-log.
-	if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+	if _, _, err := captureOnce(db, cfg, backend, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Focus moves to another output: exactly one transition event.
 	if err := os.WriteFile(monFile, []byte(`[{"name":"eDP-1","focused":true}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+	if _, _, err := captureOnce(db, cfg, backend, nil); err != nil {
 		t.Fatal(err)
 	}
 	lines = argvLines(t, argvLog)
@@ -993,11 +1004,8 @@ func TestAutoOutputCompositeFallbacks(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			cmdArgs, err := resolveCaptureCommand(cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, attempted, err := captureOnce(db, cfg, cmdArgs, nil); err != nil || !attempted {
+			backend := grimBackendForTest(t, cfg)
+			if _, attempted, err := captureOnce(db, cfg, backend, nil); err != nil || !attempted {
 				t.Fatalf("composite capture should succeed: attempted=%v err=%v", attempted, err)
 			}
 			for _, l := range argvLines(t, argvLog) {
@@ -1031,11 +1039,8 @@ func TestAutoOutputGrimOFailureRetriesComposite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	cmdArgs, err := resolveCaptureCommand(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, attempted, err := captureOnce(db, cfg, cmdArgs, nil)
+	backend := grimBackendForTest(t, cfg)
+	h, attempted, err := captureOnce(db, cfg, backend, nil)
 	if err != nil || !attempted || h == nil {
 		t.Fatalf("composite retry should save the tick: attempted=%v h=%v err=%v", attempted, h, err)
 	}
@@ -1073,12 +1078,9 @@ func TestAutoOutputNegativeCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	cmdArgs, err := resolveCaptureCommand(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	backend := grimBackendForTest(t, cfg)
 	for i := 0; i < focusFailCeiling+3; i++ {
-		if _, attempted, err := captureOnce(db, cfg, cmdArgs, nil); err != nil || !attempted {
+		if _, attempted, err := captureOnce(db, cfg, backend, nil); err != nil || !attempted {
 			t.Fatalf("tick %d: attempted=%v err=%v", i, attempted, err)
 		}
 	}
@@ -1114,12 +1116,9 @@ func TestAutoOutputFocusRetryBackoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	cmdArgs, err := resolveCaptureCommand(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	backend := grimBackendForTest(t, cfg)
 	for i := 0; i < focusFailCeiling; i++ {
-		if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+		if _, _, err := captureOnce(db, cfg, backend, nil); err != nil {
 			t.Fatalf("tick %d: %v", i, err)
 		}
 	}
@@ -1129,7 +1128,7 @@ func TestAutoOutputFocusRetryBackoff(t *testing.T) {
 	probes := countCalls(t, calls, "monitors")
 
 	// Within the backoff window the latch holds — no probe.
-	if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+	if _, _, err := captureOnce(db, cfg, backend, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := countCalls(t, calls, "monitors"); got != probes {
@@ -1138,7 +1137,7 @@ func TestAutoOutputFocusRetryBackoff(t *testing.T) {
 
 	// Backoff elapsed → exactly one re-probe; still failing → re-armed.
 	focusDisabledAt = time.Now().Add(-2 * focusRetryBackoff)
-	if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+	if _, _, err := captureOnce(db, cfg, backend, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := countCalls(t, calls, "monitors"); got != probes+1 {
@@ -1153,7 +1152,7 @@ func TestAutoOutputFocusRetryBackoff(t *testing.T) {
 	writeBin(t, bin, "hyprctl",
 		"if [ \"$1\" = monitors ]; then\n  echo '[{\"name\":\"DP-3\",\"focused\":true}]'\nelse\n  echo '{}'\nfi\n")
 	focusDisabledAt = time.Now().Add(-2 * focusRetryBackoff)
-	if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+	if _, _, err := captureOnce(db, cfg, backend, nil); err != nil {
 		t.Fatal(err)
 	}
 	if focusDisabled {
@@ -1208,14 +1207,8 @@ func TestExplicitOutputPassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	cmdArgs, err := resolveCaptureCommand(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(strings.Join(cmdArgs, " "), "-o eDP-1") {
-		t.Fatalf("explicit output should bake -o eDP-1 into argv: %v", cmdArgs)
-	}
-	if _, _, err := captureOnce(db, cfg, cmdArgs, nil); err != nil {
+	backend := grimBackendForTest(t, cfg)
+	if _, _, err := captureOnce(db, cfg, backend, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, l := range argvLines(t, argvLog) {
@@ -1249,11 +1242,8 @@ func TestAutoIgnoredWithCaptureCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	cmdArgs, err := resolveCaptureCommand(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, attempted, err := captureOnce(db, cfg, cmdArgs, nil); err != nil || !attempted {
+	backend := grimBackendForTest(t, cfg)
+	if _, attempted, err := captureOnce(db, cfg, backend, nil); err != nil || !attempted {
 		t.Fatalf("attempted=%v err=%v", attempted, err)
 	}
 	if got := countCalls(t, calls, "monitors"); got != 0 {
@@ -1266,38 +1256,77 @@ func TestAutoIgnoredWithCaptureCommand(t *testing.T) {
 	}
 }
 
-func TestResolveCaptureCommandAuto(t *testing.T) {
+func TestResolveCaptureBackendSelection(t *testing.T) {
 	cfg := testEnv(t)
 	bin := t.TempDir()
 	fakeGrim(t, bin, frameFixture(t), false)
 	t.Setenv("PATH", bin)
 
-	// output=auto returns the composite base — the -o target is injected
-	// per tick, not baked in at resolve time.
-	cfg.Output = "auto"
-	args, err := resolveCaptureCommand(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hasOArg(strings.Join(args, " ")) {
-		t.Fatalf("auto should not bake -o into argv: %v", args)
-	}
-	cfg.Output = "DP-3"
-	args, err = resolveCaptureCommand(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(strings.Join(args, " "), "-o DP-3") {
-		t.Fatalf("explicit output should bake -o: %v", args)
+	// A wlroots desktop with grim in PATH resolves to the grim backend for
+	// both auto and explicit outputs.
+	t.Setenv("WAYLAND_DISPLAY", "wayland-99")
+	t.Setenv("XDG_CURRENT_DESKTOP", "Hyprland")
+	for _, out := range []string{"auto", "DP-3"} {
+		cfg.Output = out
+		b, err := resolveCaptureBackend(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := b.(*grimBackend); !ok {
+			t.Fatalf("output=%s resolved %T, want grimBackend", out, b)
+		}
 	}
 	// capture_command wins verbatim, even with output=auto set.
+	cfg.Output = "auto"
 	cfg.CaptureCommand = "/bin/cat /tmp/f.jpg"
-	args, err = resolveCaptureCommand(cfg)
+	b, err := resolveCaptureBackend(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(args) != 2 || args[0] != "/bin/cat" {
-		t.Fatalf("capture_command argv should pass through: %v", args)
+	ab, ok := b.(*argvBackend)
+	if !ok {
+		t.Fatalf("capture_command resolved %T, want argvBackend", b)
+	}
+	if len(ab.argv) != 2 || ab.argv[0] != "/bin/cat" {
+		t.Fatalf("capture_command argv should pass through: %v", ab.argv)
+	}
+}
+
+func TestResolveCaptureBackendDesktopDetection(t *testing.T) {
+	cfg := testEnv(t)
+	bin := t.TempDir()
+	fakeGrim(t, bin, frameFixture(t), false)
+	t.Setenv("PATH", bin)
+
+	// grim is installed but must NOT be selected on GNOME — it can't work
+	// there, so the backend errors until the portal backend lands.
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+	t.Setenv("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")
+	if b, err := resolveCaptureBackend(cfg); err == nil {
+		t.Fatalf("GNOME resolved %T, want error — grim-in-PATH is a trap", b)
+	}
+
+	// An unrecognized Wayland desktop still tries grim first.
+	t.Setenv("XDG_CURRENT_DESKTOP", "river")
+	if b, err := resolveCaptureBackend(cfg); err != nil {
+		t.Fatalf("river should resolve grim: %v", err)
+	} else if _, ok := b.(*grimBackend); !ok {
+		t.Fatalf("river resolved %T, want grimBackend", b)
+	}
+
+	// No Wayland + DISPLAY set → X11 backend (lazy conn — no X needed).
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("DISPLAY", ":0")
+	if b, err := resolveCaptureBackend(cfg); err != nil {
+		t.Fatalf("X11 session should resolve: %v", err)
+	} else if _, ok := b.(*x11Backend); !ok {
+		t.Fatalf("X11 session resolved %T, want x11Backend", b)
+	}
+
+	// Neither set → clear error.
+	t.Setenv("DISPLAY", "")
+	if _, err := resolveCaptureBackend(cfg); err == nil {
+		t.Fatal("no session env should error")
 	}
 }
 

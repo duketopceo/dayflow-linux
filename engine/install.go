@@ -22,8 +22,7 @@ After=graphical-session.target
 ExecStart=%s daemon
 Restart=always
 RestartSec=5
-PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
-Environment="WAYLAND_DISPLAY=wayland-1"
+PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS DISPLAY XAUTHORITY
 
 [Install]
 WantedBy=graphical-session.target

@@ -308,9 +308,12 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 		checks = append(checks, doctorCheck{Name: name, Status: "warn", Detail: detail})
 	}
 
-	check("wayland session", os.Getenv("WAYLAND_DISPLAY") != "", "not running under Wayland")
-	_, grimErr := exec.LookPath("grim")
-	check("grim installed", grimErr == nil || cfg.CaptureCommand != "", "install grim or set capture_command")
+	check("graphical session", os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("DISPLAY") != "", "no Wayland or X11 session")
+	if b, berr := resolveCaptureBackend(cfg); berr != nil {
+		check("capture backend", false, fmt.Sprintf("%v", berr))
+	} else {
+		checks = append(checks, doctorCheck{Name: "capture backend", Status: "ok", Detail: b.Name()})
+	}
 	// output:"auto" only resolves on the grim path — a custom capture_command
 	// never gets the -o injection, so the setting is silently dead there.
 	if cfg.Output == "auto" && cfg.CaptureCommand != "" {

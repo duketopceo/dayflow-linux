@@ -119,3 +119,19 @@ func TestUnitsNeverActivateGraphicalSession(t *testing.T) {
 		t.Error("dayflow-capture.service must not start at default.target")
 	}
 }
+
+// The capture daemon must see both display stacks: WAYLAND_DISPLAY via
+// PassEnvironment (never hardcoded — the socket name is compositor-chosen)
+// and DISPLAY/XAUTHORITY for X11 sessions.
+func TestCaptureUnitPassesDisplayEnv(t *testing.T) {
+	capture := unitSet()["dayflow-capture.service"]
+	if strings.Contains(capture, `Environment="WAYLAND_DISPLAY`) {
+		t.Error("unit must not hardcode WAYLAND_DISPLAY — socket name varies")
+	}
+	for _, key := range []string{"WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"} {
+		if !strings.Contains(capture, "PassEnvironment=") ||
+			!strings.Contains(strings.SplitN(strings.SplitN(capture, "PassEnvironment=", 2)[1], "\n", 2)[0], key) {
+			t.Errorf("capture unit PassEnvironment missing %s", key)
+		}
+	}
+}
