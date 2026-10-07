@@ -213,9 +213,6 @@ func grimArgv(cfg Config, output string) []string {
 	return append(args, "-")
 }
 
-// resolveCaptureBackend lives in capture_backend.go — grim/capture_command
-// become argv-style adapters, portal and X11 are dedicated impls.
-
 // focusFailCeiling negative-caches focus resolution: after this many
 // consecutive `hyprctl monitors` failures the daemon stops spawning hyprctl
 // until focusRetryBackoff elapses — on non-Hyprland systems output=auto
@@ -887,6 +884,8 @@ func runDaemon(cfg Config) error {
 			if nb, err := resolveCaptureBackend(cfg); err == nil {
 				backend.Close()
 				backend = nb
+			} else {
+				debugf(cfg, "config reloaded but backend kept (%v)", err)
 			}
 			logEvent(db, "config_reloaded", "")
 			debugf(cfg, "config reloaded: provider=%s model=%s interval=%ds block=%dm debug=%v",

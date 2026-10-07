@@ -308,10 +308,10 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 		checks = append(checks, doctorCheck{Name: name, Status: "warn", Detail: detail})
 	}
 
-	check("graphical session", os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("DISPLAY") != "", "no Wayland or X11 session")
 	if b, berr := resolveCaptureBackend(cfg); berr != nil {
 		check("capture backend", false, fmt.Sprintf("%v", berr))
 	} else {
+		b.Close()
 		checks = append(checks, doctorCheck{Name: "capture backend", Status: "ok", Detail: b.Name()})
 	}
 	// output:"auto" only resolves on the grim path — a custom capture_command

@@ -47,25 +47,19 @@ func (b *grimBackend) Close() error             { return nil }
 func (b *grimBackend) Grab(db *sql.DB) ([]byte, error) {
 	cfg := b.cfg
 	output := cfg.Output
-	if output != "auto" {
-		return grabFrame(grimArgv(cfg, output))
+	if output == "auto" {
+		// output=auto re-resolves the focused monitor every grab; a
+		// dock/focus change can't pin capture to the start-time monitor.
+		// "" means composite — no -o arg.
+		output = autoOutput(db, cfg)
 	}
-	// output=auto re-resolves the focused monitor every grab; a dock/focus
-	// change can't pin capture to the start-time monitor. "" means
-	// composite — no -o arg.
-	var composite []string
-	args := grimArgv(cfg, "")
-	if name := autoOutput(db, cfg); name != "" {
-		composite = args
-		args = grimArgv(cfg, name)
-	}
-	raw, err := grabFrame(args)
-	if err != nil && composite != nil {
+	raw, err := grabFrame(grimArgv(cfg, output))
+	if err != nil && cfg.Output == "auto" && output != "" {
 		// resolve→exec race (output unplugged between `hyprctl monitors`
 		// and `grim -o`, or a dock transition): one composite retry before
 		// the failure counts.
 		debugf(cfg, "capture: grim -o failed (%v); retrying composite", err)
-		raw, err = grabFrame(composite)
+		raw, err = grabFrame(grimArgv(cfg, ""))
 	}
 	return raw, err
 }
@@ -88,6 +82,17 @@ func desktopIsKnownNonWlroots(desktop string) bool {
 	return false
 }
 
+// grimSession reports whether this session would select the grim backend
+// before the PATH check — Wayland present, not a known non-wlroots
+// desktop, no capture_command override. resolveCaptureBackend adds the
+// LookPath on top; notify's quiet check uses this directly so stall
+// detection doesn't depend on grim being installed.
+func grimSession(cfg Config) bool {
+	return cfg.CaptureCommand == "" &&
+		os.Getenv("WAYLAND_DISPLAY") != "" &&
+		!desktopIsKnownNonWlroots(os.Getenv("XDG_CURRENT_DESKTOP"))
+}
+
 // resolveCaptureBackend picks the frame source for this session. Order per
 // the standalone-app plan (KTD2): capture_command always wins; on Wayland
 // the compositor orders attempts — known non-wlroots desktops skip grim
@@ -105,15 +110,12 @@ func resolveCaptureBackend(cfg Config) (captureBackend, error) {
 			if _, err := exec.LookPath("grim"); err == nil {
 				return &grimBackend{cfg: cfg}, nil
 			}
+			return nil, fmt.Errorf("no capture backend for Wayland session (XDG_CURRENT_DESKTOP=%q) — install grim (wlroots compositors) or set capture_command", desktop)
 		}
-		hint := "install grim (wlroots compositors) or set capture_command"
-		if desktopIsKnownNonWlroots(desktop) {
-			hint = "this compositor needs the portal backend (pending); set capture_command as a stopgap"
-		}
-		return nil, fmt.Errorf("no capture backend for Wayland session (XDG_CURRENT_DESKTOP=%q) — %s", desktop, hint)
+		return nil, fmt.Errorf("no capture backend for Wayland session (XDG_CURRENT_DESKTOP=%q) — this compositor needs the portal backend (pending); set capture_command as a stopgap", desktop)
 	}
 	if os.Getenv("DISPLAY") != "" {
-		return newX11Backend(cfg), nil
+		return &x11Backend{jpegQuality: cfg.JPEGQuality}, nil
 	}
 	return nil, fmt.Errorf("no graphical session (WAYLAND_DISPLAY and DISPLAY unset) — set capture_command in %s", configPath())
 }

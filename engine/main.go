@@ -156,7 +156,7 @@ Control:
 Setup & health:
   setup                   Interactive AI-provider onboarding (OpenRouter or local endpoint)
   models                  List vision-capable models on your OpenRouter account
-  doctor [--json] [--deep]  Check session, grim, key, model, endpoint;
+  doctor [--json] [--deep]  Check capture backend, key, model, endpoint;
                           --deep runs a full sqlite integrity check
   detect [--json]         Probe for local model endpoints (Ollama, LM Studio)
   fixtures capture <source> [--db P] [--out F]   Regenerate an agent-store

@@ -36,7 +36,7 @@ type Config struct {
 	KeepFrames           bool       `json:"keep_frames"`
 	RetentionDays        int        `json:"retention_days"`
 	IgnoreApps           []string   `json:"ignore_apps"`     // hyprctl window classes, case-insensitive
-	CaptureCommand       string     `json:"capture_command"` // override; default auto-detect grim
+	CaptureCommand       string     `json:"capture_command"` // override; default auto-detect backend (grim/portal/x11)
 	Output               string     `json:"output"`          // grim -o <output>; empty = all outputs; "auto" = focused monitor per tick
 	SiteName             string     `json:"site_name"`       // OpenRouter X-Title
 	MaxStorageMB         int        `json:"max_storage_mb"`  // legacy: cap on the whole data dir; 0 = off (new installs use the split caps below)

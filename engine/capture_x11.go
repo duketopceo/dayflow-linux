@@ -16,12 +16,9 @@ import (
 // WAYLAND_DISPLAY is unset and DISPLAY is set. The connection opens lazily
 // on first Grab so backend resolution is testable without an X server.
 type x11Backend struct {
-	cfg    Config
-	conn   *xgb.Conn
-	screen *xproto.ScreenInfo
+	jpegQuality int
+	conn        *xgb.Conn
 }
-
-func newX11Backend(cfg Config) *x11Backend { return &x11Backend{cfg: cfg} }
 
 func (b *x11Backend) Name() string             { return "x11" }
 func (b *x11Backend) NeedsWaylandSocket() bool { return false }
@@ -35,7 +32,6 @@ func (b *x11Backend) connect() error {
 		return fmt.Errorf("x11 connect: %w", err)
 	}
 	b.conn = conn
-	b.screen = xproto.Setup(conn).DefaultScreen(conn)
 	return nil
 }
 
@@ -43,7 +39,10 @@ func (b *x11Backend) Grab(_ *sql.DB) ([]byte, error) {
 	if err := b.connect(); err != nil {
 		return nil, err
 	}
-	s := b.screen
+	// Screen geometry is re-read per grab — the setup reply is a cached
+	// getter, and a cached root shrinks silently under xrandr where a
+	// grown root errors and reconnects anyway.
+	s := xproto.Setup(b.conn).DefaultScreen(b.conn)
 	img, err := xproto.GetImage(b.conn, xproto.ImageFormatZPixmap,
 		xproto.Drawable(s.Root), 0, 0,
 		s.WidthInPixels, s.HeightInPixels, ^uint32(0)).Reply()
@@ -63,7 +62,7 @@ func (b *x11Backend) Grab(_ *sql.DB) ([]byte, error) {
 		return nil, err
 	}
 	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, rgba, &jpeg.Options{Quality: b.cfg.JPEGQuality}); err != nil {
+	if err := jpeg.Encode(&buf, rgba, &jpeg.Options{Quality: b.jpegQuality}); err != nil {
 		return nil, fmt.Errorf("x11 jpeg encode: %w", err)
 	}
 	return buf.Bytes(), nil

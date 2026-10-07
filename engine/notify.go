@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"os"
 	"os/exec"
 	"strconv"
 	"time"
@@ -203,7 +202,7 @@ var stallStaleFloorSec int64 = 30 * 60
 // quiet state: manual pause, lock-screen auto-pause, or — grim backend
 // only — no wayland session (grim exits instantly without a socket, so the
 // daemon parks in capture_paused by design). Custom commands, X11, and
-// portal rides are ungated, so their silence always counts. A stale
+// portal rides D-Bus — all ungated, so their silence always counts. A stale
 // quiet-type event only suppresses the stall alert while its condition
 // still holds — a daemon that died mid-pause must alert.
 func captureQuietNow(cfg Config) bool {
@@ -213,17 +212,7 @@ func captureQuietNow(cfg Config) bool {
 	if cfg.AutoPauseLocked && screenLocked() {
 		return true
 	}
-	return sessionWouldUseGrim(cfg) && !waylandReachable()
-}
-
-// sessionWouldUseGrim reports whether capture resolution would pick the
-// grim backend for this session — the only backend gated on the wayland
-// socket. Mirrors the grim branch of resolveCaptureBackend without the
-// LookPath so stall checks don't depend on grim being installed.
-func sessionWouldUseGrim(cfg Config) bool {
-	return cfg.CaptureCommand == "" &&
-		os.Getenv("WAYLAND_DISPLAY") != "" &&
-		!desktopIsKnownNonWlroots(os.Getenv("XDG_CURRENT_DESKTOP"))
+	return grimSession(cfg) && !waylandReachable()
 }
 
 // checkCaptureStall reports a wedged or dead capture daemon from a live
