@@ -39,11 +39,15 @@ jobs:
       - name: Portal helper build check
         # app/portal-capture is a separate module (cgo + libpipewire) — keep
         # it compiling so the helper can't rot ahead of U7 packaging.
+        # CGO_CFLAGS_ALLOW: libpipewire's pkg-config emits -fno-strict-overflow,
+        # which the cgo security allowlist rejects without this pattern.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libpipewire-0.3-dev
           CGO_CFLAGS_ALLOW='-f.*' go -C app/portal-capture build ./...
           CGO_CFLAGS_ALLOW='-f.*' go -C app/portal-capture vet ./...
+          CGO_CFLAGS_ALLOW='-f.*' go -C app/portal-capture test ./...
+          test -z "$(gofmt -l app/portal-capture)"
         working-directory: .
       - name: Install-script battery
         run: bash scripts/test-install.sh

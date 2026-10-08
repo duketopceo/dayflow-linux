@@ -19,6 +19,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,8 +32,30 @@ const (
 	exitFatal      = 4
 )
 
-func emitStatus(s string) { fmt.Fprintf(os.Stderr, "status %s\n", s) }
-func emitToken(t string)  { fmt.Fprintf(os.Stderr, "token %s\n", t) }
+// stderr carries the machine-readable status/token lines AND logs from
+// multiple threads (main, the PipeWire loop, the delayed-consent timer) —
+// serialize every writer so a token line can't be torn mid-write.
+var stderrMu sync.Mutex
+
+type lockedStderr struct{}
+
+func (lockedStderr) Write(p []byte) (int, error) {
+	stderrMu.Lock()
+	defer stderrMu.Unlock()
+	return os.Stderr.Write(p)
+}
+
+func emitStatus(s string) {
+	stderrMu.Lock()
+	defer stderrMu.Unlock()
+	fmt.Fprintf(os.Stderr, "status %s\n", s)
+}
+
+func emitToken(t string) {
+	stderrMu.Lock()
+	defer stderrMu.Unlock()
+	fmt.Fprintf(os.Stderr, "token %s\n", t)
+}
 
 // die logs, emits the terminal status, tears down PipeWire, exits.
 func die(pw *pipewireSession, status string, code int, err error) {
@@ -45,24 +68,40 @@ func die(pw *pipewireSession, status string, code int, err error) {
 }
 
 func main() {
+	// ExitOnError would os.Exit(2) on a flag error — 2 is our consent-denied
+	// code, so parse errors must take the generic fatal path instead.
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	var (
-		quality = flag.Int("jpeg-quality", 55, "JPEG quality 1-100")
-		maxDim  = flag.Int("max-dim", 1920, "bound longer edge; 0 = native")
-		period  = flag.Duration("period", time.Second, "frame emit cadence")
-		token   = flag.String("token", "", "portal restore_token for silent re-Start")
-		once    = flag.Bool("once", false, "capture one frame and exit (smoke test)")
-		timeout = flag.Duration("timeout", 30*time.Second, "give up if no frame arrives")
+		quality = fs.Int("jpeg-quality", 55, "JPEG quality 1-100")
+		maxDim  = fs.Int("max-dim", 1920, "bound longer edge; 0 = native")
+		period  = fs.Duration("period", time.Second, "frame emit cadence")
+		token   = fs.String("token", "", "portal restore_token for silent re-Start")
+		once    = fs.Bool("once", false, "capture one frame and exit (smoke test)")
+		timeout = fs.Duration("timeout", 30*time.Second, "give up if no frame arrives")
 	)
-	flag.Parse()
-	log.SetOutput(os.Stderr)
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		os.Exit(exitFatal)
+	}
+	log.SetOutput(lockedStderr{})
+	// The supervisor passes the token via env — argv is world-readable
+	// through /proc/<pid>/cmdline; the -token flag stays for manual runs.
+	if *token == "" {
+		*token = os.Getenv("DAYFLOW_PORTAL_TOKEN")
+	}
 
+	// Plain connect — WithContext binds connection lifetime to the ctx, so
+	// canceling a dial-bounded context would kill the bus link. The local
+	// handshake is cheap; wedge risk is covered by the supervisor's
+	// frame deadline killing silent helpers.
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		die(nil, "parked", exitFatal, fmt.Errorf("session bus: %w", err))
 	}
 	defer conn.Close()
 
-	emitStatus("consent-needed")
+	// consent-needed is emitted from inside openPortalSession's Start wait
+	// once the picker has actually been up ~1.5s — silent token restores
+	// must not flap the engine's paused/recovered events.
 	sess, err := openPortalSession(conn, *token)
 	var denied portalDenied
 	if errors.As(err, &denied) {

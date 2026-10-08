@@ -442,10 +442,14 @@ func main() {
 		}
 
 	case "capture":
-		// retry unparks a denied/crash-bound portal backend: the daemon
-		// re-resolves its capture backend whenever config mtime changes,
-		// so a plain rewrite is the re-auth affordance.
+		// retry unparks a denied/crash-bound portal backend: denial is
+		// persisted in meta so config reloads don't re-fire dismissed
+		// pickers — clearing the marker + bumping config mtime is the
+		// re-auth affordance.
 		if len(args) >= 1 && args[0] == "retry" {
+			db, _ := openDB()
+			metaSet(db, metaPortalDenied, "")
+			db.Close()
 			if err := writeConfig(cfg); err != nil {
 				fatal(err)
 			}

@@ -55,6 +55,15 @@ func runBackup(db *sql.DB, cfg Config, dest string, includeFrames bool) (string,
 	}
 	os.Chmod(dbDst, 0o600)
 
+	// Strip capture credentials from the snapshot — the portal restore
+	// token grants silent screen-share access; a backup file must not
+	// carry it (config.json secrets get redactSecrets, the db needs the
+	// same treatment).
+	if snap, err := sql.Open("sqlite", "file:"+dbDst); err == nil {
+		snap.Exec(`DELETE FROM meta WHERE k IN ('portal_restore_token','portal_consent_denied')`)
+		snap.Close()
+	}
+
 	// config with secrets redacted — a backup should not smuggle API keys
 	if b, err := os.ReadFile(configPath()); err == nil {
 		var m map[string]json.RawMessage
