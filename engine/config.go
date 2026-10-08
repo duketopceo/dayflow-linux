@@ -43,8 +43,9 @@ type Config struct {
 	MaxFramesMB          int        `json:"max_frames_mb"`   // cap on frames + quarantine dirs; 0 = unlimited
 	MaxDBMB              int        `json:"max_db_mb"`       // cap on the journal database (blocks, events, calls); 0 = unlimited
 	AutoPauseLocked      bool       `json:"auto_pause_locked"`
-	FilterInappropriate  bool       `json:"filter_inappropriate"` // redact adult/explicit content
-	Debug                bool       `json:"debug"`                // verbose engine log to debug.log
+	CaptureEnabled       bool       `json:"capture_enabled,omitempty"` // gates portal-helper spawn; written by onboarding consent — capture without it fires no consent prompt
+	FilterInappropriate  bool       `json:"filter_inappropriate"`      // redact adult/explicit content
+	Debug                bool       `json:"debug"`                     // verbose engine log to debug.log
 	Categories           []Category `json:"categories"`
 	ClassificationPrompt string     `json:"classification_prompt"`       // extra instructions for the vision model
 	JevClassification    bool       `json:"jev_classification"`          // use Jev for category/productive (default true)
@@ -545,6 +546,12 @@ func setConfigValue(key, value string) error {
 			return fmt.Errorf("auto_pause_locked must be true or false")
 		}
 		cfg.AutoPauseLocked = b
+	case "capture_enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("capture_enabled must be true or false")
+		}
+		cfg.CaptureEnabled = b
 	case "filter_inappropriate":
 		b, err := strconv.ParseBool(value)
 		if err != nil {

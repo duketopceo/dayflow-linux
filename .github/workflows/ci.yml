@@ -36,6 +36,15 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Test
         run: go test ./...
+      - name: Portal helper build check
+        # app/portal-capture is a separate module (cgo + libpipewire) — keep
+        # it compiling so the helper can't rot ahead of U7 packaging.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpipewire-0.3-dev
+          CGO_CFLAGS_ALLOW='-f.*' go -C app/portal-capture build ./...
+          CGO_CFLAGS_ALLOW='-f.*' go -C app/portal-capture vet ./...
+        working-directory: .
       - name: Install-script battery
         run: bash scripts/test-install.sh
         working-directory: .

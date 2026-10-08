@@ -1356,12 +1356,20 @@ func TestResolveCaptureBackendDesktopDetection(t *testing.T) {
 	t.Setenv("DISPLAY", "")
 
 	// grim is installed but must NOT be selected on GNOME — it can't work
-	// there, so the backend errors until the portal backend lands.
+	// there. With the portal helper present the backend resolves to portal;
+	// without it, a clear error.
 	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
 	t.Setenv("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")
 	if b, err := resolveCaptureBackend(cfg); err == nil {
 		t.Fatalf("GNOME resolved %T, want error — grim-in-PATH is a trap", b)
 	}
+	t.Setenv("DAYFLOW_PORTAL_HELPER", fakePortalHelper(t, frameFixture(t), "stream"))
+	if b, err := resolveCaptureBackend(cfg); err != nil {
+		t.Fatalf("GNOME + portal helper should resolve: %v", err)
+	} else if _, ok := b.(*portalBackend); !ok {
+		t.Fatalf("GNOME resolved %T, want portalBackend", b)
+	}
+	t.Setenv("DAYFLOW_PORTAL_HELPER", "")
 
 	// A wlroots token wins even alongside a non-wlroots one —
 	// "sway:GNOME" is a common portal workaround, not a GNOME session.
@@ -1380,11 +1388,19 @@ func TestResolveCaptureBackendDesktopDetection(t *testing.T) {
 		t.Fatalf("river resolved %T, want grimBackend", b)
 	}
 
-	// Same desktop with grim absent from PATH → clean error, not a
-	// silent x11 fallthrough (the XWayland root is not the desktop).
+	// Same desktop with grim absent from PATH: portal helper is the
+	// fallback (it works on wlroots too — xdph proved it). With no helper
+	// either → clean error, not a silent x11 fallthrough.
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv("DAYFLOW_PORTAL_HELPER", fakePortalHelper(t, frameFixture(t), "stream"))
+	if b, err := resolveCaptureBackend(cfg); err != nil {
+		t.Fatalf("wlroots without grim but with helper → portal: %v", err)
+	} else if _, ok := b.(*portalBackend); !ok {
+		t.Fatalf("grim-absent wlroots resolved %T, want portalBackend", b)
+	}
+	t.Setenv("DAYFLOW_PORTAL_HELPER", "")
 	if _, err := resolveCaptureBackend(cfg); err == nil {
-		t.Fatal("wlroots session without grim should error")
+		t.Fatal("wlroots session without grim or helper should error")
 	}
 	t.Setenv("PATH", bin)
 

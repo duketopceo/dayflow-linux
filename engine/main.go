@@ -99,12 +99,14 @@ Query:
 
 Control:
   pause | resume | toggle   Control screen capture
+  capture retry           Re-auth a parked portal capture backend (denied consent, crash-bound)
   config                  Print config path and current config
   config set <key> <val>  Update config (model, api_base_url, capture_interval_sec,
                           block_minutes, frames_per_block, jpeg_quality, keep_frames,
                           frame_max_dim, retention_days, max_storage_mb, auto_pause_locked,
                           ignore_apps, output, capture_command, openrouter_api_key,
-                          provider, filter_inappropriate, panel_expanded, debug)
+                          provider, filter_inappropriate, panel_expanded, capture_enabled,
+                          debug)
                           Use "-" as the value to read it from stdin (keeps
                           secrets out of argv and shell history)
   config patch <json|-> Merge a JSON object into the config
@@ -437,6 +439,19 @@ func main() {
 			fmt.Println("paused")
 		} else {
 			fmt.Println("resumed")
+		}
+
+	case "capture":
+		// retry unparks a denied/crash-bound portal backend: the daemon
+		// re-resolves its capture backend whenever config mtime changes,
+		// so a plain rewrite is the re-auth affordance.
+		if len(args) >= 1 && args[0] == "retry" {
+			if err := writeConfig(cfg); err != nil {
+				fatal(err)
+			}
+			fmt.Println("capture retry requested — the daemon re-resolves on config reload")
+		} else {
+			fatal(fmt.Errorf("usage: dayflow capture retry"))
 		}
 
 	case "config":
