@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -904,6 +905,7 @@ func runDaemon(cfg Config) error {
 	var lastHash *frameHash // nil = no prior sample; force first capture
 	locked := false
 	noSession := false          // wayland socket absent — capture skipped, logged once
+	parkedReason := ""          // backend parked (consent/denial/helper) — quiet like noSession
 	grabFails := 0              // consecutive capture errors with a session present
 	var grabFailSince time.Time // first failure of the current streak
 	tick := time.NewTicker(time.Duration(cfg.CaptureIntervalSec) * time.Second)
@@ -947,6 +949,18 @@ func runDaemon(cfg Config) error {
 		}
 		h, attempted, err := captureOnce(db, cfg, backend, lastHash)
 		if err != nil {
+			var pe parkedError
+			if errors.As(err, &pe) {
+				// Parked is a quiet state like noSession: consent pending,
+				// denial, helper absence. Log the transition once — a
+				// per-tick capture_error streak would be a false stall.
+				if parkedReason != pe.reason {
+					parkedReason = pe.reason
+					logEvent(db, "capture_paused", pe.reason)
+					debugf(cfg, "capture: parked — %s", pe.reason)
+				}
+				return
+			}
 			if grabFails == 0 {
 				grabFailSince = time.Now()
 			}
@@ -969,6 +983,10 @@ func runDaemon(cfg Config) error {
 		}
 		if !attempted {
 			return // paused or ignored — not a recovery, keep any streak
+		}
+		if parkedReason != "" {
+			parkedReason = ""
+			logEvent(db, "capture_resumed", "unparked")
 		}
 		if grabFails > 0 {
 			logEvent(db, "capture_recovered", fmt.Sprintf("after %d failures", grabFails))
