@@ -28,7 +28,7 @@ import (
 // re-auth action, restart on stream death with a rapid-death bound.
 type portalBackend struct {
 	cfg    Config
-	helper string // resolved lazily; tests may pin via newPortalBackend
+	helper string // resolved lazily; tests pin it via DAYFLOW_PORTAL_HELPER
 
 	mu     sync.Mutex
 	cmd    *exec.Cmd
@@ -45,6 +45,18 @@ type portalBackend struct {
 }
 
 const metaPortalToken = "portal_restore_token"
+
+// The stderr status/exit-code contract with app/portal-capture. These are
+// literals there (separate module) — keep both sides in sync.
+const (
+	portalStatusConsent = "consent-needed"
+	portalStatusDenied  = "denied"
+	portalExitDenied    = 2
+)
+
+// errDeniedParked is shared by the status-line and exit-code paths so the
+// parked reason can't drift between the two detection sites.
+var errDeniedParked = parkedError{"screen-capture consent denied — re-auth with `dayflow capture retry`"}
 
 // parkedError marks intentionally-quiet states (consent pending, denial,
 // helper absent): the capture loop logs the transition once and stays
@@ -103,7 +115,7 @@ func (b *portalBackend) Grab(db *sql.DB) ([]byte, error) {
 		// up across ticks and frames flow the moment the user approves —
 		// the loop logs capture_paused once, not a per-tick streak.
 		b.mu.Lock()
-		consentPending := b.state == "consent-needed"
+		consentPending := b.state == portalStatusConsent
 		b.mu.Unlock()
 		if consentPending {
 			return nil, parkedError{"portal consent pending — approve the screen-share dialog"}
@@ -134,6 +146,9 @@ func (b *portalBackend) Grab(db *sql.DB) ([]byte, error) {
 func (b *portalBackend) ensure(db *sql.DB) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.closed {
+		return parkedError{"portal backend closed"}
+	}
 	if b.parked != nil {
 		return b.parked
 	}
@@ -179,9 +194,14 @@ func (b *portalBackend) ensure(db *sql.DB) error {
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		stdout.Close()
 		return err
 	}
 	if err := cmd.Start(); err != nil {
+		// Spawn failures count toward the rapid-death bound too —
+		// otherwise a persistently unexecutable helper retries every tick
+		// forever instead of parking.
+		b.deaths = append(b.deaths, time.Now())
 		return fmt.Errorf("spawn portal helper: %w", err)
 	}
 	b.cmd = cmd
@@ -200,21 +220,28 @@ func (b *portalBackend) readFrames(r io.Reader) {
 			return
 		}
 		n := binary.BigEndian.Uint32(hdr[:])
-		if n > x11MaxFrameBytes {
-			debugf(b.cfg, "portal frame %d bytes exceeds cap — dropping helper stream", n)
+		if n > maxFrameBytes {
+			debugf(b.cfg, "portal frame %d bytes exceeds cap — killing helper stream", n)
+			// Leaving the helper alive would deadlock it: nothing drains
+			// stdout, its next write blocks, and wait() never returns.
+			b.mu.Lock()
+			if b.cmd != nil && b.cmd.Process != nil {
+				b.cmd.Process.Kill()
+			}
+			b.mu.Unlock()
 			return
 		}
 		frame := make([]byte, n)
 		if _, err := io.ReadFull(br, frame); err != nil {
 			return
 		}
+		// latest wins: drop any queued frame (non-blocking — a racing
+		// Grab may have drained it), then deliver this one.
 		select {
-		case b.frames <- frame:
+		case <-b.frames:
 		default:
-			// latest wins: drop the queued frame, deliver this one
-			<-b.frames
-			b.frames <- frame
 		}
+		b.frames <- frame
 	}
 }
 
@@ -222,6 +249,7 @@ func (b *portalBackend) readFrames(r io.Reader) {
 // supervisor state, "token <t>" rotates the persisted restore token.
 func (b *portalBackend) readStatus(r io.Reader, db *sql.DB) {
 	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
 		line := sc.Text()
 		if strings.HasPrefix(line, "status ") {
@@ -241,8 +269,8 @@ func (b *portalBackend) readStatus(r io.Reader, db *sql.DB) {
 func (b *portalBackend) setState(s string) {
 	b.mu.Lock()
 	b.state = s
-	if s == "denied" {
-		b.parked = parkedError{"screen-capture consent denied — re-auth with `dayflow capture retry`"}
+	if s == portalStatusDenied {
+		b.parked = errDeniedParked
 	}
 	b.mu.Unlock()
 	b.poke()
@@ -262,10 +290,10 @@ func (b *portalBackend) wait(cmd *exec.Cmd) {
 	if b.cmd == cmd {
 		b.cmd = nil
 	}
-	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 2 {
-		b.state = "denied"
-		b.parked = parkedError{"screen-capture consent denied — re-auth with `dayflow capture retry`"}
-	} else if b.state != "denied" {
+	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == portalExitDenied {
+		b.state = portalStatusDenied
+		b.parked = errDeniedParked
+	} else if b.state != portalStatusDenied {
 		b.state = "stream-dead"
 	}
 	debugf(b.cfg, "portal helper exited: %v", err)

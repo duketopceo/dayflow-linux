@@ -19,19 +19,20 @@ extern void goStreamFrame(int node, int w, int h, int stride, int format,
 extern void goStreamState(int node, int state, const char *msg);
 extern void goStreamFormat(int node, int w, int h);
 
+#define PW_MAX_STREAMS 64
+
 struct stream_node {
 	struct pw_stream *stream;
 	struct spa_hook listener;
 	uint32_t node_id;
 	struct spa_video_info_raw info;
-	pw_bridge *bridge;
 };
 
 struct pw_bridge {
 	struct pw_main_loop *loop;
 	struct pw_context *ctx;
 	struct pw_core *core;
-	struct stream_node *streams[64];
+	struct stream_node *streams[PW_MAX_STREAMS];
 	int nstreams;
 };
 
@@ -109,11 +110,10 @@ static const struct pw_stream_events stream_events = {
 };
 
 int pw_bridge_add_stream(pw_bridge *b, uint32_t node_id) {
-	if (b->nstreams >= 64) return -1;
+	if (b->nstreams >= PW_MAX_STREAMS) return -1;
 	struct stream_node *sn = calloc(1, sizeof(struct stream_node));
 	if (!sn) return -1;
 	sn->node_id = node_id;
-	sn->bridge = b;
 	sn->info = (struct spa_video_info_raw) SPA_VIDEO_INFO_RAW_INIT();
 	sn->info.format = SPA_VIDEO_FORMAT_BGRA;
 	sn->info.size = SPA_RECTANGLE(0, 0); // let the producer choose native res

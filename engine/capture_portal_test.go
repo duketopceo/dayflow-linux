@@ -12,7 +12,8 @@ import (
 // fakePortalHelper writes a script emulating the helper contract: status
 // and token lines on stderr, length-prefixed JPEG frames on stdout, and a
 // configurable exit mode. MODE values: "stream" (frames forever), "deny"
-// (status denied + exit 2), "die" (exit 3 after one frame), "park" (exit 4).
+// (status denied + exit 2), "die" (exit 3 after one frame), "park" (exit 4),
+// "consent" (status consent-needed, then idle — picker waiting).
 func fakePortalHelper(t *testing.T, fixture, mode string) string {
 	t.Helper()
 	dir := t.TempDir()

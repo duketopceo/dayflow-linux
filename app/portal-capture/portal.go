@@ -127,7 +127,6 @@ type portalSession struct {
 type streamSlot struct {
 	node   uint32
 	x, y   int
-	w, h   int
 	hasPos bool
 }
 
@@ -222,8 +221,9 @@ func openPortalSession(conn *dbus.Conn, restoreToken string) (*portalSession, er
 	return ps, nil
 }
 
-// applyStreamProps reads the optional position/size members the portal may
-// attach to each stream (a{sv} inside the stream tuple).
+// applyStreamProps reads the optional position member the portal may attach
+// to each stream (a{sv} inside the stream tuple). Reported "size" is
+// ignored — the decoded frame bounds are authoritative.
 func applyStreamProps(slot *streamSlot, props map[string]dbus.Variant) {
 	if props == nil {
 		return
@@ -233,12 +233,6 @@ func applyStreamProps(slot *streamSlot, props map[string]dbus.Variant) {
 			slot.x, _ = toInt(xy[0])
 			slot.y, _ = toInt(xy[1])
 			slot.hasPos = true
-		}
-	}
-	if v, ok := props["size"]; ok {
-		if wh, ok := v.Value().([]interface{}); ok && len(wh) == 2 {
-			slot.w, _ = toInt(wh[0])
-			slot.h, _ = toInt(wh[1])
 		}
 	}
 }

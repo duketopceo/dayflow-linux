@@ -85,10 +85,10 @@ func (b *x11Backend) connect() error {
 	}
 }
 
-// x11MaxFrameBytes bounds the root geometry we will pull over the wire —
+// maxFrameBytes bounds the root geometry we will pull over the wire —
 // the argv path caps subprocess output at 64MB and this keeps an absurd
 // server-advertised root from allocating unboundedly.
-const x11MaxFrameBytes = 256 << 20
+const maxFrameBytes = 256 << 20
 
 func (b *x11Backend) Grab(_ *sql.DB) ([]byte, error) {
 	if b.dead != nil {
@@ -166,7 +166,7 @@ func (b *x11Backend) grabRoot(conn *xgb.Conn, s *xproto.ScreenInfo) (*xproto.Get
 			return
 		}
 		w, h := int(geo.Width), int(geo.Height)
-		if int64(w)*int64(h)*4 > x11MaxFrameBytes {
+		if int64(w)*int64(h)*4 > maxFrameBytes {
 			ch <- res{err: fmt.Errorf("x11 frame: root geometry %dx%d exceeds cap", w, h)}
 			return
 		}

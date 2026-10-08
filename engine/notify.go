@@ -100,7 +100,7 @@ func metaGet(db *sql.DB, k string) string {
 }
 
 // metaSetBackendGate persists the resolved backend's wayland-socket gate
-// for the stall detector — "1" socket-gated (grim), "0" ungated.
+// for the stall detector — "1" socket-gated (grim, portal), "0" ungated.
 func metaSetBackendGate(db *sql.DB, b captureBackend) {
 	v := "0"
 	if b.NeedsWaylandSocket() {
