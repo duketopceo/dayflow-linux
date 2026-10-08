@@ -434,7 +434,9 @@ the supervisor maps consent/denial/parks to `capture_paused` events so
 denial parks until user re-auth action (persisted in `meta`, cleared by
 `dayflow capture retry`; survives config reloads); stream death →
 re-Start with rotated token; ≥3 consecutive frameless exits → parked for
-5 min, then auto-retries once (transient bus/portal outages self-heal).
+5 min, then auto-retries (transient bus/portal outages self-heal; renewed
+frameless deaths re-park for another interval — `dayflow capture retry`
+is the manual unpark).
 The restore token reaches the helper via `DAYFLOW_PORTAL_TOKEN` env
 (argv is world-readable), with the child's whole env allowlisted.
 
