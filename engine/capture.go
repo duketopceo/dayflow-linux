@@ -47,9 +47,18 @@ func captureState(db *sql.DB, cfg Config) string {
 	if cfg.AutoPauseLocked && screenLocked() {
 		return "locked"
 	}
+	// A parked portal backend (consent pending, denial, death bound) keeps
+	// its heartbeat fresh but writes only capture_paused — count it as
+	// "paused" rather than "down" so status doesn't cry wolf.
+	var lastType string
 	var last int64
-	db.QueryRow(`SELECT COALESCE(MAX(ts),0) FROM events
-	  WHERE type IN ('capture_saved','capture_deduped','capture_ignored','capture_error')`).Scan(&last)
+	db.QueryRow(`SELECT type, ts FROM events
+	  WHERE type IN ('capture_saved','capture_deduped','capture_ignored','capture_error',
+	    'capture_paused','auto_paused','paused','capture_resumed','auto_resumed','resumed')
+	  ORDER BY ts DESC, id DESC LIMIT 1`).Scan(&lastType, &last)
+	if lastType == "capture_paused" || lastType == "auto_paused" || lastType == "paused" {
+		return "paused"
+	}
 	stale := int64(60)
 	if s := int64(3 * cfg.CaptureIntervalSec); s > stale {
 		stale = s
@@ -312,8 +321,9 @@ func autoOutput(db *sql.DB, cfg Config) string {
 	return name
 }
 
-// grabFrameTimeout bounds one capture_command run — a hung screenshot tool
-// must not stall the capture loop forever. A var so tests can shrink it.
+// grabFrameTimeout bounds one frame wait — a hung screenshot tool or a
+// silent portal helper must not stall the capture loop forever. A var so
+// tests can shrink it.
 var grabFrameTimeout = 30 * time.Second
 
 func grabFrame(cmdArgs []string) ([]byte, error) {
@@ -958,6 +968,14 @@ func runDaemon(cfg Config) error {
 					parkedReason = pe.reason
 					logEvent(db, "capture_paused", pe.reason)
 					debugf(cfg, "capture: parked — %s", pe.reason)
+					// Consent-pending already notifies via the picker
+					// itself; the silent parks (denial, missing helper,
+					// death bound) need a user-visible reason why capture
+					// stopped.
+					if !strings.HasPrefix(pe.reason, "portal consent pending") &&
+						!strings.HasPrefix(pe.reason, "capture not enabled") {
+						notifyAsync(db, cfg, notifyClassPaused, "dayflow", "capture paused: "+pe.reason)
+					}
 				}
 				return
 			}

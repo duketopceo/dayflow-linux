@@ -67,8 +67,12 @@ static void stream_process(void *userdata) {
 	if (buf->n_datas > 0) {
 		struct spa_data *sd = &buf->datas[0];
 		// MAP_BUFFERS flag mapped the chunk for us — sd->data non-NULL.
-		if (sd->data) {
-			int len = sd->chunk->size ? (int)sd->chunk->size : (int)sd->maxsize;
+		// Clamp offset+size to maxsize: the span comes from the producer
+		// and an oversize chunk must never read past the mapped region.
+		if (sd->data && sd->chunk->offset <= sd->maxsize) {
+			uint32_t avail = sd->maxsize - sd->chunk->offset;
+			int len = sd->chunk->size ? (int)sd->chunk->size : (int)avail;
+			if (len > (int)avail) len = (int)avail;
 			uint8_t *base = (uint8_t *)sd->data + sd->chunk->offset;
 			goStreamFrame((int)sn->node_id,
 			              (int)sn->info.size.width, (int)sn->info.size.height,

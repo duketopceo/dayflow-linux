@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -41,10 +42,21 @@ func requestPath(conn *dbus.Conn, token string) dbus.ObjectPath {
 	return dbus.ObjectPath(fmt.Sprintf("%s/request/%s/%s", portalPath, senderToken(conn), token))
 }
 
+// Machine-latency calls (CreateSession, SelectSources) bound at 60s; Start
+// is user-latency — the picker must live until answered, so it gets its own
+// long window rather than a timeout that re-prompts forever.
+const (
+	portalCallTimeout    = 60 * time.Second
+	portalConsentTimeout = 10 * time.Minute
+)
+
 // portalRequest issues a portal call and blocks for its Response signal.
-// Returns the response code (0 = success) and results dict.
+// The D-Bus call itself is context-bounded; timeout bounds the async
+// Response wait (0 = use portalCallTimeout). Returns the response code
+// (0 = success) and results dict.
 func portalRequest(conn *dbus.Conn, obj dbus.BusObject, method string,
-	callOpts map[string]dbus.Variant, args ...interface{}) (uint32, map[string]dbus.Variant, error) {
+	timeout time.Duration, callOpts map[string]dbus.Variant,
+	args ...interface{}) (uint32, map[string]dbus.Variant, error) {
 
 	token := nextToken("req")
 	reqPath := requestPath(conn, token)
@@ -71,7 +83,12 @@ func portalRequest(conn *dbus.Conn, obj dbus.BusObject, method string,
 		)
 	}()
 
-	call := obj.Call(method, 0, append(args, callOpts)...)
+	// The method invocation itself is machine-latency — a wedged portal
+	// that never replies must not hang the helper forever (the supervisor
+	// only restarts on process exit).
+	callCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	call := obj.CallWithContext(callCtx, method, 0, append(args, callOpts)...)
+	cancel()
 	if call.Err != nil {
 		return 0, nil, fmt.Errorf("%s: %w", method, call.Err)
 	}
@@ -81,15 +98,23 @@ func portalRequest(conn *dbus.Conn, obj dbus.BusObject, method string,
 	}
 	if handle != reqPath {
 		// Some portals return a different handle than the predicted path —
-		// match on the returned one too.
+		// match on the returned one too, and remove it with the main match.
 		conn.AddMatchSignal(
+			dbus.WithMatchObjectPath(handle),
+			dbus.WithMatchInterface(requestIfc),
+			dbus.WithMatchMember("Response"),
+		)
+		defer conn.RemoveMatchSignal(
 			dbus.WithMatchObjectPath(handle),
 			dbus.WithMatchInterface(requestIfc),
 			dbus.WithMatchMember("Response"),
 		)
 	}
 
-	timer := time.NewTimer(60 * time.Second)
+	if timeout == 0 {
+		timeout = portalCallTimeout
+	}
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
 		select {
@@ -138,7 +163,7 @@ func openPortalSession(conn *dbus.Conn, restoreToken string) (*portalSession, er
 
 	// CreateSession
 	sessionToken := nextToken("sess")
-	code, results, err := portalRequest(conn, obj, screenCastIfc+".CreateSession",
+	code, results, err := portalRequest(conn, obj, screenCastIfc+".CreateSession", 0,
 		map[string]dbus.Variant{
 			"session_handle_token": dbus.MakeVariant(sessionToken),
 		})
@@ -150,8 +175,9 @@ func openPortalSession(conn *dbus.Conn, restoreToken string) (*portalSession, er
 	}
 	var session dbus.ObjectPath
 	if v, ok := results["session_handle"]; ok {
-		if s, ok := v.Value().(string); ok {
-			session = dbus.ObjectPath(s)
+		// godbus decodes 'o' as ObjectPath — a string assertion never matches.
+		if s, ok := v.Value().(dbus.ObjectPath); ok {
+			session = s
 		}
 	}
 	if session == "" {
@@ -169,7 +195,7 @@ func openPortalSession(conn *dbus.Conn, restoreToken string) (*portalSession, er
 	if restoreToken != "" {
 		selectOpts["restore_token"] = dbus.MakeVariant(restoreToken)
 	}
-	code, _, err = portalRequest(conn, obj, screenCastIfc+".SelectSources", selectOpts, session)
+	code, _, err = portalRequest(conn, obj, screenCastIfc+".SelectSources", 0, selectOpts, session)
 	if err != nil {
 		return nil, err
 	}
@@ -177,9 +203,18 @@ func openPortalSession(conn *dbus.Conn, restoreToken string) (*portalSession, er
 		return nil, portalDenied{code: code, phase: "select-sources"}
 	}
 
-	// Start — this is the user-visible consent prompt.
+	// Start — this is the user-visible consent prompt; it waits on the
+	// user, so it gets the long consent window rather than the 60s
+	// machine-latency bound (a timeout here re-prompts forever).
+	// Emit consent-needed only if Start is still outstanding after ~1.5s —
+	// a picker is actually up. A valid restore token completes instantly
+	// and never emits it, so silent restarts don't flap pause/resume.
+	consent := time.AfterFunc(1500*time.Millisecond, func() {
+		emitStatus("consent-needed")
+	})
 	code, results, err = portalRequest(conn, obj, screenCastIfc+".Start",
-		map[string]dbus.Variant{}, session, "")
+		portalConsentTimeout, map[string]dbus.Variant{}, session, "")
+	consent.Stop()
 	if err != nil {
 		return nil, err
 	}
@@ -256,8 +291,10 @@ func toInt(v interface{}) (int, bool) {
 // ambient socket — that is what keeps strict snap confinement viable.
 func openPipeWireFD(conn *dbus.Conn, session dbus.ObjectPath) (int, error) {
 	obj := conn.Object(portalDest, portalPath)
-	call := obj.Call(screenCastIfc+".OpenPipeWireRemote", 0, session,
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	call := obj.CallWithContext(ctx, screenCastIfc+".OpenPipeWireRemote", 0, session,
 		map[string]dbus.Variant{})
+	cancel()
 	if call.Err != nil {
 		return -1, fmt.Errorf("OpenPipeWireRemote: %w", call.Err)
 	}

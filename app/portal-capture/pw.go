@@ -13,6 +13,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -67,19 +68,28 @@ func goStreamFrame(node C.int, w, h, stride, format C.int, data unsafe.Pointer, 
 		// the C side requeues the buffer either way.
 		return
 	}
-	// SPA formats we accept: BGRA (0x8?) — enum: BGRA=7, RGBA=8, BGRx=11,
-	// RGBx=12 per spa_video_format; treat unknown as BGRA-ish and swap only
-	// when needed. 4 bytes/pixel either way.
+	// Only BGRA is offered in stream negotiation (pwbridge.c), so the
+	// negotiated format is always 4 bytes/pixel B,R,G,A — swap B and R.
 	const bpp = 4
 	rowLen := int(w) * bpp
-	src := C.GoBytes(data, length)
-	if f.img == nil || f.w != int(w) || f.h != int(h) {
-		f.img = image.NewRGBA(image.Rect(0, 0, int(w), int(h)))
-		f.w, f.h = int(w), int(h)
-	}
 	s := int(stride)
 	if s < rowLen {
 		s = rowLen
+	}
+	// Zero-copy view of the PipeWire span — GoBytes would add a full
+	// multi-MB copy before the per-row copy below; the buffer is valid
+	// until this callback returns.
+	span := int(length)
+	if max := s * int(h); span > max {
+		span = max
+	}
+	if span < 0 {
+		span = 0
+	}
+	src := unsafe.Slice((*byte)(data), span)
+	if f.img == nil || f.w != int(w) || f.h != int(h) {
+		f.img = image.NewRGBA(image.Rect(0, 0, int(w), int(h)))
+		f.w, f.h = int(w), int(h)
 	}
 	for y := 0; y < int(h); y++ {
 		srcOff := y * s
@@ -155,9 +165,23 @@ func (s *pipewireSession) run() {
 
 // shutdown stops the main loop, waits for its thread to return (libpipewire
 // demands destroy calls happen outside loop context), then frees.
+// pw_main_loop_run re-arms its running flag on entry, so a quit landing
+// before run() starts is silently dropped — retry until the loop actually
+// returns. Bounded: if the loop never exits, the caller is on a die() path
+// and process teardown reaps it anyway.
 func (s *pipewireSession) shutdown() {
 	stopping.Store(true)
-	C.pw_bridge_stop(s.b)
-	<-s.done
-	C.pw_bridge_free(s.b)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		C.pw_bridge_stop(s.b)
+		select {
+		case <-s.done:
+			C.pw_bridge_free(s.b)
+			return
+		case <-time.After(20 * time.Millisecond):
+			if time.Now().After(deadline) {
+				return
+			}
+		}
+	}
 }
