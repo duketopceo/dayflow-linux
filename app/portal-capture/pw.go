@@ -12,6 +12,7 @@ import (
 	"image"
 	"log"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -19,11 +20,14 @@ import (
 // the negotiated format. The C process callback delivers raw spans; we copy
 // into an image.RGBA immediately so the PipeWire buffer can be requeued.
 type nodeFrame struct {
-	mu     sync.Mutex
-	img    *image.RGBA
-	w, h   int
-	format int
-	fresh  bool
+	mu   sync.Mutex
+	img  *image.RGBA
+	w, h int
+	// fresh gates decode cost: set on decode, cleared when compose()
+	// consumes the frame. Buffers arriving while a frame is still
+	// unconsumed are skipped — at ~1fps emit cadence most would be
+	// discarded anyway.
+	fresh bool
 }
 
 var (
@@ -32,6 +36,11 @@ var (
 
 	streamAlive = map[int]bool{}
 	streamMu    sync.Mutex
+
+	// stopping suppresses the state callback during intentional teardown —
+	// quitting the loop transitions streams through error/unconnected and
+	// would otherwise emit a spurious "stream-dead" on a clean exit.
+	stopping atomic.Bool
 )
 
 func nodeState(node int) *nodeFrame {
@@ -50,15 +59,20 @@ func goStreamFrame(node C.int, w, h, stride, format C.int, data unsafe.Pointer, 
 	if w <= 0 || h <= 0 || data == nil {
 		return
 	}
+	f := nodeState(int(node))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fresh {
+		// Unconsumed frame still queued — skip the multi-MB copy+swizzle;
+		// the C side requeues the buffer either way.
+		return
+	}
 	// SPA formats we accept: BGRA (0x8?) — enum: BGRA=7, RGBA=8, BGRx=11,
 	// RGBx=12 per spa_video_format; treat unknown as BGRA-ish and swap only
 	// when needed. 4 bytes/pixel either way.
 	const bpp = 4
 	rowLen := int(w) * bpp
 	src := C.GoBytes(data, length)
-	f := nodeState(int(node))
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.img == nil || f.w != int(w) || f.h != int(h) {
 		f.img = image.NewRGBA(image.Rect(0, 0, int(w), int(h)))
 		f.w, f.h = int(w), int(h)
@@ -83,7 +97,6 @@ func goStreamFrame(node C.int, w, h, stride, format C.int, data unsafe.Pointer, 
 			dst[x+3] = 255
 		}
 	}
-	f.format = int(format)
 	f.fresh = true
 }
 
@@ -98,6 +111,9 @@ func goStreamState(node, state C.int, msg *C.char) {
 	// 4 streaming. Paused is NOT death — producers pause idle streams; only
 	// the error state means the stream is gone.
 	st := int(state)
+	if stopping.Load() {
+		return
+	}
 	streamMu.Lock()
 	streamAlive[int(node)] = st != 0
 	streamMu.Unlock()
@@ -140,6 +156,7 @@ func (s *pipewireSession) run() {
 // shutdown stops the main loop, waits for its thread to return (libpipewire
 // demands destroy calls happen outside loop context), then frees.
 func (s *pipewireSession) shutdown() {
+	stopping.Store(true)
 	C.pw_bridge_stop(s.b)
 	<-s.done
 	C.pw_bridge_free(s.b)

@@ -6,8 +6,9 @@
 //	  status consent-needed | streaming | denied | stream-dead | parked
 //	  token <restore_token>        — persist for silent re-Start
 //
-// Exit codes: 0 clean stop, 2 consent denied/dismissed, 3 stream dead,
-// 4 portal/bus unreachable (fatal — restart policy decides).
+// Exit codes: 0 clean stop, 2 consent denied/dismissed, 3 stream dead —
+// everything else (including 4, portal/bus unreachable) is left to the
+// supervisor's restart policy.
 package main
 
 import (
@@ -24,10 +25,24 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-const exitDenied = 2
+const (
+	exitDenied     = 2
+	exitStreamDead = 3
+	exitFatal      = 4
+)
 
 func emitStatus(s string) { fmt.Fprintf(os.Stderr, "status %s\n", s) }
 func emitToken(t string)  { fmt.Fprintf(os.Stderr, "token %s\n", t) }
+
+// die logs, emits the terminal status, tears down PipeWire, exits.
+func die(pw *pipewireSession, status string, code int, err error) {
+	log.Printf("%v", err)
+	emitStatus(status)
+	if pw != nil {
+		pw.shutdown()
+	}
+	os.Exit(code)
+}
 
 func main() {
 	var (
@@ -43,9 +58,7 @@ func main() {
 
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
-		log.Printf("session bus: %v", err)
-		emitStatus("parked")
-		os.Exit(4)
+		die(nil, "parked", exitFatal, fmt.Errorf("session bus: %w", err))
 	}
 	defer conn.Close()
 
@@ -53,14 +66,10 @@ func main() {
 	sess, err := openPortalSession(conn, *token)
 	var denied portalDenied
 	if errors.As(err, &denied) {
-		log.Printf("%v", err)
-		emitStatus("denied")
-		os.Exit(exitDenied)
+		die(nil, "denied", exitDenied, err)
 	}
 	if err != nil {
-		log.Printf("portal session: %v", err)
-		emitStatus("parked")
-		os.Exit(4)
+		die(nil, "parked", exitFatal, fmt.Errorf("portal session: %w", err))
 	}
 	if sess.token != "" && sess.token != *token {
 		emitToken(sess.token)
@@ -69,15 +78,11 @@ func main() {
 
 	fd, err := openPipeWireFD(conn, sess.session)
 	if err != nil {
-		log.Printf("pipewire remote: %v", err)
-		emitStatus("stream-dead")
-		os.Exit(3)
+		die(nil, "stream-dead", exitStreamDead, fmt.Errorf("pipewire remote: %w", err))
 	}
 	pw, err := pipewireStart(fd, sess.nodeIDs)
 	if err != nil {
-		log.Printf("pipewire: %v", err)
-		emitStatus("stream-dead")
-		os.Exit(3)
+		die(nil, "stream-dead", exitStreamDead, fmt.Errorf("pipewire: %w", err))
 	}
 	go pw.run()
 	defer pw.shutdown()
@@ -85,39 +90,47 @@ func main() {
 	emitStatus("streaming")
 
 	out := bufio.NewWriter(os.Stdout)
+	sigs := sigChan()
 	deadline := time.Now().Add(*timeout)
 	grabbed := false
+	var lastJPEG []byte
 	for {
-		img := compose(sess.slots)
-		if img != nil {
+		if img := compose(sess.slots); img != nil {
 			img = downscale(img, *maxDim)
-			if err := writeFrame(out, img, *quality); err != nil {
-				log.Printf("write frame: %v", err)
-				emitStatus("stream-dead")
-				pw.shutdown()
-				os.Exit(3)
+			jpeg, err := encodeFrame(img, *quality)
+			if err != nil {
+				die(pw, "stream-dead", exitStreamDead, fmt.Errorf("encode frame: %w", err))
 			}
-			out.Flush()
+			lastJPEG = jpeg
 			grabbed = true
+		}
+		// Emit every period even when nothing changed (compose nil) — the
+		// supervisor's per-grab deadline assumes a live stream; a silent
+		// helper on a static screen would read as capture errors.
+		if lastJPEG != nil {
+			if err := emitFrame(out, lastJPEG); err != nil {
+				die(pw, "stream-dead", exitStreamDead, fmt.Errorf("write frame: %w", err))
+			}
+			if err := out.Flush(); err != nil {
+				die(pw, "stream-dead", exitStreamDead, fmt.Errorf("flush: %w", err))
+			}
 			if *once {
 				return
 			}
 		}
 		if !grabbed && time.Now().After(deadline) {
-			log.Printf("no frame within %s", *timeout)
-			emitStatus("stream-dead")
-			pw.shutdown()
-			os.Exit(3)
+			die(pw, "stream-dead", exitStreamDead, fmt.Errorf("no frame within %s", *timeout))
 		}
 		select {
 		case <-time.After(*period):
-		case sig := <-sigChan():
+		case sig := <-sigs:
 			log.Printf("stopping on %s", sig)
 			emitStatus("parked")
 			return
 		}
 		// a stream in the error state is dead → exit so the supervisor
-		// can restart us with a fresh session
+		// can restart us with a fresh session (the state callback already
+		// emitted stream-dead)
 		streamMu.Lock()
 		dead := false
 		for _, alive := range streamAlive {
@@ -127,9 +140,9 @@ func main() {
 		}
 		streamMu.Unlock()
 		if dead {
-			emitStatus("stream-dead")
+			log.Printf("stream died — exiting for restart")
 			pw.shutdown()
-			os.Exit(3)
+			os.Exit(exitStreamDead)
 		}
 	}
 }

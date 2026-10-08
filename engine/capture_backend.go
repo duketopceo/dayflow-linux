@@ -20,8 +20,9 @@ type captureBackend interface {
 	// events during resolution (grim's autoOutput); most ignore it.
 	Grab(db *sql.DB) ([]byte, error)
 	// NeedsWaylandSocket reports whether the backend dies without a
-	// wayland socket — gates the daemon's quiet-pause path. Only grim
-	// requires it; portal rides D-Bus, X11 and custom commands neither.
+	// wayland socket — gates the daemon's quiet-pause path. grim and the
+	// portal helper need it (the portal session lives on the compositor);
+	// X11 and custom commands do not.
 	NeedsWaylandSocket() bool
 	// Close releases persistent resources (x11 conn, portal helper).
 	Close() error
@@ -127,9 +128,9 @@ func waylandSocketPresent() bool {
 // the standalone-app plan (KTD2): capture_command always wins; on Wayland
 // the compositor orders attempts — known non-wlroots desktops skip grim
 // (it's installable there but can't work) while wlroots-family and
-// unrecognized desktops try grim first; a portal/PipeWire backend slots in
-// before the error once it exists. Without WAYLAND_DISPLAY an X11 session
-// falls to the pure-Go X11 backend.
+// unrecognized desktops try grim first, falling back to the portal helper
+// when grim is absent. Without WAYLAND_DISPLAY an X11 session falls to the
+// pure-Go X11 backend.
 func resolveCaptureBackend(cfg Config) (captureBackend, error) {
 	if cfg.CaptureCommand != "" {
 		if argv := strings.Fields(cfg.CaptureCommand); len(argv) > 0 {

@@ -929,8 +929,8 @@ func runDaemon(cfg Config) error {
 		metaSet(db, metaCaptureHeartbeat, strconv.FormatInt(time.Now().Unix(), 10))
 		// Built-in grim exits 1 instantly when no wayland session exists
 		// (greeter, compositor down/restarting) — pause quietly and log the
-		// transition, not an error per tick. Only the grim backend needs
-		// the socket gate; custom commands, X11, and portal run ungated.
+		// transition, not an error per tick. Only socket-gated backends
+		// (grim, portal) use this path; custom commands and X11 run ungated.
 		if backend.NeedsWaylandSocket() && !waylandReachable() {
 			if !noSession {
 				noSession = true
