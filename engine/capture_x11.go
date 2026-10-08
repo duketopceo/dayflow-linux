@@ -59,6 +59,14 @@ func (b *x11Backend) connect() error {
 		b.conn = r.conn
 		return nil
 	case <-time.After(grabFrameTimeout):
+		// Reap a late-arriving conn — NewConn can still succeed after the
+		// deadline and nothing else reads ch, so without this each timed-out
+		// tick leaks a socket plus xgb's reader goroutines.
+		go func() {
+			if r := <-ch; r.conn != nil {
+				r.conn.Close()
+			}
+		}()
 		return fmt.Errorf("x11 connect: timed out after %s", grabFrameTimeout)
 	}
 }
@@ -78,7 +86,7 @@ func (b *x11Backend) Grab(_ *sql.DB) ([]byte, error) {
 	// silently captures only the top-left crop. GetGeometry is a live
 	// round-trip.
 	s := xproto.Setup(b.conn).DefaultScreen(b.conn)
-	img, w, h, err := b.grabRoot(s)
+	img, w, h, err := b.grabRoot(b.conn, s)
 	if err != nil {
 		return nil, err
 	}
@@ -124,15 +132,18 @@ func (b *x11Backend) Grab(_ *sql.DB) ([]byte, error) {
 // and the argv backends all honor grabFrameTimeout, so an unresponsive X
 // server must not park the whole capture loop (heartbeat, signals, and
 // retention share it).
-func (b *x11Backend) grabRoot(s *xproto.ScreenInfo) (*xproto.GetImageReply, int, int, error) {
+func (b *x11Backend) grabRoot(conn *xgb.Conn, s *xproto.ScreenInfo) (*xproto.GetImageReply, int, int, error) {
 	type res struct {
 		img  *xproto.GetImageReply
 		w, h int
 		err  error
 	}
 	ch := make(chan res, 1)
+	// The worker uses the conn captured at call time, never b.conn — the
+	// timeout path nils the field via dropConn while this goroutine is
+	// still in-flight, and reading the field here would race and panic.
 	go func() {
-		geo, err := xproto.GetGeometry(b.conn, xproto.Drawable(s.Root)).Reply()
+		geo, err := xproto.GetGeometry(conn, xproto.Drawable(s.Root)).Reply()
 		if err != nil {
 			ch <- res{err: fmt.Errorf("x11 getgeometry: %w", err)}
 			return
@@ -142,7 +153,7 @@ func (b *x11Backend) grabRoot(s *xproto.ScreenInfo) (*xproto.GetImageReply, int,
 			ch <- res{err: fmt.Errorf("x11 frame: root geometry %dx%d exceeds cap", w, h)}
 			return
 		}
-		img, err := xproto.GetImage(b.conn, xproto.ImageFormatZPixmap,
+		img, err := xproto.GetImage(conn, xproto.ImageFormatZPixmap,
 			xproto.Drawable(s.Root), 0, 0,
 			uint16(w), uint16(h), ^uint32(0)).Reply()
 		if err != nil {
