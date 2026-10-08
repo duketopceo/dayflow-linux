@@ -26,12 +26,20 @@ type x11Backend struct {
 	// handshake can't be killed (xgb has no ctx), so timed-out ticks wait
 	// on the same attempt instead of stacking a goroutine + socket per tick.
 	connectCh chan connRes
+	// grabTimeouts counts consecutive grab timeouts; at the bound the
+	// backend is dead — xgb's Close() does a graceful noop round-trip that
+	// hangs on an unresponsive server, so each timed-out grab otherwise
+	// leaks its conn + worker + xgb goroutines forever (one set per 30s).
+	grabTimeouts int
+	dead         error
 }
 
 type connRes struct {
 	conn *xgb.Conn
 	err  error
 }
+
+const x11MaxGrabTimeouts = 5
 
 func (b *x11Backend) Name() string             { return "x11" }
 func (b *x11Backend) NeedsWaylandSocket() bool { return false }
@@ -83,6 +91,9 @@ func (b *x11Backend) connect() error {
 const x11MaxFrameBytes = 256 << 20
 
 func (b *x11Backend) Grab(_ *sql.DB) ([]byte, error) {
+	if b.dead != nil {
+		return nil, b.dead
+	}
 	if err := b.connect(); err != nil {
 		return nil, err
 	}
@@ -174,9 +185,18 @@ func (b *x11Backend) grabRoot(conn *xgb.Conn, s *xproto.ScreenInfo) (*xproto.Get
 			b.dropConn()
 			return nil, 0, 0, r.err
 		}
+		b.grabTimeouts = 0
 		return r.img, r.w, r.h, nil
 	case <-time.After(grabFrameTimeout):
-		b.dropConn() // unblocks the Reply goroutine's read
+		// dropConn asks xgb to shut down, but its graceful path can hang on
+		// a wedged server — the worker may not unblock. Bounded by
+		// x11MaxGrabTimeouts so a dead server leaks at most that many
+		// conn+goroutine sets before the backend gives up.
+		b.dropConn()
+		b.grabTimeouts++
+		if b.grabTimeouts >= x11MaxGrabTimeouts {
+			b.dead = fmt.Errorf("x11 server unresponsive for %d consecutive grabs — backend disabled until daemon restart", x11MaxGrabTimeouts)
+		}
 		return nil, 0, 0, fmt.Errorf("x11 grab: timed out after %s", grabFrameTimeout)
 	}
 }
