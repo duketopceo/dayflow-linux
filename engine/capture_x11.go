@@ -22,6 +22,15 @@ type x11Backend struct {
 	jpegQuality int
 	frameMaxDim int
 	conn        *xgb.Conn
+	// connectCh is non-nil while a NewConn attempt is in flight. A wedged
+	// handshake can't be killed (xgb has no ctx), so timed-out ticks wait
+	// on the same attempt instead of stacking a goroutine + socket per tick.
+	connectCh chan connRes
+}
+
+type connRes struct {
+	conn *xgb.Conn
+	err  error
 }
 
 func (b *x11Backend) Name() string             { return "x11" }
@@ -42,31 +51,28 @@ func (b *x11Backend) connect() error {
 	}
 	// NewConn blocks on the socket handshake — a remote TCP DISPLAY waits
 	// on kernel retransmit (~2min) otherwise, wedging the capture tick.
-	type res struct {
-		conn *xgb.Conn
-		err  error
+	if b.connectCh == nil {
+		ch := make(chan connRes, 1)
+		b.connectCh = ch
+		go func() {
+			c, err := xgb.NewConn()
+			ch <- connRes{c, err} // local — Close() may nil the field
+		}()
 	}
-	ch := make(chan res, 1)
-	go func() {
-		c, err := xgb.NewConn()
-		ch <- res{c, err}
-	}()
 	select {
-	case r := <-ch:
+	case r := <-b.connectCh:
+		b.connectCh = nil
 		if r.err != nil {
+			if r.conn != nil {
+				r.conn.Close()
+			}
 			return fmt.Errorf("x11 connect: %w", r.err)
 		}
 		b.conn = r.conn
 		return nil
 	case <-time.After(grabFrameTimeout):
-		// Reap a late-arriving conn — NewConn can still succeed after the
-		// deadline and nothing else reads ch, so without this each timed-out
-		// tick leaks a socket plus xgb's reader goroutines.
-		go func() {
-			if r := <-ch; r.conn != nil {
-				r.conn.Close()
-			}
-		}()
+		// The attempt stays registered — a late success is adopted by the
+		// next tick, and Close drains it if the backend is torn down first.
 		return fmt.Errorf("x11 connect: timed out after %s", grabFrameTimeout)
 	}
 }
@@ -179,6 +185,17 @@ func (b *x11Backend) Close() error {
 	if b.conn != nil {
 		b.conn.Close()
 		b.conn = nil
+	}
+	// A connect attempt still in flight must not leak its conn after the
+	// backend is gone — drain it once and close whatever arrives.
+	if b.connectCh != nil {
+		ch := b.connectCh
+		b.connectCh = nil
+		go func() {
+			if r := <-ch; r.conn != nil {
+				r.conn.Close()
+			}
+		}()
 	}
 	return nil
 }
