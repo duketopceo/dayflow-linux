@@ -98,7 +98,52 @@ func TestResolveProviderKeyFallsBackToKeyring(t *testing.T) {
 		t.Fatalf("keyring fallback not applied, got %q", cfg.OpenRouterAPIKey)
 	}
 	p := cfg.Providers[0]
-	if got := resolveProviderKey(p); got != "sk-ring-9" {
+	if got := resolveProviderKey(cfg, p); got != "sk-ring-9" {
 		t.Fatalf("resolveProviderKey = %q", got)
+	}
+}
+
+// A config that grew a providers list before its key moved per-provider still
+// owns the legacy openrouter_api_key — readiness and call injection must fall
+// back to it when the provider entry and keyring both come up empty.
+func TestResolveProviderKeyFallsBackToLegacyField(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "cfg"))
+	t.Setenv("DAYFLOW_CONFIG", filepath.Join(dir, "config.json"))
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("PATH", t.TempDir()) // no omaseal — keyring path is dead
+	writeConfig(Config{
+		OpenRouterAPIKey: "sk-legacy-7",
+		Providers: []Provider{{
+			ID: "default", Name: "OpenRouter", Kind: "openrouter",
+			Model: "m", APIBaseURL: "https://openrouter.ai/api/v1",
+			Vision: true, Enabled: true,
+			// no api_key — the regression shape
+		}},
+		Routing: Routing{Primary: "default"},
+	})
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.Providers[0]
+	if got := resolveProviderKey(cfg, p); got != "sk-legacy-7" {
+		t.Fatalf("resolveProviderKey = %q, want legacy field", got)
+	}
+	if _, ok := configuredVisionProvider(cfg); !ok {
+		t.Fatal("configuredVisionProvider should be true via legacy key")
+	}
+	// Legacy key must not leak into non-openrouter providers.
+	cfg.Providers[0].Kind = "custom"
+	if got := resolveProviderKey(cfg, cfg.Providers[0]); got != "" {
+		t.Fatalf("custom provider should not inherit openrouter key, got %q", got)
+	}
+	// Nor to an openrouter-kind provider pointing at an arbitrary endpoint —
+	// the key would be sent there as a Bearer token.
+	cfg.Providers[0].Kind = "openrouter"
+	cfg.Providers[0].APIBaseURL = "https://evil.example.com/v1"
+	if got := resolveProviderKey(cfg, cfg.Providers[0]); got != "" {
+		t.Fatalf("off-endpoint provider must not inherit openrouter key, got %q", got)
 	}
 }

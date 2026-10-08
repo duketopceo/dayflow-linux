@@ -130,7 +130,7 @@ func batchRecapProvider(cfg Config) (Provider, bool) {
 	if err != nil || p.Kind == "cli" || !providerUsesOpenRouterHeaders(p) {
 		return p, false
 	}
-	if providerNeedsAuth(p) && resolveProviderKey(p) == "" {
+	if providerNeedsAuth(p) && resolveProviderKey(cfg, p) == "" {
 		return p, false
 	}
 	return p, true
@@ -152,7 +152,7 @@ func newBatchRequest(cfg Config, p Provider, method, url string, body []byte) (*
 		return nil, err
 	}
 	if providerNeedsAuth(p) {
-		if k := resolveProviderKey(p); k != "" {
+		if k := resolveProviderKey(cfg, p); k != "" {
 			req.Header.Set("Authorization", "Bearer "+k)
 		}
 	}
