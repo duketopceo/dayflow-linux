@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/jezek/xgb v1.3.1
 	golang.org/x/image v0.46.0
 	modernc.org/sqlite v1.58.0
 )

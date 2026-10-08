@@ -213,26 +213,6 @@ func grimArgv(cfg Config, output string) []string {
 	return append(args, "-")
 }
 
-// resolveCaptureCommand picks the screenshot tool. grim (wlroots: Hyprland,
-// sway, river, ...) is the only built-in backend; capture_command in config can
-// point at anything that writes a JPEG/PNG to stdout. For the grim backend a
-// literal output name bakes -o into the returned argv; "auto" returns the
-// composite argv — captureOnce re-resolves the focused output per tick, so a
-// dock/focus change can't pin capture to the start-time monitor.
-func resolveCaptureCommand(cfg Config) ([]string, error) {
-	if cfg.CaptureCommand != "" {
-		return strings.Fields(cfg.CaptureCommand), nil
-	}
-	if _, err := exec.LookPath("grim"); err != nil {
-		return nil, fmt.Errorf("grim not found — install it (wlroots compositors) or set capture_command in %s", configPath())
-	}
-	output := cfg.Output
-	if output == "auto" {
-		output = "" // resolved per tick by autoOutput
-	}
-	return grimArgv(cfg, output), nil
-}
-
 // focusFailCeiling negative-caches focus resolution: after this many
 // consecutive `hyprctl monitors` failures the daemon stops spawning hyprctl
 // until focusRetryBackoff elapses — on non-Hyprland systems output=auto
@@ -395,7 +375,7 @@ func captureFailVisible(streak int) bool {
 // sampled hash — unchanged on early returns. attempted reports whether a
 // frame was actually grabbed — paused/ignored skips return false so the
 // caller doesn't count them as recovery from a failure streak.
-func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) (*frameHash, bool, error) {
+func captureOnce(db *sql.DB, cfg Config, backend captureBackend, lastHash *frameHash) (*frameHash, bool, error) {
 	if paused() {
 		return lastHash, false, nil
 	}
@@ -405,26 +385,7 @@ func captureOnce(db *sql.DB, cfg Config, cmdArgs []string, lastHash *frameHash) 
 		debugf(cfg, "capture: ignored app %s", cls)
 		return lastHash, false, nil
 	}
-	// output=auto re-resolves the focused monitor every tick and injects
-	// -o into a freshly built grim argv. The injection is grim-path only —
-	// a custom capture_command is used verbatim and auto is ignored there.
-	args := cmdArgs
-	var composite []string
-	if cfg.CaptureCommand == "" && cfg.Output == "auto" &&
-		len(args) > 0 && filepath.Base(args[0]) == "grim" {
-		if name := autoOutput(db, cfg); name != "" {
-			composite = grimArgv(cfg, "")
-			args = grimArgv(cfg, name)
-		}
-	}
-	raw, err := grabFrame(args)
-	if err != nil && composite != nil {
-		// resolve→exec race (e.g. the output was unplugged between
-		// `hyprctl monitors` and `grim -o`, or a dock transition): one
-		// composite retry this tick before the failure counts.
-		debugf(cfg, "capture: grim -o failed (%v); retrying composite", err)
-		raw, err = grabFrame(composite)
-	}
+	raw, err := backend.Grab(db)
 	if err != nil {
 		// Logging is the caller's job — it streak-throttles so a dead-session
 		// window doesn't flood every sink each interval.
@@ -891,11 +852,19 @@ func runDaemon(cfg Config) error {
 		defer func() { cancel(); <-done }()
 	}
 
-	cmdArgs, err := resolveCaptureCommand(cfg)
+	backend, err := resolveCaptureBackend(cfg)
+	// daemon_start is logged BEFORE the resolve error return so a
+	// permanently-unresolvable session (e.g. GNOME until the portal
+	// backend lands) crash-loops under Restart=always with a visible
+	// unbroken-start run the stall detector can report — resolving after
+	// this line would leave zero rows and look like "never ran".
 	if err != nil {
+		logEvent(db, "daemon_start", "resolve failed: "+err.Error())
 		return err
 	}
-	logEvent(db, "daemon_start", strings.Join(cmdArgs, " "))
+	logEvent(db, "daemon_start", backend.Name())
+	defer func() { backend.Close() }() // closes whichever backend is current at exit, not the pre-reload one
+	metaSetBackendGate(db, backend)
 	cfgMtime := configMtime()
 
 	// SIGTERM/SIGINT (systemctl stop, Ctrl-C) is an intentional stop, not a
@@ -919,8 +888,12 @@ func runDaemon(cfg Config) error {
 			// A reload can mean a compositor change — drop the output=auto
 			// negative cache so the next tick re-probes hyprctl.
 			focusFails, focusDisabled, focusDisabledAt = 0, false, time.Time{}
-			if na, err := resolveCaptureCommand(cfg); err == nil {
-				cmdArgs = na
+			if nb, err := resolveCaptureBackend(cfg); err == nil {
+				backend.Close()
+				backend = nb
+				metaSetBackendGate(db, backend)
+			} else {
+				debugf(cfg, "config reloaded but backend kept (%v)", err)
 			}
 			logEvent(db, "config_reloaded", "")
 			debugf(cfg, "config reloaded: provider=%s model=%s interval=%ds block=%dm debug=%v",
@@ -954,9 +927,9 @@ func runDaemon(cfg Config) error {
 		metaSet(db, metaCaptureHeartbeat, strconv.FormatInt(time.Now().Unix(), 10))
 		// Built-in grim exits 1 instantly when no wayland session exists
 		// (greeter, compositor down/restarting) — pause quietly and log the
-		// transition, not an error per tick. Custom capture_command stays
-		// ungated: its failure modes are its own.
-		if cfg.CaptureCommand == "" && !waylandReachable() {
+		// transition, not an error per tick. Only the grim backend needs
+		// the socket gate; custom commands, X11, and portal run ungated.
+		if backend.NeedsWaylandSocket() && !waylandReachable() {
 			if !noSession {
 				noSession = true
 				lastHash = nil
@@ -972,7 +945,7 @@ func runDaemon(cfg Config) error {
 			debugf(cfg, "capture: resumed — wayland session present")
 			notifyAsync(db, cfg, notifyClassRecovered, "dayflow", "capture resumed")
 		}
-		h, attempted, err := captureOnce(db, cfg, cmdArgs, lastHash)
+		h, attempted, err := captureOnce(db, cfg, backend, lastHash)
 		if err != nil {
 			if grabFails == 0 {
 				grabFailSince = time.Now()

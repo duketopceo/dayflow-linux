@@ -556,12 +556,15 @@ func TestCaptureStallQuietStates(t *testing.T) {
 	}
 	setPaused(false)
 
-	// An absent wayland session is quiet-by-design for the grim backend:
-	// capture_paused suppresses while the socket is still missing.
+	// An absent wayland session is quiet-by-design while the resolved
+	// backend is socket-gated: capture_paused suppresses while the socket
+	// is still missing. The gate comes from the daemon's meta flag, not
+	// the checker's env.
 	db.Exec(`DELETE FROM events`)
 	logEvent(db, "daemon_start", "grim -t jpeg -")
 	logEvent(db, "capture_paused", "no wayland session")
 	db.Exec(`UPDATE events SET ts=?`, stale)
+	metaSetBackendGate(db, &grimBackend{cfg: cfg})
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("WAYLAND_DISPLAY", "wayland-missing")
 	resetBudget()
@@ -571,12 +574,13 @@ func TestCaptureStallQuietStates(t *testing.T) {
 		t.Fatalf("absent wayland session should not alert: %v", notifyMarkerLines(t, marker))
 	}
 
-	// ... but a custom capture_command is ungated — its silence counts.
-	cfg.CaptureCommand = "/bin/cat /nonexistent"
+	// ... but an ungated backend's silence counts — a stale pause does
+	// not suppress when the daemon resolved argv/x11 (flag "0").
+	metaSetBackendGate(db, &argvBackend{argv: []string{"cat", "/nonexistent"}})
 	resetBudget()
 	checkCaptureStall(db, cfg)
 	if sent() == before {
-		t.Fatal("capture_command + stale capture_paused should alert — the command is ungated")
+		t.Fatal("ungated backend + stale capture_paused should alert")
 	}
 }
 

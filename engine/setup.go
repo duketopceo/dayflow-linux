@@ -308,13 +308,18 @@ func collectDoctorChecks(cfg Config, deep bool) ([]doctorCheck, int) {
 		checks = append(checks, doctorCheck{Name: name, Status: "warn", Detail: detail})
 	}
 
-	check("wayland session", os.Getenv("WAYLAND_DISPLAY") != "", "not running under Wayland")
-	_, grimErr := exec.LookPath("grim")
-	check("grim installed", grimErr == nil || cfg.CaptureCommand != "", "install grim or set capture_command")
-	// output:"auto" only resolves on the grim path — a custom capture_command
-	// never gets the -o injection, so the setting is silently dead there.
-	if cfg.Output == "auto" && cfg.CaptureCommand != "" {
-		warn("output auto", "output \"auto\" is ignored when capture_command is set — the custom command controls which monitor is grabbed")
+	if b, berr := resolveCaptureBackend(cfg); berr != nil {
+		check("capture backend", false, fmt.Sprintf("%v", berr))
+	} else {
+		b.Close()
+		checks = append(checks, doctorCheck{Name: "capture backend", Status: "ok", Detail: b.Name()})
+		// output:"auto" only resolves a focused monitor on the grim path —
+		// every other backend grabs the composite and silently ignores it.
+		if cfg.Output == "auto" {
+			if _, ok := b.(*grimBackend); !ok {
+				warn("output auto", fmt.Sprintf("output \"auto\" is ignored by the %s backend — it captures the composite", b.Name()))
+			}
+		}
 	}
 	check("config file", fileExists(configPath()), "run: dayflow setup")
 	visionProvider, configured := configuredVisionProvider(cfg)

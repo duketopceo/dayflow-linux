@@ -74,6 +74,12 @@ func stallAlertable(streak int, since time.Time) bool {
 // under the stall detector.
 const metaCaptureHeartbeat = "capture_heartbeat_ts"
 
+// metaBackendNeedsWayland records the resolved backend's socket gate ("1"/"0")
+// at each daemon start and reload swap. The stall detector reads it instead
+// of re-deriving the resolver's env predicate — the daemon's own answer can
+// never drift from a future backend (portal) or a changed resolver.
+const metaBackendNeedsWayland = "capture_backend_needs_wayland"
+
 // notifyOnceDaily lowers the cap for nudge classes to one send per day —
 // "standup ready" on every slow tick would be noise even under the cap.
 var notifyOnceDaily = map[string]bool{
@@ -91,6 +97,16 @@ func metaGet(db *sql.DB, k string) string {
 	var v string
 	db.QueryRow(`SELECT v FROM meta WHERE k=?`, k).Scan(&v)
 	return v
+}
+
+// metaSetBackendGate persists the resolved backend's wayland-socket gate
+// for the stall detector — "1" socket-gated (grim), "0" ungated.
+func metaSetBackendGate(db *sql.DB, b captureBackend) {
+	v := "0"
+	if b.NeedsWaylandSocket() {
+		v = "1"
+	}
+	metaSet(db, metaBackendNeedsWayland, v)
 }
 
 func metaSet(db *sql.DB, k, v string) {
@@ -199,20 +215,24 @@ const stallHeartbeatTypes = `'daemon_stop','capture_saved','capture_deduped',
 var stallStaleFloorSec int64 = 30 * 60
 
 // captureQuietNow reports whether capture is *currently* in a legitimate
-// quiet state: manual pause, lock-screen auto-pause, or — grim backend
-// only — no wayland session (grim exits instantly without a socket, so the
-// daemon parks in capture_paused by design; a custom capture_command is
-// ungated, so its silence always counts). A stale quiet-type event only
-// suppresses the stall alert while its condition still holds — a daemon
-// that died mid-pause must alert.
-func captureQuietNow(cfg Config) bool {
+// quiet state: manual pause, lock-screen auto-pause, or — when the
+// resolved backend is socket-gated — no wayland session (grim exits
+// instantly without a socket, so the daemon parks in capture_paused by
+// design). Custom commands and X11 are ungated, so their silence always
+// counts. The backend flag comes from the daemon's own meta row, not the
+// checker's env — the oneshot's env only needs to reach the socket probe.
+// A missing flag predates the feature: default gated (legacy daemons were
+// all grim), the conservative-quiet direction. A stale quiet-type event
+// only suppresses the stall alert while its condition still holds — a
+// daemon that died mid-pause must alert.
+func captureQuietNow(db *sql.DB, cfg Config) bool {
 	if paused() {
 		return true
 	}
 	if cfg.AutoPauseLocked && screenLocked() {
 		return true
 	}
-	return cfg.CaptureCommand == "" && !waylandReachable()
+	return metaGet(db, metaBackendNeedsWayland) != "0" && !waylandReachable()
 }
 
 // checkCaptureStall reports a wedged or dead capture daemon from a live
@@ -260,7 +280,7 @@ func checkCaptureStall(db *sql.DB, cfg Config) {
 	case "capture_paused", "auto_paused", "paused":
 		// A quiet claim suppresses only while the quiet condition still
 		// holds — a daemon that died while paused or locked is a stall.
-		if captureQuietNow(cfg) {
+		if captureQuietNow(db, cfg) {
 			return
 		}
 		fresh = lastTS
@@ -285,7 +305,7 @@ func checkCaptureStall(db *sql.DB, cfg Config) {
 	if fresh == 0 || time.Now().Unix()-fresh <= stale {
 		return
 	}
-	if captureQuietNow(cfg) {
+	if captureQuietNow(db, cfg) {
 		return
 	}
 	notify(db, cfg, notifyClassStall, "dayflow", "capture stalled")

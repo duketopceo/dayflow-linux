@@ -22,8 +22,7 @@ After=graphical-session.target
 ExecStart=%s daemon
 Restart=always
 RestartSec=5
-PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
-Environment="WAYLAND_DISPLAY=wayland-1"
+PassEnvironment=WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS DISPLAY XAUTHORITY
 
 [Install]
 WantedBy=graphical-session.target
@@ -33,14 +32,15 @@ WantedBy=graphical-session.target
 // notify-send can reach it — but note GLib also falls back to
 // $XDG_RUNTIME_DIR/bus when the address is unset, so a missing
 // DBUS_SESSION_BUS_ADDRESS does not necessarily mean the bus is
-// unreachable.
+// unreachable. The display vars let the stall check's wayland-socket
+// probe see the real session instead of always reading "no socket".
 const summarizeService = `[Unit]
 Description=dayflow block summarizer (OpenRouter)
 
 [Service]
 Type=oneshot
 ExecStart=%s summarize
-PassEnvironment=DBUS_SESSION_BUS_ADDRESS
+PassEnvironment=DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
 `
 
 const summarizeTimer = `[Unit]
@@ -217,6 +217,10 @@ func installUnits() error {
 			failed = append(failed, strings.Join(args, " "))
 		}
 	}
+	// Import the session display env into the user manager — sessions that
+	// never ran the desktop's own import (bare-TTY wlroots launches) used
+	// to rely on the units' hardcoded WAYLAND_DISPLAY fallback.
+	run("--user", "import-environment", "WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "DISPLAY", "XAUTHORITY")
 	run("--user", "daemon-reload")
 	run("--user", "enable", "--now", "dayflow-summarize.timer")
 	run("--user", "enable", "--now", "dayflow-backup.timer")
