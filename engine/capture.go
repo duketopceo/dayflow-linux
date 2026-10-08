@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -46,9 +47,18 @@ func captureState(db *sql.DB, cfg Config) string {
 	if cfg.AutoPauseLocked && screenLocked() {
 		return "locked"
 	}
+	// A parked portal backend (consent pending, denial, death bound) keeps
+	// its heartbeat fresh but writes only capture_paused — count it as
+	// "paused" rather than "down" so status doesn't cry wolf.
+	var lastType string
 	var last int64
-	db.QueryRow(`SELECT COALESCE(MAX(ts),0) FROM events
-	  WHERE type IN ('capture_saved','capture_deduped','capture_ignored','capture_error')`).Scan(&last)
+	db.QueryRow(`SELECT type, ts FROM events
+	  WHERE type IN ('capture_saved','capture_deduped','capture_ignored','capture_error',
+	    'capture_paused','auto_paused','paused','capture_resumed','auto_resumed','resumed')
+	  ORDER BY ts DESC, id DESC LIMIT 1`).Scan(&lastType, &last)
+	if lastType == "capture_paused" || lastType == "auto_paused" || lastType == "paused" {
+		return "paused"
+	}
 	stale := int64(60)
 	if s := int64(3 * cfg.CaptureIntervalSec); s > stale {
 		stale = s
@@ -311,8 +321,9 @@ func autoOutput(db *sql.DB, cfg Config) string {
 	return name
 }
 
-// grabFrameTimeout bounds one capture_command run — a hung screenshot tool
-// must not stall the capture loop forever. A var so tests can shrink it.
+// grabFrameTimeout bounds one frame wait — a hung screenshot tool or a
+// silent portal helper must not stall the capture loop forever. A var so
+// tests can shrink it.
 var grabFrameTimeout = 30 * time.Second
 
 func grabFrame(cmdArgs []string) ([]byte, error) {
@@ -904,6 +915,7 @@ func runDaemon(cfg Config) error {
 	var lastHash *frameHash // nil = no prior sample; force first capture
 	locked := false
 	noSession := false          // wayland socket absent — capture skipped, logged once
+	parkedReason := ""          // backend parked (consent/denial/helper) — quiet like noSession
 	grabFails := 0              // consecutive capture errors with a session present
 	var grabFailSince time.Time // first failure of the current streak
 	tick := time.NewTicker(time.Duration(cfg.CaptureIntervalSec) * time.Second)
@@ -927,8 +939,8 @@ func runDaemon(cfg Config) error {
 		metaSet(db, metaCaptureHeartbeat, strconv.FormatInt(time.Now().Unix(), 10))
 		// Built-in grim exits 1 instantly when no wayland session exists
 		// (greeter, compositor down/restarting) — pause quietly and log the
-		// transition, not an error per tick. Only the grim backend needs
-		// the socket gate; custom commands, X11, and portal run ungated.
+		// transition, not an error per tick. Only socket-gated backends
+		// (grim, portal) use this path; custom commands and X11 run ungated.
 		if backend.NeedsWaylandSocket() && !waylandReachable() {
 			if !noSession {
 				noSession = true
@@ -947,6 +959,26 @@ func runDaemon(cfg Config) error {
 		}
 		h, attempted, err := captureOnce(db, cfg, backend, lastHash)
 		if err != nil {
+			var pe parkedError
+			if errors.As(err, &pe) {
+				// Parked is a quiet state like noSession: consent pending,
+				// denial, helper absence. Log the transition once — a
+				// per-tick capture_error streak would be a false stall.
+				if parkedReason != pe.reason {
+					parkedReason = pe.reason
+					logEvent(db, "capture_paused", pe.reason)
+					debugf(cfg, "capture: parked — %s", pe.reason)
+					// Consent-pending already notifies via the picker
+					// itself; the silent parks (denial, missing helper,
+					// death bound) need a user-visible reason why capture
+					// stopped.
+					if !strings.HasPrefix(pe.reason, "portal consent pending") &&
+						!strings.HasPrefix(pe.reason, "capture not enabled") {
+						notifyAsync(db, cfg, notifyClassPaused, "dayflow", "capture paused: "+pe.reason)
+					}
+				}
+				return
+			}
 			if grabFails == 0 {
 				grabFailSince = time.Now()
 			}
@@ -969,6 +1001,10 @@ func runDaemon(cfg Config) error {
 		}
 		if !attempted {
 			return // paused or ignored — not a recovery, keep any streak
+		}
+		if parkedReason != "" {
+			parkedReason = ""
+			logEvent(db, "capture_resumed", "unparked")
 		}
 		if grabFails > 0 {
 			logEvent(db, "capture_recovered", fmt.Sprintf("after %d failures", grabFails))

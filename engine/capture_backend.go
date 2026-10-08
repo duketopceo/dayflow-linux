@@ -20,8 +20,9 @@ type captureBackend interface {
 	// events during resolution (grim's autoOutput); most ignore it.
 	Grab(db *sql.DB) ([]byte, error)
 	// NeedsWaylandSocket reports whether the backend dies without a
-	// wayland socket — gates the daemon's quiet-pause path. Only grim
-	// requires it; portal rides D-Bus, X11 and custom commands neither.
+	// wayland socket — gates the daemon's quiet-pause path. grim and the
+	// portal helper need it (the portal session lives on the compositor);
+	// X11 and custom commands do not.
 	NeedsWaylandSocket() bool
 	// Close releases persistent resources (x11 conn, portal helper).
 	Close() error
@@ -127,9 +128,9 @@ func waylandSocketPresent() bool {
 // the standalone-app plan (KTD2): capture_command always wins; on Wayland
 // the compositor orders attempts — known non-wlroots desktops skip grim
 // (it's installable there but can't work) while wlroots-family and
-// unrecognized desktops try grim first; a portal/PipeWire backend slots in
-// before the error once it exists. Without WAYLAND_DISPLAY an X11 session
-// falls to the pure-Go X11 backend.
+// unrecognized desktops try grim first, falling back to the portal helper
+// when grim is absent. Without WAYLAND_DISPLAY an X11 session falls to the
+// pure-Go X11 backend.
 func resolveCaptureBackend(cfg Config) (captureBackend, error) {
 	if cfg.CaptureCommand != "" {
 		if argv := strings.Fields(cfg.CaptureCommand); len(argv) > 0 {
@@ -145,13 +146,22 @@ func resolveCaptureBackend(cfg Config) (captureBackend, error) {
 	wayland := os.Getenv("WAYLAND_DISPLAY") != "" &&
 		(waylandSocketPresent() || os.Getenv("DISPLAY") == "")
 	if wayland {
-		if !desktopHasToken(desktop, knownNonWlrootsDesktop) || desktopHasToken(desktop, knownWlrootsDesktop) {
+		nonWlroots := desktopHasToken(desktop, knownNonWlrootsDesktop) && !desktopHasToken(desktop, knownWlrootsDesktop)
+		if !nonWlroots {
+			// wlroots-family or unrecognized: grim first, portal as the
+			// sandbox-friendly fallback when grim is absent.
 			if _, err := exec.LookPath("grim"); err == nil {
 				return &grimBackend{cfg: cfg}, nil
 			}
+			if portalHelperPath() != "" {
+				return newPortalBackend(cfg), nil
+			}
 			return nil, fmt.Errorf("no capture backend for Wayland session (XDG_CURRENT_DESKTOP=%q) — install grim (wlroots compositors) or set capture_command", desktop)
 		}
-		return nil, fmt.Errorf("no capture backend for Wayland session (XDG_CURRENT_DESKTOP=%q) — this compositor needs the portal backend (pending); set capture_command as a stopgap", desktop)
+		if portalHelperPath() != "" {
+			return newPortalBackend(cfg), nil
+		}
+		return nil, fmt.Errorf("no capture backend for Wayland session (XDG_CURRENT_DESKTOP=%q) — this compositor needs the portal helper (dayflow-portal, bundled beside the engine) or set capture_command as a stopgap", desktop)
 	}
 	if os.Getenv("DISPLAY") != "" {
 		if waylandSocketPresent() {

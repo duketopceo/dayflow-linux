@@ -127,8 +127,11 @@ telemetry, classic snap confinement.
   unrecognized Wayland desktop tries grim before portal, preserving the
   coverage `exec.LookPath` provided today (niri/river/wayfire/labwc and
   colon-joined values like `sway:wlroots` all keep working).
-  `waylandReachable()` gates only the grim path (portal is D-Bus, X11 is
-  neither). Fixes `install.go`'s hardcoded `WAYLAND_DISPLAY=wayland-1`
+  `waylandReachable()` gates capture idling for all session-bound backends
+  — grim needs the socket, and the portal session dies with the
+  compositor too, so portal reports the same quiet semantics (implemented
+  as `NeedsWaylandSocket()` on the backend; X11/custom commands are
+  ungated). Fixes `install.go`'s hardcoded `WAYLAND_DISPLAY=wayland-1`
   (GNOME uses `wayland-0`) — the fallback env line goes, and the unit's
   `PassEnvironment` gains `DISPLAY` and `XAUTHORITY` so the X11 backend is
   actually reachable under the shipped units (it is a whitelist; GDM Xorg
@@ -418,15 +421,24 @@ read length-prefixed frames, restart policy), `engine/store.go` or a
 data-dir state file (`portal_restore_token` — deliberately **not**
 config.json, see KTD3), `engine/capture_portal_test.go`.
 
-**Approach:** KTD3. Before writing SPA negotiation code, evaluate a
+**Approach:** KTD3. ~~Before writing SPA negotiation code, evaluate a
 GStreamer `pipewiresrc`-based helper against the length-prefixed-JPEG
-contract (gst-plugin-pipewire is present on GNOME targets) — offload is
-worthwhile if it meets the contract; record the outcome, then proceed.
+contract~~ **Outcome (implemented):** GStreamer rejected — `pipewiresrc`
+still requires the full portal D-Bus flow in-process and adds a runtime
+dep; direct libpipewire via a thin cgo bridge matches the robotgo/go2tv
+references and stays self-contained.
 The helper prints structured status lines on stderr
-(`consent-needed`, `streaming`, `denied`, `stream-dead`) the supervisor maps
-to `captureState`. Backoff: denial parks until user re-auth action (UI
-calls `dayflow capture retry` or the equivalent); stream death → re-Start
-with rotated token; ≥3 rapid deaths → parked error state.
+(`consent-needed`, `streaming`, `denied`, `stream-dead`, `parked`) —
+the supervisor maps consent/denial/parks to `capture_paused` events so
+`status` reports "paused" (not "down") while awaiting consent. Backoff:
+denial parks until user re-auth action (persisted in `meta`, cleared by
+`dayflow capture retry`; survives config reloads); stream death →
+re-Start with rotated token; ≥3 consecutive frameless exits → parked for
+5 min, then auto-retries (transient bus/portal outages self-heal; renewed
+frameless deaths re-park for another interval — `dayflow capture retry`
+is the manual unpark).
+The restore token reaches the helper via `DAYFLOW_PORTAL_TOKEN` env
+(argv is world-readable), with the child's whole env allowlisted.
 
 **Test scenarios:**
 - Unit: supervisor parses helper status lines → correct `captureState`
