@@ -159,9 +159,13 @@ func devinKnownIDs(db *sql.DB) (map[string]bool, error) {
 }
 
 func devinCandidates(db *sql.DB, sSec, eSec int64) ([]sessionCandidate, error) {
+	// message_nodes has no created_at index — the IN-subquery form scans the
+	// whole multi-GB table (sessions.db grows unboundedly). EXISTS per
+	// session rides idx_message_nodes_session and short-circuits on the
+	// first in-window row.
 	rows, err := db.Query(`SELECT s.id, s.title, s.working_directory FROM sessions s
-	  WHERE s.id IN (SELECT session_id FROM message_nodes
-	    WHERE created_at >= ? AND created_at < ?)
+	  WHERE EXISTS (SELECT 1 FROM message_nodes
+	    WHERE session_id = s.id AND created_at >= ? AND created_at < ?)
 	  ORDER BY s.created_at`, sSec, eSec)
 	if err != nil {
 		return nil, err
