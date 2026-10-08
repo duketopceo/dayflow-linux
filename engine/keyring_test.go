@@ -139,4 +139,11 @@ func TestResolveProviderKeyFallsBackToLegacyField(t *testing.T) {
 	if got := resolveProviderKey(cfg, cfg.Providers[0]); got != "" {
 		t.Fatalf("custom provider should not inherit openrouter key, got %q", got)
 	}
+	// Nor to an openrouter-kind provider pointing at an arbitrary endpoint —
+	// the key would be sent there as a Bearer token.
+	cfg.Providers[0].Kind = "openrouter"
+	cfg.Providers[0].APIBaseURL = "https://evil.example.com/v1"
+	if got := resolveProviderKey(cfg, cfg.Providers[0]); got != "" {
+		t.Fatalf("off-endpoint provider must not inherit openrouter key, got %q", got)
+	}
 }
