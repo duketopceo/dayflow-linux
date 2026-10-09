@@ -601,9 +601,19 @@ list (qt6 runtime + `qml6-module-*` + `qt6-wayland` + `libpipewire-0.3-0`
 + `libspa-0.2-modules`). rpm deps: `qt6-qtbase, qt6-qtdeclarative,
 qt6-qtwayland, pipewire-libs`.
 
+**As-shipped corrections (post-U2):** `dayflow-portal` is a Go+cgo module
+at `app/portal-capture/` — its build needs `libpipewire-0.3-dev` +
+pkg-config and `CGO_CFLAGS_ALLOW='-f.*'` (pkg-config emits flags cgo's
+default allowlist rejects; already wired in ci.yml). The package must
+install `dayflow-portal` beside `dayflow` (sibling resolution in
+`portalHelperPath` — `/usr/bin` satisfies both sibling and PATH lookup)
+or document `DAYFLOW_PORTAL_HELPER`. The helper is spawned by the engine
+with an allowlisted env (`DAYFLOW_PORTAL_TOKEN` travels via env, not
+argv) — no packaging config needed beyond binary placement.
+
 **Test scenarios:** package contents assertions (paths, .desktop, units,
-metainfo); `dpkg-deb --info` sanity in CI; SHA256SUMS extended to cover
-packages.
+metainfo, `dayflow-portal` present beside `dayflow`); `dpkg-deb --info`
+sanity in CI; SHA256SUMS extended to cover packages.
 
 **Verification:** CI green; artifacts on a draft release.
 
@@ -634,7 +644,11 @@ exactly this honesty.
 **Test scenarios:**
 - `snap install --dangerous dayflow.snap` on cluster1 → launch → consent →
   frames (portal fd path — watch `snap audit`/journal for denials,
-  including SPA module loading from the staged libspa).
+  including SPA module loading from the staged libspa). The staged
+  `dayflow-portal` is spawned in-snap by the engine, so its allowlisted
+  env (`DAYFLOW_PORTAL_TOKEN`) never crosses the confinement boundary —
+  but the helper binary must be staged next to `dayflow` inside the snap
+  (sibling resolution) and libpipewire stage-packages verified.
 - Confined HOME: journal lands in `~/snap/dayflow/common`, NOT
   `~/.local/share/dayflow`.
 - `snap remove` leaves documented snapshot state (data retention copy).
