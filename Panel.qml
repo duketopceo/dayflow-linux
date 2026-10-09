@@ -88,6 +88,8 @@ Panel {
   readonly property alias agentRecapsEnabled: agentLoader.recapsEnabled
   readonly property alias agentsLoading: agentLoader.loading
   readonly property alias agentsError: agentLoader.error
+  readonly property alias agentProgress: agentLoader.progress
+  readonly property alias agentPhase: agentLoader.phaseLabel
   function agentsLoad(refresh) { agentLoader.load(refresh) }
 
   function lastLine(t) {
@@ -254,12 +256,21 @@ Panel {
     dayflow.loadTimeline()
   }
 
-  // Fire-and-forget UI action logging -> debug.log. A single shared Process;
-  // overlapping actions may drop a line, which is fine for debug telemetry.
-  Process { id: uiLogProc }
+  // Fire-and-forget UI action logging -> debug.log. One shared Process —
+  // overlapping calls queue and drain on exit.
+  Process {
+    id: uiLogProc
+    onExited: Qt.callLater(drainUILog)
+  }
+  property var uiLogQueue: []
   function uilog(msg) {
-    uiLogProc.command = ["dayflow", "log", msg]
-    if (!uiLogProc.running) uiLogProc.running = true
+    uiLogQueue.push(msg)
+    drainUILog()
+  }
+  function drainUILog() {
+    if (uiLogProc.running || uiLogQueue.length === 0) return
+    uiLogProc.command = ["dayflow", "log", uiLogQueue.shift()]
+    uiLogProc.running = true
   }
 
   function procByName(n) {

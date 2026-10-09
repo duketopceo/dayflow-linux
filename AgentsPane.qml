@@ -129,10 +129,50 @@ Column {
     }
   }
 
-  BusyBar {
+  // Progress surface — hosts that don't expose it (older loaders) fall
+  // back to the indeterminate BusyBar.
+  readonly property real agentProgress: {
+    var p = host ? host.agentsProgress : undefined
+    return p === undefined || p === null ? -1 : p
+  }
+  readonly property string agentPhase: host && host.agentsPhase ? host.agentsPhase : ""
+
+  Column {
     width: parent.width
-    pal: pane.dayflow
-    active: host !== null && host.agentsLoading
+    spacing: Style.space(2)
+    visible: host !== null && host.agentsLoading
+
+    BusyBar {
+      width: parent.width
+      pal: pane.dayflow
+      active: parent.visible && pane.agentProgress < 0
+      visible: pane.agentProgress < 0
+    }
+    Rectangle {
+      visible: pane.agentProgress >= 0
+      width: parent.width
+      height: 3
+      radius: 1
+      color: pane.dayflow ? pane.dayflow.fgFill(0.08) : Qt.rgba(1, 1, 1, 0.08)
+      clip: true
+      Rectangle {
+        width: Math.max(Style.space(6), parent.width * pane.agentProgress)
+        height: parent.height
+        radius: parent.radius
+        color: pane.dayflow ? pane.dayflow.accentFill(0.7) : Qt.rgba(1, 1, 1, 0.5)
+        Behavior on width {
+          NumberAnimation { duration: 250; easing.type: Easing.OutQuad }
+        }
+      }
+    }
+    Text {
+      visible: pane.agentPhase !== ""
+      text: pane.agentPhase + (pane.agentProgress >= 0 ? " · " + Math.round(pane.agentProgress * 100) + "%" : "")
+      textFormat: Text.PlainText
+      color: pane.dayflow ? pane.dayflow.dim : "gray"
+      font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+      font.pixelSize: Style.font.caption
+    }
   }
 
   Text {

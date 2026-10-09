@@ -332,6 +332,18 @@ func codexDir() string {
 	return filepath.Join(h, ".codex", "sessions")
 }
 
+// agentProgress writes one JSON progress line to stderr — the QML
+// briefing loader parses these into a determinate load bar. stderr is the
+// free channel on --json calls (stdout carries the payload), and CLI
+// callers get a useful heartbeat on long scans.
+func agentProgress(ev map[string]any) {
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(os.Stderr, string(b))
+}
+
 // scanAgentSources runs every registered source adapter over the day window
 // and returns the merged, start-sorted session list plus per-source scan
 // status. A failed source degrades to a status note — never a hard error.
@@ -351,7 +363,8 @@ func scanAgentSources(d time.Time, srcs ...agentSource) ([]AgentSession, []sourc
 	s, e := dayBounds(d)
 	out := []AgentSession{}
 	statuses := make([]sourceScanStatus, 0, len(srcs))
-	for _, src := range srcs {
+	for i, src := range srcs {
+		agentProgress(map[string]any{"phase": "scan", "source": src.Name(), "i": i + 1, "n": len(srcs)})
 		sessions, note := src.Scan(s, e)
 		st := sourceScanStatus{Source: src.Name(), Sessions: len(sessions), Note: note.text}
 		switch {

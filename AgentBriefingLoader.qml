@@ -22,14 +22,49 @@ Item {
   property bool recapsEnabled: true
   property bool loading: false
   property string error: ""
+  // Determinate progress: -1 while no events have arrived (binaries
+  // predating progress emission stay indeterminate), 0..1 otherwise.
+  property real progress: -1
+  // Machine phase key ("scan"|"decode"|"polish") and the display label.
+  property string phase: ""
+  property string phaseLabel: ""
   // Queued reload kind while a run is mid-flight ("" | "load" | "refresh").
   property string pending: ""
   property int run: 0
   property bool timedOut: false
 
+  // One JSON progress line per stderr write — see agentProgress in the
+  // engine. Non-JSON stderr noise is ignored.
+  function handleProgress(line) {
+    var ev
+    try {
+      ev = JSON.parse(line)
+    } catch (e) {
+      return
+    }
+    if (!ev || typeof ev.phase !== "string") return
+    var n = ev.n || 0
+    var i = ev.i || 0
+    loader.phase = ev.phase
+    if (ev.phase === "scan") {
+      loader.phaseLabel = "scanning " + (ev.source || "stores")
+      loader.progress = n > 0 ? 0.05 + 0.10 * (i / n) : 0.05
+    } else if (ev.phase === "decode") {
+      loader.phaseLabel = "reading session " + i + " of " + n
+      loader.progress = n > 0 ? 0.15 + 0.60 * (i / n) : 0.15
+    } else if (ev.phase === "polish") {
+      // One long model call — the creep timer keeps the bar alive.
+      loader.phaseLabel = "writing briefing"
+      loader.progress = Math.max(loader.progress, 0.8)
+    }
+  }
+
   function load(refresh) {
     if (!loader.panel) return
     loader.panel.uilog("agents load " + loader.panel.viewDateStr() + (refresh ? " (refresh)" : ""))
+    loader.progress = -1
+    loader.phase = ""
+    loader.phaseLabel = ""
     loader.run = loader.run + 1
     loader.timedOut = false
     var cmd = ["dayflow", "briefing", loader.panel.viewDateStr(), "--json"]
@@ -62,6 +97,9 @@ Item {
     loader.briefing = null
     loader.sources = []
     loader.error = ""
+    loader.progress = -1
+    loader.phase = ""
+    loader.phaseLabel = ""
     loader.run = loader.run + 1
     if (loader.loading && loader.pending !== "refresh") loader.pending = "load"
   }
@@ -77,6 +115,11 @@ Item {
     id: agentsProc
     property int runId: 0
     command: ["dayflow", "briefing", "--json"]
+    // stderr carries one JSON progress event per line — drives the
+    // determinate bar in AgentsPane.
+    stderr: SplitParser {
+      onRead: function(line) { loader.handleProgress(line) }
+    }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -94,6 +137,9 @@ Item {
           loader.sources = d.sources || []
           loader.recapsEnabled = d.recaps_enabled !== false
           loader.error = ""
+          loader.progress = 1
+          loader.phase = ""
+          loader.phaseLabel = ""
         } catch (e) {
           loader.briefing = null
           loader.sources = []
@@ -148,9 +194,20 @@ Item {
   // pending is cleared BEFORE stopping so onRunningChanged doesn't see a
   // queued reload and restart the proc it just killed; timedOut makes
   // onExited keep the timeout message instead of overwriting it.
+  // The polish model call is one indeterminate stretch (~10–55s under
+  // polishDeadline) — creep the bar so it doesn't look frozen.
+  Timer {
+    interval: 700
+    repeat: true
+    running: loader.loading && loader.phase === "polish"
+    onTriggered: loader.progress = Math.min(0.97, loader.progress + 0.01)
+  }
+
   Timer {
     id: agentsWatchdog
-    interval: 75000
+    // A cold first build decodes every session's turns plus the polish
+    // call — measured ~75s on a 7GB Devin store, so 75s killed real runs.
+    interval: 180000
     running: agentsProc.running
     repeat: false
     onTriggered: {

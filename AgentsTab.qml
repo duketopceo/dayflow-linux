@@ -16,6 +16,8 @@ Item {
   readonly property bool agentRecapsEnabled: dayflow ? dayflow.agentRecapsEnabled : true
   readonly property bool agentsLoading: dayflow ? dayflow.agentsLoading : false
   readonly property string agentsError: dayflow ? dayflow.agentsError : ""
+  readonly property real agentsProgress: dayflow ? dayflow.agentProgress : -1
+  readonly property string agentsPhase: dayflow ? dayflow.agentPhase : ""
   function agentsLoad(refresh) { if (dayflow) dayflow.agentsLoad(refresh) }
 
   width: parent ? parent.width : 0
