@@ -761,14 +761,49 @@ func probeEndpoint(base string) bool {
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
+// probeModels returns the model ids a local OpenAI-compatible endpoint
+// advertises (Ollama /v1/models, LM Studio /v1/models — both use
+// {data:[{id}]}), or nil if the endpoint is down or the body doesn't parse.
+func probeModels(base string) []string {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(strings.TrimSuffix(base, "/") + "/models")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil
+	}
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil || json.Unmarshal(body, &out) != nil {
+		return nil
+	}
+	var ids []string
+	for _, m := range out.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids
+}
+
 // detectResult is the `detect` payload. Agents reports which coding-agent
 // transcript stores exist locally — Onboarding.qml gates its recaps
 // consent step on this map, and runSetup gates its recaps prompt on it.
+// OllamaModels/LMStudioModels carry the endpoints' advertised model ids so
+// Settings can offer one-click local setup.
 type detectResult struct {
-	Ollama   bool            `json:"ollama"`
-	LMStudio bool            `json:"lmstudio"`
-	Agents   map[string]bool `json:"agents"`
-	Presets  []ModelPreset   `json:"presets"`
+	Ollama         bool            `json:"ollama"`
+	LMStudio       bool            `json:"lmstudio"`
+	OllamaModels   []string        `json:"ollama_models,omitempty"`
+	LMStudioModels []string        `json:"lmstudio_models,omitempty"`
+	Agents         map[string]bool `json:"agents"`
+	Presets        []ModelPreset   `json:"presets"`
 }
 
 func runDetect(jsonOut bool) {
@@ -777,6 +812,12 @@ func runDetect(jsonOut bool) {
 		LMStudio: probeEndpoint("http://localhost:1234/v1"),
 		Agents:   agentStoresDetected(),
 		Presets:  modelPresets(),
+	}
+	if d.Ollama {
+		d.OllamaModels = probeModels("http://localhost:11434/v1")
+	}
+	if d.LMStudio {
+		d.LMStudioModels = probeModels("http://localhost:1234/v1")
 	}
 	if jsonOut {
 		b, _ := json.MarshalIndent(d, "", "  ")

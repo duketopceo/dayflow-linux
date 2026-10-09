@@ -52,6 +52,29 @@ Flickable {
     }
   }
 
+  // Local endpoint probe — feeds the "Local models" section below. Runs once
+  // when the tab opens; the button beside the section header re-probes.
+  property var localDetect: null
+  Process {
+    id: detectProc
+    command: ["dayflow", "detect", "--json"]
+    running: true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.localDetect = JSON.parse(text) } catch (e) { root.localDetect = null }
+      }
+    }
+  }
+
+  // One-click local setup: provider=local + endpoint + chosen model id.
+  function useLocal(base, model) {
+    dayflow.configDraft.provider = "local"
+    dayflow.configDraft.api_base_url = base
+    if (model) dayflow.configDraft.model = model
+    dayflow.notice = "local provider set — Save to apply"
+  }
+
   // Writes a single provider field immediately (prompt overrides bypass the
   // configDraft save path — `provider set` writes config itself). Writes are
   // queued: reassigning command on a running Process drops the second write.
@@ -313,6 +336,133 @@ Flickable {
         value: dayflow.configDraft.api_base_url || ""
         hint: "blank for OpenRouter, or http://localhost:11434/v1"
         onEdited: dayflow.configDraft.api_base_url = text
+      }
+
+      // ---- Local models ----
+      Column {
+        width: parent.width
+        spacing: Style.space(6)
+
+        Row {
+          width: parent.width
+          spacing: Style.space(6)
+          Text {
+            width: parent.width - rescanBtn.width - parent.spacing
+            text: "Local models"
+            color: dayflow.foreground
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            anchors.verticalCenter: parent.verticalCenter
+          }
+          Rectangle {
+            id: rescanBtn
+            width: rescanText.implicitWidth + Style.space(10)
+            height: rescanText.implicitHeight + Style.space(4)
+            radius: Style.cornerRadius
+            color: dayflow.btnBg(rescanMa.containsMouse)
+            border.color: dayflow.fgFill(0.12)
+            Text {
+              id: rescanText
+              anchors.centerIn: parent
+              text: detectProc.running ? "Detecting…" : "Detect"
+              color: dayflow.dim
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: rescanMa
+              anchors.fill: parent
+              hoverEnabled: true
+              enabled: !detectProc.running
+              onClicked: detectProc.running = true
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          visible: root.localDetect !== null && !(root.localDetect.ollama || root.localDetect.lmstudio)
+          text: "No Ollama (:11434) or LM Studio (:1234) endpoint found."
+          color: dayflow.dim
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
+        Repeater {
+          model: root.localDetect && root.localDetect.ollama ? (root.localDetect.ollama_models || []) : []
+          delegate: Rectangle {
+            width: lmText.implicitWidth + Style.space(12)
+            height: lmText.implicitHeight + Style.space(6)
+            radius: Style.cornerRadius
+            color: dayflow.configDraft.model === modelData && dayflow.configDraft.provider === "local"
+              ? dayflow.accentFill(0.16)
+              : (lmMa.containsMouse ? dayflow.accentFill(0.08) : dayflow.fgFill(0.04))
+            border.color: dayflow.configDraft.model === modelData && dayflow.configDraft.provider === "local"
+              ? dayflow.accentFill(0.5)
+              : dayflow.fgFill(0.12)
+            Text {
+              id: lmText
+              anchors.centerIn: parent
+              text: modelData + " · ollama"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: lmMa
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: root.useLocal("http://localhost:11434/v1", modelData)
+            }
+          }
+        }
+
+        Repeater {
+          model: root.localDetect && root.localDetect.lmstudio ? (root.localDetect.lmstudio_models || []) : []
+          delegate: Rectangle {
+            width: lmsText.implicitWidth + Style.space(12)
+            height: lmsText.implicitHeight + Style.space(6)
+            radius: Style.cornerRadius
+            color: dayflow.configDraft.model === modelData && dayflow.configDraft.provider === "local"
+              ? dayflow.accentFill(0.16)
+              : (lmsMa.containsMouse ? dayflow.accentFill(0.08) : dayflow.fgFill(0.04))
+            border.color: dayflow.configDraft.model === modelData && dayflow.configDraft.provider === "local"
+              ? dayflow.accentFill(0.5)
+              : dayflow.fgFill(0.12)
+            Text {
+              id: lmsText
+              anchors.centerIn: parent
+              text: modelData + " · lm studio"
+              color: dayflow.foreground
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: lmsMa
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: root.useLocal("http://localhost:1234/v1", modelData)
+            }
+          }
+        }
+
+        // Endpoint is up but reported no model ids — still offer the switch.
+        Text {
+          width: parent.width
+          visible: root.localDetect !== null && root.localDetect.ollama
+            && (!root.localDetect.ollama_models || root.localDetect.ollama_models.length === 0)
+          text: "Ollama detected — no models listed."
+          color: dayflow.dim
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+          MouseArea {
+            anchors.fill: parent
+            onClicked: root.useLocal("http://localhost:11434/v1", "")
+          }
+        }
       }
 
       Text {

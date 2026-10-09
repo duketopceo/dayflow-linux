@@ -109,11 +109,23 @@ Panel {
   readonly property color dim: Qt.darker(dayflow.foreground, 1.5)
   readonly property string fontFamily: dayflow.bar ? dayflow.bar.fontFamily : Style.font.family
 
+  property double noticeAt: 0
+
   onNoticeChanged: {
     if (notice === "") noticeTone = "neutral"
     else if (/failed|error|could not|denied|unavailable|not found/i.test(notice)) noticeTone = "error"
     else noticeTone = "success"
+    if (notice !== "") noticeAt = Date.now()
   }
+
+  // Non-error notices auto-clear so the footer doesn't stay pinned at two
+  // rows after the first action; errors persist until the next action.
+  Timer {
+    interval: 4000
+    running: dayflow.notice !== "" && !dayflow.noticeIsError
+    onTriggered: dayflow.notice = ""
+  }
+  property bool actionsOpen: false
 
   function open() {
     dayflow.controller.show()
@@ -181,7 +193,10 @@ Panel {
         settingsCatModel.append({ name: c.name || "", description: c.description || "", color: c.color || "" })
       }
       dayflow.configLoaded = true
-      dayflow.notice = ""
+      // A save-originated notice ("settings saved") is fresher than this
+      // reload — don't clear it just because config re-arrived.
+      if (dayflow.noticeAt === 0 || Date.now() - dayflow.noticeAt > 2000)
+        dayflow.notice = ""
     } catch (e) {
       dayflow.notice = "config load failed"
     }
@@ -1066,7 +1081,10 @@ Panel {
   Process {
     id: summarizeProc
     command: ["dayflow", "summarize", "--now"]
-    onExited: Qt.callLater(dayflow.refreshAll)
+    onExited: function(exitCode) {
+      dayflow.notice = exitCode === 0 ? "summaries done" : "summarize failed"
+      Qt.callLater(dayflow.refreshAll)
+    }
   }
 
   Process {
@@ -1407,90 +1425,146 @@ Panel {
 
         PanelSeparator { foreground: dayflow.foreground }
 
-        // ---- quick actions (pause/resume lives in the header) ----
-        Flow {
+        // ---- footer: status + ⋯ actions (pause/resume lives in the header) ----
+        Row {
           width: parent.width - content.leftPadding - content.rightPadding
-          height: implicitHeight
-          spacing: Style.space(4)
+          spacing: Style.space(6)
 
-          Rectangle {
-            height: Style.space(24)
-            width: a2.implicitWidth + Style.space(16)
-            radius: Style.cornerRadius
-            color: dayflow.btnBg(m2.containsMouse)
-            border.color: dayflow.accentFill(0.5)
-            opacity: dayflow.activeApp !== "" ? 1 : 0.45
-            Text {
-              id: a2
-              anchors.centerIn: parent
-              text: "Ignore current app"
-              textFormat: Text.PlainText
-              color: dayflow.activeApp !== "" ? dayflow.foreground : dayflow.dim
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
+          Text {
+            visible: !dayflow.actionsOpen
+            width: parent.width - actionsBtn.width - parent.spacing
+            anchors.verticalCenter: parent.verticalCenter
+            text: dayflow.framesToday + " frames · " + dayflow.blocksPending + " pending" +
+                  (summarizeProc.running ? " · summarizing…" : "") +
+                  (dayflow.storageText !== "" ? " · " + dayflow.storageText : "") +
+                  (dayflow.ignoredApps.length ? " · ignoring " + dayflow.ignoredApps.map(function(a) { return dayflow.appDisplayName(a) }).join(", ") : "")
+            textFormat: Text.PlainText
+            color: dayflow.dim
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+
+          // Open state: the actions swap in for the status text — still one row.
+          Row {
+            visible: dayflow.actionsOpen
+            spacing: Style.space(4)
+            anchors.verticalCenter: parent.verticalCenter
+
+            Rectangle {
+              height: Style.space(24)
+              width: actIgnore.implicitWidth + Style.space(14)
+              radius: Style.cornerRadius
+              color: dayflow.btnBg(actIgnoreMa.containsMouse)
+              border.color: dayflow.accentFill(0.5)
+              opacity: dayflow.activeApp !== "" ? 1 : 0.45
+              Text {
+                id: actIgnore
+                anchors.centerIn: parent
+                text: "Ignore app"
+                textFormat: Text.PlainText
+                color: dayflow.activeApp !== "" ? dayflow.foreground : dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              MouseArea {
+                id: actIgnoreMa
+                anchors.fill: parent
+                hoverEnabled: true
+                enabled: dayflow.activeApp !== ""
+                onClicked: {
+                  dayflow.actionsOpen = false
+                  dayflow.uilog("ignore app " + dayflow.activeApp)
+                  if (!ignoreProc.running) ignoreProc.running = true
+                }
+              }
             }
-            MouseArea {
-              id: m2
-              anchors.fill: parent
-              hoverEnabled: true
-              enabled: dayflow.activeApp !== ""
-              onClicked: { dayflow.uilog("ignore app " + dayflow.activeApp); if (!ignoreProc.running) ignoreProc.running = true }
+
+            Rectangle {
+              height: Style.space(24)
+              width: actSum.implicitWidth + Style.space(14)
+              radius: Style.cornerRadius
+              color: dayflow.btnBg(actSumMa.containsMouse)
+              border.color: dayflow.accentFill(0.5)
+              opacity: (dayflow.blocksPending > 0 && !summarizeProc.running) ? 1 : 0.45
+              Text {
+                id: actSum
+                anchors.centerIn: parent
+                text: summarizeProc.running
+                  ? "Summarizing…"
+                  : "Summarize" + (dayflow.blocksPending > 0 ? " (" + dayflow.blocksPending + ")" : "")
+                textFormat: Text.PlainText
+                color: (dayflow.blocksPending > 0 || summarizeProc.running) ? dayflow.foreground : dayflow.dim
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              MouseArea {
+                id: actSumMa
+                anchors.fill: parent
+                hoverEnabled: true
+                enabled: dayflow.blocksPending > 0 && !summarizeProc.running
+                onClicked: {
+                  dayflow.actionsOpen = false
+                  dayflow.uilog("summarize now")
+                  if (!summarizeProc.running) summarizeProc.running = true
+                }
+              }
+            }
+
+            Rectangle {
+              height: Style.space(24)
+              width: actFull.implicitWidth + Style.space(14)
+              radius: Style.cornerRadius
+              color: dayflow.btnBg(actFullMa.containsMouse)
+              border.color: dayflow.accentFill(0.5)
+              Text {
+                id: actFull
+                anchors.centerIn: parent
+                text: "Full view"
+                textFormat: Text.PlainText
+                color: dayflow.foreground
+                font.family: dayflow.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              MouseArea {
+                id: actFullMa
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  dayflow.actionsOpen = false
+                  dayflow.uilog("full view open")
+                  dayflow.fullViewOpen = true
+                  dayflow.close()
+                }
+              }
             }
           }
 
           Rectangle {
+            id: actionsBtn
             height: Style.space(24)
-            width: a3.implicitWidth + Style.space(16)
+            width: Style.space(28)
             radius: Style.cornerRadius
-            color: dayflow.btnBg(m3.containsMouse)
-            border.color: dayflow.accentFill(0.5)
-            opacity: (dayflow.blocksPending > 0 || summarizeProc.running) ? 1 : 0.45
+            anchors.verticalCenter: parent.verticalCenter
+            color: dayflow.btnBg(actionsMa.containsMouse)
+            border.color: dayflow.actionsOpen ? dayflow.accentFill(0.5) : dayflow.fgFill(0.12)
             Text {
-              id: a3
               anchors.centerIn: parent
-              text: summarizeProc.running
-                ? "Summarizing..."
-                : (dayflow.blocksPending > 0
-                    ? "Summarize now (" + dayflow.blocksPending + " pending)"
-                    : "Summarize now")
-              textFormat: Text.PlainText
-              color: (dayflow.blocksPending > 0 || summarizeProc.running) ? dayflow.foreground : dayflow.dim
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            MouseArea {
-              id: m3
-              anchors.fill: parent
-              hoverEnabled: true
-              enabled: dayflow.blocksPending > 0 && !summarizeProc.running
-              onClicked: { dayflow.uilog("summarize now"); if (!summarizeProc.running) summarizeProc.running = true }
-            }
-          }
-
-          Rectangle {
-            height: Style.space(24)
-            width: a4.implicitWidth + Style.space(16)
-            radius: Style.cornerRadius
-            color: dayflow.btnBg(m4.containsMouse)
-            border.color: dayflow.accentFill(0.5)
-            Text {
-              id: a4
-              anchors.centerIn: parent
-              text: "Full view"
+              text: summarizeProc.running ? "…" : (dayflow.actionsOpen ? "×" : "⋯")
               textFormat: Text.PlainText
               color: dayflow.foreground
               font.family: dayflow.fontFamily
               font.pixelSize: Style.font.caption
             }
             MouseArea {
-              id: m4
+              id: actionsMa
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: { dayflow.uilog("full view open"); dayflow.fullViewOpen = true; dayflow.close() }
+              onClicked: { dayflow.uilog("actions " + (dayflow.actionsOpen ? "close" : "open")); dayflow.actionsOpen = !dayflow.actionsOpen }
             }
           }
-
         }
 
         // ---- status ----
@@ -1587,18 +1661,6 @@ Panel {
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
           }
-        }
-
-        Text {
-          width: parent.width - content.leftPadding - content.rightPadding
-          text: dayflow.framesToday + " frames · " + dayflow.blocksPending + " pending" +
-                (dayflow.storageText !== "" ? " · " + dayflow.storageText : "") +
-                (dayflow.ignoredApps.length ? " · ignoring " + dayflow.ignoredApps.map(function(a) { return dayflow.appDisplayName(a) }).join(", ") : "")
-          textFormat: Text.PlainText
-          color: dayflow.dim
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
         }
 
         Text {
