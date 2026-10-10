@@ -50,15 +50,17 @@ ShellRoot {
     property bool draftDirty: false
     property var insights: ({ total_minutes: 0, focus_minutes: 0, distraction_minutes: 0,
       idle_minutes: 0, categories: [], apps: [], top_distractions: [], focus_blocks: [], days: 0 })
-    property var weekBlocks: []
-    property var weekCards: []
+    property var weekBlocks: [{ start_ts: 1760000000, end_ts: 1760010800, category: "dev" }]
+    property var weekCards: [{
+      title: "dayflow polish", category: "dev", start: "8:00 AM", end: "10:30 AM",
+      children: [{ start_ts: 1760000000, end_ts: 1760010800, start: "8:00 AM", end: "10:30 AM" }]
+    }]
     property string weekStart: "Mon 10-05"
     property string weekEnd: "Sun 10-11"
     property string weekSummary: ""
     property bool weekSummaryLoading: false
     property var weeklyPayload: ({})
     property int dayOffset: 0
-    property int todayIndex: 0
     // Settings write-path + group state surface.
     property bool keyringOpenrouter: false
     property var keySetQueue: []
@@ -79,7 +81,8 @@ ShellRoot {
     function goDay(d) { dayOffset += d }
     function viewDateStr() { return "2026-10-09" }
     function viewDateLabel() { return "Friday, October 9" }
-    function dayName() { return "Friday" }
+    function dayName(i) { return ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][i] || "" }
+    function todayIndex() { return 4 }
     function fmtDur(m) { return m + "m" }
     function fmtHours(m) { return (Number(m) / 60).toFixed(1) }
     function appDisplayName(a) { return a }
@@ -94,7 +97,14 @@ ShellRoot {
     function procByName(n) { return null }
     function weekDayMinutes() { return [] }
     function weekDayOrder() { return [] }
-    function weekDaySpans() { return [] }
+    function weekDaySpans(d) {
+      return d === 4 ? weekCards.map(function(c) {
+        var s = Object.assign({}, c)
+        s.start_ts = c.children[0].start_ts
+        s.end_ts = c.children[0].end_ts
+        return s
+      }) : []
+    }
     function weekDayNames() { return [] }
     function queuePatch(payload, label) { pendingPatches = pendingPatches.concat([{ payload: payload, label: label }]) }
     function configDiff(draft, base) {

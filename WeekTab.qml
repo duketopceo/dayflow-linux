@@ -133,6 +133,47 @@ Flickable {
       }
     }
 
+    // ---- 7-day calendar grid — the week's hero view ----
+    Rectangle {
+      visible: dayflow.weekBlocks.length > 0 || (dayflow.weekCards && dayflow.weekCards.length > 0)
+      width: parent.width
+      height: weekWrapCol.implicitHeight + Style.space(16)
+      radius: Style.cornerRadius
+      color: dayflow.fgFill(0.04)
+      border.color: dayflow.fgFill(0.08)
+
+      Column {
+        id: weekWrapCol
+        width: parent.width - Style.space(16)
+        anchors.centerIn: parent
+        spacing: Style.space(6)
+
+        Text {
+          text: "Week" +
+                (dayflow.weekStart ? "  " + dayflow.weekStart.substring(5) + " – " + dayflow.weekEnd.substring(5) : "")
+          textFormat: Text.PlainText
+          color: dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+
+        WeekCalendar {
+          width: parent.width
+          pal: dayflow
+          todayIndex: dayflow.todayIndex()
+          spansFor: function(d) { return dayflow.weekDaySpans(d) }
+          onDayClicked: function(dayIndex, span) {
+            var offset = dayIndex - dayflow.todayIndex()
+            dayflow.uilog("week cal jump " + offset)
+            dayflow.dayOffset = offset
+            dayflow.loadTimeline()
+            dayflow.currentTab = "today"
+          }
+        }
+      }
+    }
+
     Rectangle {
       // Detailed visuals are reserved for the expanded panel and Full View.
       visible: dayflow.expanded && dayflow.weeklyPayload.category_donut.length > 0
@@ -596,139 +637,6 @@ Flickable {
                 font.family: dayflow.fontFamily
                 font.pixelSize: Style.font.caption
               }
-            }
-          }
-        }
-      }
-    }
-
-    // ---- full week timeline (merged spans per day) ----
-    Rectangle {
-      visible: dayflow.expanded && dayflow.weekBlocks.length > 0
-      width: parent.width
-      height: weekCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
-
-      Column {
-        id: weekCol
-        width: parent.width - Style.space(16)
-        anchors.centerIn: parent
-        spacing: Style.space(8)
-
-        Text {
-          text: "Week timeline" +
-                (dayflow.weekStart ? "  " + dayflow.weekStart.substring(5) + " – " + dayflow.weekEnd.substring(5) : "")
-          textFormat: Text.PlainText
-          color: dayflow.foreground
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.body
-          font.bold: true
-        }
-
-        Repeater {
-          model: dayflow.weekDayOrder()
-          delegate: Column {
-            property int dayIndex: modelData
-            property var daySpans: dayflow.weekDaySpans(dayIndex)
-            visible: daySpans.length > 0
-            width: parent.width
-            spacing: Style.space(2)
-
-            Row {
-              width: parent.width
-              spacing: Style.space(6)
-              Text {
-                text: dayflow.dayName(dayIndex) + (dayIndex === dayflow.todayIndex() ? " — today" : "")
-                textFormat: Text.PlainText
-                color: dayIndex === dayflow.todayIndex() ? dayflow.foreground : dayflow.dim
-                font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                anchors.verticalCenter: parent.verticalCenter
-              }
-              Text {
-                text: dayflow.fmtDur(dayflow.weekDayMinutes(dayIndex))
-                textFormat: Text.PlainText
-                color: dayflow.dim
-                font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.caption
-                anchors.verticalCenter: parent.verticalCenter
-              }
-            }
-
-            // Day strip: spans as proportional blocks on a 24h axis —
-            // x = start minute, width = duration, category-colored.
-            // Click jumps the Today tab to that day.
-            Item {
-              id: dayStrip
-              property var stripSpans: parent.daySpans
-              property var hoveredSpan: null
-              width: parent.width
-              height: Style.space(16)
-
-              function toMin(s) {
-                var p = String(s || "").split(":")
-                return (parseInt(p[0], 10) || 0) * 60 + (parseInt(p[1], 10) || 0)
-              }
-
-              Rectangle {
-                anchors.fill: parent
-                radius: Style.space(3)
-                color: dayflow.fgFill(0.04)
-              }
-
-              Repeater {
-                model: dayStrip.stripSpans
-                delegate: Rectangle {
-                  required property var modelData
-                  property int startM: dayStrip.toMin(modelData.start)
-                  property int endM: dayStrip.toMin(modelData.end)
-                  x: dayStrip.width * (startM / 1440)
-                  width: Math.max(3, dayStrip.width * ((endM - startM) / 1440))
-                  height: dayStrip.height
-                  radius: Style.space(3)
-                  color: dayflow.payloadFill(modelData.color, modelData.category,
-                    blockMa.containsMouse ? 0.45 : 0.30)
-                  border.color: dayflow.payloadColor(modelData.color, modelData.category)
-                  border.width: 1
-
-                  MouseArea {
-                    id: blockMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onContainsMouseChanged:
-                      dayStrip.hoveredSpan = containsMouse ? modelData : null
-                    onClicked: {
-                      // Jump the Today tab to this span's day.
-                      var offset = dayIndex - dayflow.todayIndex()
-                      dayflow.uilog("week strip jump " + offset)
-                      dayflow.dayOffset = offset
-                      dayflow.loadTimeline()
-                      dayflow.currentTab = "today"
-                    }
-                  }
-                }
-              }
-            }
-
-            // Hover readout — the strip is too thin for inline labels.
-            Text {
-              width: parent.width
-              visible: dayStrip.hoveredSpan !== null && dayStrip.hoveredSpan !== undefined
-              text: dayStrip.hoveredSpan
-                ? dayStrip.hoveredSpan.start + "–" + dayStrip.hoveredSpan.end +
-                  "  " + dayStrip.hoveredSpan.title +
-                  (dayStrip.hoveredSpan.count > 1
-                    ? "  (" + dayflow.fmtDur(dayStrip.hoveredSpan.minutes) + ")" : "")
-                : ""
-              textFormat: Text.PlainText
-              color: dayflow.dim
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
             }
           }
         }

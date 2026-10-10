@@ -136,7 +136,11 @@ case "$1" in
   insights)
     printf '%s\\n' '{"total_minutes":1200,"focus_minutes":700,"distraction_minutes":200,"idle_minutes":100,"categories":[],"apps":[],"top_distractions":[],"focus_blocks":[],"days":5}' ;;
   week)
-    printf '%s\\n' '{"blocks":[],"cards":[]}' ;;
+    printf '%s\\n' '{"blocks":[{"start_ts":1760000000,"end_ts":1760010800,"category":"dev"}],"cards":[
+      {"kind":"activity","title":"dayflow polish","category":"dev","productive":true,"blocks":8,"app_name":"Ghostty","start":"08:00","end":"10:30","children":[{"start_ts":1760000000,"end_ts":1760010800}]},
+      {"kind":"activity","title":"standup + review","category":"communication","productive":true,"blocks":3,"app_name":"Slack","start":"10:30","end":"11:30","children":[{"start_ts":1760014400,"end_ts":1760018000}]},
+      {"kind":"activity","title":"docs","category":"research","productive":false,"blocks":2,"app_name":"Firefox","start":"13:00","end":"14:00","children":[{"start_ts":1760028800,"end_ts":1760032400}]}
+    ]}' ;;
   review)
     printf '%s\\n' '{"review":"A solid week."}' ;;
   weekly)
