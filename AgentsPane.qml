@@ -23,6 +23,11 @@ Column {
   rightPadding: Style.space(16)
   topPadding: Style.space(4)
 
+  // Column padding positions children but doesn't shrink parent.width —
+  // direct children must bind innerW or they overflow the padding on the
+  // right (masked in FullView, clipped in the compact popup).
+  readonly property real innerW: width - leftPadding - rightPadding
+
   // Status/highlight palettes — adapted to the panel theme rather than
   // upstream's fixed light palette.
   readonly property var statusMeta: ({
@@ -66,7 +71,7 @@ Column {
   }
 
   DayNavRow {
-    width: parent.width
+    width: pane.innerW
     dayflow: pane.dayflow
   }
 
@@ -74,7 +79,7 @@ Column {
   // so empty and error days can be retried; the legend itself still needs
   // a briefing to describe.
   Item {
-    width: parent.width
+    width: pane.innerW
     height: Math.max(legendRow.implicitHeight, refreshText.implicitHeight)
     visible: pane.host !== null
 
@@ -138,7 +143,7 @@ Column {
   readonly property string agentPhase: host && host.agentsPhase ? host.agentsPhase : ""
 
   Column {
-    width: parent.width
+    width: pane.innerW
     spacing: Style.space(2)
     visible: host !== null && host.agentsLoading
 
@@ -177,6 +182,8 @@ Column {
 
   Text {
     visible: host !== null && host.agentsError !== ""
+    width: pane.innerW
+    wrapMode: Text.WordWrap
     text: "! " + (host ? host.agentsError : "")
     textFormat: Text.PlainText
     color: Color.urgent !== undefined ? Color.urgent : "red"
@@ -187,6 +194,8 @@ Column {
   Text {
     visible: host !== null && !host.agentsLoading && host.agentsError === "" &&
       pane.briefing !== null && pane.workstreams.length === 0
+    width: pane.innerW
+    wrapMode: Text.WordWrap
     text: "No Claude Code, Codex, OpenCode, Devin, or Cursor sessions on this day."
     textFormat: Text.PlainText
     color: pane.dayflow ? pane.dayflow.dim : "gray"
@@ -217,7 +226,7 @@ Column {
     text: "Recaps are off — transcripts stay local and this briefing stays deterministic.\nEnable model-written prose with: dayflow config set agent_recaps true"
     textFormat: Text.PlainText
     wrapMode: Text.WordWrap
-    width: parent.width
+    width: pane.innerW
     color: pane.dayflow ? pane.dayflow.dim : "gray"
     font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
     font.pixelSize: Style.font.caption
@@ -228,14 +237,14 @@ Column {
     text: pane.agentSourceNote
     textFormat: Text.PlainText
     wrapMode: Text.WordWrap
-    width: parent.width
+    width: pane.innerW
     color: pane.dayflow ? pane.dayflow.dim : "gray"
     font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
     font.pixelSize: Style.font.caption
   }
 
   Flickable {
-    width: parent.width
+    width: pane.innerW
     // Size from space actually consumed above (nav, legend, error, notes)
     // rather than a constant — optional rows vary in count and wrap.
     height: Math.max(0, parent.height - y)

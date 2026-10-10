@@ -5,6 +5,31 @@
 (U3 entry gate of `docs/plans/2026-10-05-001-feat-classic-ui-v160-release-plan.md`,
 referred to below as **the 001 plan**; this plan's own units are "U1–U5".)
 
+## Status at resume (2026-10-09)
+
+Shipped since this plan was written — remaining units are U1, U3, U4, U5:
+
+- **U2 shipped in KTD2's sanctioned fallback form** (`9e635300`): the footer
+  is one permanent row — status text swaps for the three quick-action chips
+  behind `⋯`/`×` (`actionsOpen`), notice auto-clears after ~4s with the
+  save-confirmation freshness guard, `summarizing…` suffix + completion
+  notice landed. The overlay menu is **not** built and stays deferred — the
+  chip strip was accepted by the user ("tight and neat"). Residual:
+  the in-tab notice Text at `Settings.qml:~941` is still live — U2's
+  removal item carries into U4's rework.
+- **Local models section shipped** (`9e635300`, additive — not in the
+  original scope): `dayflow detect --json` gained `ollama_models` /
+  `lmstudio_models`; Settings auto-probes on load with a "Local models"
+  section + one-click provider/base/model chips. **U4's rework must
+  integrate this section, not regress it** — it belongs in the AI provider
+  group.
+- **Agents tab + determinate briefing progress shipped** (`541c4966`,
+  `89aeb87e`) — sixth tab restored, stderr progress events drive a real
+  load bar, watchdog 75s→180s, `uilog` queues. Unrelated to polish units
+  but touches the same `Panel.qml` surface.
+- **Settings.qml is now ~959 lines** (was ~809 at planning) — the U4 group
+  rework is more necessary, not less.
+
 ## Problem frame
 
 The classic popup is the v1.6.0 baseline and the daily surface. It reads loose:

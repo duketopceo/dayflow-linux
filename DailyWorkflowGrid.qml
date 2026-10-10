@@ -34,10 +34,13 @@ Rectangle {
     anchors.centerIn: parent
     spacing: Style.space(6)
 
-    Row {
+    Item {
       width: parent.width
+      height: gridLabel.implicitHeight
 
       Text {
+        id: gridLabel
+        anchors.left: parent.left
         text: "Daily workflow"
         color: dayflow ? dayflow.foreground : Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
@@ -47,6 +50,7 @@ Rectangle {
 
       Text {
         anchors.right: parent.right
+        anchors.verticalCenter: gridLabel.verticalCenter
         text: dayflow ? dayflow.fmtDur(root.workflow.total_minutes) + " tracked" : ""
         color: dayflow ? dayflow.dim : Color.dim
         font.family: dayflow ? dayflow.fontFamily : Style.font.family

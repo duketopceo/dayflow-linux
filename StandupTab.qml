@@ -205,10 +205,13 @@ Flickable {
         anchors.centerIn: parent
         spacing: Style.space(8)
 
-        Row {
+        Item {
           width: parent.width
+          height: sdLabel.implicitHeight
 
           Text {
+            id: sdLabel
+            anchors.left: parent.left
             text: label
             textFormat: Text.PlainText
             color: dayflow.foreground
@@ -219,6 +222,7 @@ Flickable {
 
           Text {
             anchors.right: parent.right
+            anchors.verticalCenter: sdLabel.verticalCenter
             text: dayflow.fmtDur(day.total_minutes) + " tracked"
             textFormat: Text.PlainText
             color: dayflow.dim
