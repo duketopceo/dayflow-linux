@@ -209,10 +209,11 @@ Flickable {
     width: parent.width
     spacing: Style.space(14)
 
-    BusyBar {
+    LoadingBar {
       width: parent.width
       pal: root.dayflow
       active: modelsProc.running || providersProc.running
+      estimate: 3
     }
 
     Text {

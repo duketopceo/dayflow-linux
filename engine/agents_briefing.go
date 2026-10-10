@@ -292,7 +292,7 @@ func buildBriefing(d time.Time, sessions []AgentSession, statuses []sourceScanSt
 	now := time.Now()
 	threads := make([]briefingThread, 0, len(sessions))
 	for i, sess := range sessions {
-		agentProgress(map[string]any{"phase": "decode", "i": i + 1, "n": len(sessions)})
+		cliProgress(map[string]any{"phase": "decode", "i": i + 1, "n": len(sessions)})
 		var turns []sessionTurn
 		if src := agentSourceNamed(srcs, sess.Source); src != nil {
 			turns = src.Turns(sess)
@@ -563,7 +563,7 @@ func polishBriefing(db *sql.DB, cfg Config, b *agentBriefing, polishKey string) 
 		{Role: "system", Content: []orContent{{Type: "text", Text: briefingPrompt}}},
 		{Role: "user", Content: []orContent{{Type: "text", Text: briefingModelPayload(b)}}},
 	}
-	agentProgress(map[string]any{"phase": "polish"})
+	cliProgress(map[string]any{"phase": "polish"})
 	type result struct {
 		text string
 		err  error

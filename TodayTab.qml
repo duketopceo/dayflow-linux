@@ -7,6 +7,8 @@ import qs.Ui
 Flickable {
   id: root
   property var dayflow: parent && parent.panel ? parent.panel : null
+  // Day calendar selection — index into dayflow.spans; -1 = no detail card.
+  property int selectedSpan: -1
   width: parent.width
   implicitHeight: Math.min(col.implicitHeight, Style.space(360))
   height: implicitHeight
@@ -18,10 +20,11 @@ Flickable {
     width: parent.width
     spacing: Style.space(8)
 
-    BusyBar {
+    LoadingBar {
       width: parent.width
       pal: dayflow
       active: dayflow.timelineLoading
+      estimate: 2
     }
 
     // ---- day switcher ----
@@ -214,327 +217,30 @@ Flickable {
       wrapMode: Text.WordWrap
     }
 
-    Repeater {
-      model: dayflow.spans
-
-      delegate: Rectangle {
-        id: cardRoot
-        width: col.width
-        height: cardCol.implicitHeight + Style.space(14)
-        radius: Style.cornerRadius
-        color: dayflow.fgFill(0.04)
-        border.color: dayflow.fgFill(0.08)
-        clip: true
-
-        property bool editing: false
-        property string editTitle: ""
-        property string editCategory: ""
-        property bool editProd: false
-
-        function beginEdit() {
-          editTitle = modelData.title || ""
-          editCategory = modelData.category || ""
-          editProd = modelData.productive === true
-          editing = true
-        }
-
-        // Category-colored edge so spans scan by activity type.
-        Rectangle {
-          anchors.left: parent.left
-          anchors.top: parent.top
-          anchors.bottom: parent.bottom
-          width: Style.space(3)
-          color: dayflow.categoryColor(modelData.category)
-        }
-
-        Column {
-          id: cardCol
-          width: parent.width - Style.space(20)
-          anchors.centerIn: parent
-          anchors.horizontalCenterOffset: Style.space(3)
-          spacing: Style.space(3)
-
-          Row {
-            width: parent.width
-            spacing: Style.space(8)
-
-            Image {
-              id: appIcon
-              width: Style.space(14)
-              height: Style.space(14)
-              source: dayflow.appIcon(modelData.app)
-              visible: status === Image.Ready
-              anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Text {
-              width: parent.width - appIcon.width - categoryPill.width - (productiveMark.visible ? productiveMark.width : 0) - (lowConfMark.visible ? lowConfMark.width : 0) - editText.implicitWidth - parent.spacing * ((productiveMark.visible ? 1 : 0) + (lowConfMark.visible ? 1 : 0) + 3)
-              text: modelData.start + "–" + modelData.end +
-                    " · " + dayflow.fmtDur(modelData.minutes) +
-                    (modelData.count > 1 ? " · " + modelData.count + " blocks" : "") +
-                    (modelData.appName ? " · " + modelData.appName : "")
-              textFormat: Text.PlainText
-              color: dayflow.dim
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
-              anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Rectangle {
-              id: categoryPill
-              height: catText.implicitHeight + Style.space(4)
-              width: catText.implicitWidth + Style.space(10)
-              radius: height / 2
-              color: dayflow.pillBgColor(modelData.category)
-
-              Text {
-                id: catText
-                anchors.centerIn: parent
-                text: dayflow.catDisplay(modelData.category)
-                textFormat: Text.PlainText
-                color: dayflow.foreground
-                font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            Text {
-              id: productiveMark
-              visible: modelData.productive === true
-              text: "⚡"
-              textFormat: Text.PlainText
-              color: dayflow.dim
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-              anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Text {
-              // Jev scored a judgment on this card below the confidence
-              // threshold — treat the label/summary as suspect.
-              id: lowConfMark
-              visible: modelData.low_confidence === true
-              text: "?"
-              textFormat: Text.PlainText
-              color: Qt.rgba(0.95, 0.70, 0.15, 1.0)
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Text {
-              id: editText
-              text: cardRoot.editing ? "close" : "edit"
-              textFormat: Text.PlainText
-              color: editLink.containsMouse ? dayflow.foreground : dayflow.dim
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-              font.underline: editLink.containsMouse
-              anchors.verticalCenter: parent.verticalCenter
-              MouseArea {
-                id: editLink
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  if (cardRoot.editing) cardRoot.editing = false
-                  else cardRoot.beginEdit()
-                }
-              }
-            }
-          }
-
-            Text {
-              width: parent.width
-            text: modelData.title
-            textFormat: Text.PlainText
-            color: dayflow.foreground
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.body
-              font.bold: true
-              wrapMode: Text.WordWrap
-              maximumLineCount: 2
-              elide: Text.ElideRight
-          }
-
-          Text {
-            width: parent.width
-            text: modelData.summary
-            textFormat: Text.PlainText
-            color: dayflow.foreground
-            opacity: 0.75
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.body
-            wrapMode: Text.WordWrap
-            maximumLineCount: 3
-            elide: Text.ElideRight
-          }
-
-          // ---- inline edit form (title, category, productive) ----
-          Column {
-            visible: cardRoot.editing
-            width: parent.width
-            spacing: Style.space(6)
-
-            Rectangle {
-              width: parent.width
-              height: titleEdit.implicitHeight + Style.space(8)
-              radius: Style.cornerRadius
-              color: dayflow.fgFill(0.06)
-              border.color: dayflow.fgFill(0.12)
-              clip: true
-              TextEdit {
-                id: titleEdit
-                anchors.fill: parent
-                anchors.margins: Style.space(4)
-                text: cardRoot.editTitle
-                color: dayflow.foreground
-                font.family: dayflow.fontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: TextEdit.Wrap
-                onTextChanged: { if (activeFocus) cardRoot.editTitle = text }
-              }
-            }
-
-            Row {
-              width: parent.width
-              spacing: Style.space(6)
-
-              Rectangle {
-                width: parent.width - prodPill.width - Style.space(6)
-                height: catEdit.implicitHeight + Style.space(8)
-                radius: Style.cornerRadius
-                color: dayflow.fgFill(0.06)
-                border.color: dayflow.fgFill(0.12)
-                clip: true
-                TextEdit {
-                  id: catEdit
-                  anchors.fill: parent
-                  anchors.margins: Style.space(4)
-                  text: cardRoot.editCategory
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.body
-                  onTextChanged: { if (activeFocus) cardRoot.editCategory = text }
-                }
-              }
-
-              Rectangle {
-                id: prodPill
-                height: catEdit.implicitHeight + Style.space(8)
-                width: prodPillText.implicitWidth + Style.space(12)
-                radius: height / 2
-                color: cardRoot.editProd ? dayflow.accentFill(0.15) : dayflow.fgFill(0.06)
-                border.color: cardRoot.editProd ? dayflow.accentFill(0.5) : dayflow.fgFill(0.12)
-                Text {
-                  id: prodPillText
-                  anchors.centerIn: parent
-                  text: cardRoot.editProd ? "⚡ productive" : "not productive"
-                  textFormat: Text.PlainText
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                MouseArea {
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: cardRoot.editProd = !cardRoot.editProd
-                }
-              }
-            }
-
-            Row {
-              spacing: Style.space(8)
-
-              Rectangle {
-                height: Style.space(24)
-                width: saveEditText.implicitWidth + Style.space(14)
-                radius: Style.cornerRadius
-                color: mSaveEdit.containsMouse ? dayflow.accentFill(0.12) : "transparent"
-                border.color: dayflow.accentFill(0.5)
-                Text {
-                  id: saveEditText
-                  anchors.centerIn: parent
-                  text: "Save"
-                  textFormat: Text.PlainText
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                MouseArea {
-                  id: mSaveEdit
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: {
-                    cardRoot.editing = false
-                    dayflow.saveBlockEdits(modelData.start_ts,
-                      cardRoot.editTitle, cardRoot.editCategory,
-                      cardRoot.editProd, modelData)
-                  }
-                }
-              }
-
-              Rectangle {
-                height: Style.space(24)
-                width: cancelEditText.implicitWidth + Style.space(14)
-                radius: Style.cornerRadius
-                color: mCancelEdit.containsMouse ? dayflow.fgFill(0.08) : "transparent"
-                border.color: dayflow.fgFill(0.15)
-                Text {
-                  id: cancelEditText
-                  anchors.centerIn: parent
-                  text: "Cancel"
-                  textFormat: Text.PlainText
-                  color: dayflow.dim
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                MouseArea {
-                  id: mCancelEdit
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: cardRoot.editing = false
-                }
-              }
-            }
-          }
-
-          // Merged span: one row per underlying 15-min block.
-          Repeater {
-            model: modelData.count > 1 ? modelData.children : []
-
-            delegate: Text {
-              width: parent.width
-              text: "· " + modelData.start + " " + modelData.title
-              textFormat: Text.PlainText
-              color: dayflow.dim
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
-            }
-          }
-
-          // Single block: per-app segments as before.
-          Repeater {
-            model: modelData.count === 1 ? (modelData.children[0].activities || []) : []
-
-            delegate: Text {
-              width: parent.width
-              text: dayflow.appDisplayName(modelData.app) + " · " + modelData.title
-              textFormat: Text.PlainText
-              color: dayflow.dim
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
-            }
-          }
-        }
-      }
+    Connections {
+      target: dayflow
+      function onSpansChanged() { if (root.selectedSpan >= dayflow.spans.length) root.selectedSpan = -1 }
     }
+
+    // Day calendar — proportional time blocks; click selects and the
+    // detail card renders below.
+    DayTimeline {
+      visible: dayflow.spans.length > 0
+      width: parent.width
+      pal: dayflow
+      spans: dayflow.spans
+      selectedIndex: root.selectedSpan
+      showNow: dayflow.dayOffset === 0
+      onSpanClicked: function(i) { root.selectedSpan = i }
+    }
+
+    SpanCard {
+      visible: root.selectedSpan >= 0 && root.selectedSpan < dayflow.spans.length
+      width: parent.width
+      pal: dayflow
+      span: root.selectedSpan >= 0 && root.selectedSpan < dayflow.spans.length
+        ? dayflow.spans[root.selectedSpan] : ({})
+    }
+
   }
 }

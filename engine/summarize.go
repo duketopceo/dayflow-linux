@@ -395,7 +395,9 @@ func summarizePending(db *sql.DB, cfg Config, includeCurrent bool) (int, error) 
 	}
 	const maxAttempts = 3
 	done := 0
-	for _, start := range blocks {
+	cliProgress(map[string]any{"phase": "summarize", "i": 0, "n": len(blocks)})
+	for i, start := range blocks {
+		cliProgress(map[string]any{"phase": "summarize", "i": i + 1, "n": len(blocks), "at": start.Format("15:04")})
 		end := start.Add(time.Duration(cfg.BlockMinutes) * time.Minute)
 		attempts := blockAttempts(db, start)
 		if attempts >= maxAttempts {

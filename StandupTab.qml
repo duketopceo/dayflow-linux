@@ -18,10 +18,11 @@ Flickable {
     width: parent.width
     spacing: Style.space(10)
 
-    BusyBar {
+    LoadingBar {
       width: parent.width
       pal: dayflow
       active: dayflow.procByName("standupFetchProc").running || dayflow.procByName("goalProc").running
+      estimate: 8
     }
 
   Component {

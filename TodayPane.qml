@@ -26,10 +26,11 @@ Flickable {
       dayflow: pane.dayflow
     }
 
-    BusyBar {
+    LoadingBar {
       width: parent.width
       pal: pane.dayflow
       active: pane.dayflow ? pane.dayflow.timelineLoading : false
+      estimate: 2
     }
 
     Text {

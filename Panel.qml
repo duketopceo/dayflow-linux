@@ -1139,9 +1139,29 @@ Panel {
     }
   }
 
+  // Real progress from the summarize sweep — the engine emits
+  // {"phase":"summarize","i":n,"of":m,"at":"HH:MM"} per block on stderr.
+  // -1 until the first event lands (old binaries never emit; the status
+  // text stays on the bare "summarizing…" for them).
+  property real summarizeProgress: -1
+  property string summarizePhase: ""
+
   Process {
     id: summarizeProc
     command: ["dayflow", "summarize", "--now"]
+    onStarted: { dayflow.summarizeProgress = -1; dayflow.summarizePhase = "" }
+    stderr: SplitParser {
+      onRead: function(line) {
+        try {
+          var ev = JSON.parse(line)
+          if (ev.phase === "summarize" && ev.n > 0) {
+            dayflow.summarizeProgress = ev.i / ev.n
+            dayflow.summarizePhase = "summarizing " + ev.i + "/" + ev.n +
+              (ev.at ? " · " + ev.at : "")
+          }
+        } catch (e) {}
+      }
+    }
     onExited: function(exitCode) {
       dayflow.notice = exitCode === 0 ? "summaries done" : "summarize failed"
       Qt.callLater(dayflow.refreshAll)
@@ -1545,7 +1565,9 @@ Panel {
             width: parent.width - actionsBtn.width - parent.spacing
             anchors.verticalCenter: parent.verticalCenter
             text: dayflow.framesToday + " frames · " + dayflow.blocksPending + " pending" +
-                  (summarizeProc.running ? " · summarizing…" : "") +
+                  (summarizeProc.running
+                    ? " · " + (dayflow.summarizePhase !== "" ? dayflow.summarizePhase : "summarizing…")
+                    : "") +
                   (dayflow.storageText !== "" ? " · " + dayflow.storageText : "") +
                   (dayflow.ignoredApps.length ? " · ignoring " + dayflow.ignoredApps.map(function(a) { return dayflow.appDisplayName(a) }).join(", ") : "")
             textFormat: Text.PlainText

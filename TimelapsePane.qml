@@ -71,11 +71,12 @@ Column {
     }
   }
 
-  BusyBar {
+  LoadingBar {
     width: parent.width
     pal: pane.dayflow
     active: host !== null && host.tlLoading
-  }
+    estimate: 10
+    }
 
   // image area
   Rectangle {

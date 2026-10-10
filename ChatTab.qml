@@ -133,10 +133,11 @@ Flickable {
     width: parent.width
     spacing: Style.space(10)
 
-    BusyBar {
+    LoadingBar {
       width: parent.width
       pal: root.dayflow
       active: root.chatLoading
+      estimate: 10
     }
 
     Text {

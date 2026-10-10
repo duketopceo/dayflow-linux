@@ -18,10 +18,11 @@ Flickable {
     width: parent.width
     spacing: Style.space(8)
 
-    BusyBar {
+    LoadingBar {
       width: parent.width
       pal: dayflow
       active: dayflow.procByName("weeklyProc").running || dayflow.procByName("weekTimelineProc").running || dayflow.procByName("insightsFetchProc").running
+      estimate: 4
     }
 
     Flow {
@@ -657,33 +658,77 @@ Flickable {
               }
             }
 
-            Repeater {
-              model: parent.daySpans
-              delegate: Row {
-                width: parent.width
-                spacing: Style.space(6)
+            // Day strip: spans as proportional blocks on a 24h axis —
+            // x = start minute, width = duration, category-colored.
+            // Click jumps the Today tab to that day.
+            Item {
+              id: dayStrip
+              property var stripSpans: parent.daySpans
+              property var hoveredSpan: null
+              width: parent.width
+              height: Style.space(16)
 
-                Rectangle {
-                  width: Style.space(6)
-                  height: wTxt.implicitHeight
-                  radius: width / 2
-                  color: dayflow.cellColor(modelData.category)
-                  anchors.verticalCenter: parent.verticalCenter
-                }
+              function toMin(s) {
+                var p = String(s || "").split(":")
+                return (parseInt(p[0], 10) || 0) * 60 + (parseInt(p[1], 10) || 0)
+              }
 
-                Text {
-                  id: wTxt
-                  width: parent.width - Style.space(6) - parent.spacing
-                  text: modelData.start + "–" + modelData.end +
-                        "  " + modelData.title +
-                        (modelData.count > 1 ? "  (" + dayflow.fmtDur(modelData.minutes) + ")" : "")
-                  textFormat: Text.PlainText
-                  color: dayflow.foreground
-                  font.family: dayflow.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
+              Rectangle {
+                anchors.fill: parent
+                radius: Style.space(3)
+                color: dayflow.fgFill(0.04)
+              }
+
+              Repeater {
+                model: dayStrip.stripSpans
+                delegate: Rectangle {
+                  required property var modelData
+                  property int startM: dayStrip.toMin(modelData.start)
+                  property int endM: dayStrip.toMin(modelData.end)
+                  x: dayStrip.width * (startM / 1440)
+                  width: Math.max(3, dayStrip.width * ((endM - startM) / 1440))
+                  height: dayStrip.height
+                  radius: Style.space(3)
+                  color: dayflow.payloadFill(modelData.color, modelData.category,
+                    blockMa.containsMouse ? 0.45 : 0.30)
+                  border.color: dayflow.payloadColor(modelData.color, modelData.category)
+                  border.width: 1
+
+                  MouseArea {
+                    id: blockMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onContainsMouseChanged:
+                      dayStrip.hoveredSpan = containsMouse ? modelData : null
+                    onClicked: {
+                      // Jump the Today tab to this span's day.
+                      var offset = dayIndex - dayflow.todayIndex()
+                      dayflow.uilog("week strip jump " + offset)
+                      dayflow.dayOffset = offset
+                      dayflow.loadTimeline()
+                      dayflow.currentTab = "today"
+                    }
+                  }
                 }
               }
+            }
+
+            // Hover readout — the strip is too thin for inline labels.
+            Text {
+              width: parent.width
+              visible: dayStrip.hoveredSpan !== null && dayStrip.hoveredSpan !== undefined
+              text: dayStrip.hoveredSpan
+                ? dayStrip.hoveredSpan.start + "–" + dayStrip.hoveredSpan.end +
+                  "  " + dayStrip.hoveredSpan.title +
+                  (dayStrip.hoveredSpan.count > 1
+                    ? "  (" + dayflow.fmtDur(dayStrip.hoveredSpan.minutes) + ")" : "")
+                : ""
+              textFormat: Text.PlainText
+              color: dayflow.dim
+              font.family: dayflow.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
             }
           }
         }
