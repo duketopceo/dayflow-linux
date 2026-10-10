@@ -159,6 +159,7 @@ Flickable {
         }
 
         WeekCalendar {
+          id: weekCal
           width: parent.width
           pal: dayflow
           todayIndex: dayflow.todayIndex()
@@ -170,6 +171,25 @@ Flickable {
             dayflow.loadTimeline()
             dayflow.currentTab = "today"
           }
+        }
+
+        // Hover readout — slivers too thin for inline labels still get a
+        // literal "what was I doing" line here.
+        Text {
+          width: parent.width
+          height: visible ? implicitHeight : 0
+          visible: weekCal.hoveredSpan !== null && weekCal.hoveredSpan !== undefined
+          text: weekCal.hoveredSpan
+            ? weekCal.hoveredSpan.start + "–" + weekCal.hoveredSpan.end +
+              "  " + (weekCal.hoveredSpan.title || "") +
+              (weekCal.hoveredSpan.appName ? "  ·  " + weekCal.hoveredSpan.appName : "") +
+              (weekCal.hoveredSpan.minutes ? "  ·  " + dayflow.fmtDur(weekCal.hoveredSpan.minutes) : "")
+            : ""
+          textFormat: Text.PlainText
+          color: dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
         }
       }
     }

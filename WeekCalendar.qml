@@ -16,6 +16,9 @@ Item {
   // the standalone app + harness can feed the same grid.
   property var spansFor: null
   property int todayIndex: -1
+  // Set while the pointer is over a span block — the caller renders the
+  // hover readout (the grid is too dense for inline labels on slivers).
+  property var hoveredSpan: null
   signal dayClicked(int dayIndex, var span)
 
   function daySpans(d) { return cal.spansFor ? (cal.spansFor(d) || []) : [] }
@@ -146,7 +149,7 @@ Item {
           property int startM: cal.toMin(modelData, "start")
           property int endM: Math.max(startM + 1, cal.toMin(modelData, "end"))
           property real rawH: (endM - startM) * cal.pxPerMin
-          property bool tall: rawH >= 18
+          property bool tall: rawH >= 13
 
           x: 2
           y: cal.headH + startM * cal.pxPerMin
@@ -160,7 +163,7 @@ Item {
           clip: true
 
           Text {
-            visible: blk.tall && blk.width > 30
+            visible: blk.tall && blk.width > 18
             x: Style.space(3)
             y: 1
             width: parent.width - Style.space(6)
@@ -177,6 +180,8 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
+            onContainsMouseChanged:
+              cal.hoveredSpan = containsMouse ? modelData : null
             onClicked: cal.dayClicked(dayCol.dayIndex, modelData)
           }
         }
