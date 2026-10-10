@@ -40,7 +40,20 @@ ShellRoot {
     property string installScriptPath: "/nonexistent-dayflow-install.sh"
     property bool expanded: false
     property var settingsCatModel: cats
-    property var spans: []
+    property var spans: [
+      { start_ts: 1760000000, end_ts: 1760010800, start: "8:00 AM", end: "10:30 AM",
+        title: "dayflow polish work", summary: "working on the popup", category: "coding",
+        productive: true, appName: "Ghostty", minutes: 150, blocks: 4 },
+      { start_ts: 1760014400, end_ts: 1760018000, start: "10:30 AM", end: "11:30 AM",
+        title: "standup + team review", summary: "daily sync", category: "communication",
+        productive: true, appName: "Slack", minutes: 60, blocks: 2 },
+      { start_ts: 1760021600, end_ts: 1760023400, start: "12:15 PM", end: "12:45 PM",
+        title: "idle", summary: "", category: "idle",
+        productive: false, appName: "", minutes: 30, blocks: 1 },
+      { start_ts: 1760028800, end_ts: 1760032400, start: "1:20 PM", end: "2:20 PM",
+        title: "hacker news rabbit hole", summary: "distraction", category: "browsing",
+        productive: false, appName: "Firefox", minutes: 60, blocks: 2 }
+    ]
     property string dateLabel: "Fri 10-09"
     property bool timelineLoading: false
     property var standup: ({ yesterday: { date: "", total_minutes: 0, entries: [] },

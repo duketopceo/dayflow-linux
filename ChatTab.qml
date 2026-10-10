@@ -128,10 +128,21 @@ Flickable {
     root.chatInput = ""
   }
 
+  property bool historyOpen: false
+
+  // Title of the currently loaded conversation for the compact header.
+  function currentConvTitle() {
+    if (root.chatConversation <= 0) return "new chat"
+    for (var i = 0; i < root.conversations.length; i++)
+      if (Number(root.conversations[i].id) === root.chatConversation)
+        return root.conversations[i].title || "conversation"
+    return "conversation"
+  }
+
   Column {
     id: col
     width: parent.width
-    spacing: Style.space(10)
+    spacing: Style.space(6)
 
     LoadingBar {
       width: parent.width
@@ -140,75 +151,104 @@ Flickable {
       estimate: 10
     }
 
-    Text {
+    // Compact header: current conversation + history toggle + new. The
+    // conversation list stays collapsed unless asked for — a cloud of
+    // pills is the busy part.
+    Row {
       width: parent.width
-      text: "Conversations"
-      color: dayflow ? dayflow.foreground : Color.foreground
-      font.family: dayflow ? dayflow.fontFamily : Style.font.family
-      font.pixelSize: Style.font.body
-      font.bold: true
-    }
+      spacing: Style.space(8)
 
-    Flow {
-      width: parent.width
-      spacing: Style.space(6)
+      Text {
+        text: root.currentConvTitle()
+        textFormat: Text.PlainText
+        width: parent.width - (histBtn.visible ? histBtn.width + Style.space(8) : 0)
+               - newBtn.width - Style.space(8)
+        color: dayflow ? dayflow.foreground : Color.foreground
+        font.family: dayflow ? dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        font.bold: true
+        elide: Text.ElideRight
+        anchors.verticalCenter: parent.verticalCenter
+      }
 
-      Rectangle {
-        height: Style.space(26)
-        width: newConvText.implicitWidth + Style.space(16)
-        radius: Style.cornerRadius
-        color: root.chatConversation === 0
-          ? (dayflow ? dayflow.accentFill(0.18) : "transparent")
-          : (newConvMouse.containsMouse
-              ? (dayflow ? dayflow.accentFill(0.08) : "transparent")
-              : "transparent")
-        border.color: dayflow ? dayflow.accentFill(0.45) : "transparent"
-
-        Text {
-          id: newConvText
-          anchors.centerIn: parent
-          text: "+ New"
-          color: dayflow ? dayflow.foreground : Color.foreground
-          font.family: dayflow ? dayflow.fontFamily : Style.font.family
-          font.pixelSize: Style.font.caption
-        }
-
+      Text {
+        id: histBtn
+        visible: root.conversations.length > 0
+        text: root.historyOpen ? "hide" : "history"
+        textFormat: Text.PlainText
+        color: histMa.containsMouse ? (dayflow ? dayflow.foreground : Color.foreground)
+                                    : (dayflow ? dayflow.dim : Color.dim)
+        font.family: dayflow ? dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.caption
+        font.underline: histMa.containsMouse
+        anchors.verticalCenter: parent.verticalCenter
         MouseArea {
-          id: newConvMouse
+          id: histMa
           anchors.fill: parent
           hoverEnabled: true
-          onClicked: root.newConversation()
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.historyOpen = !root.historyOpen
         }
       }
+
+      Text {
+        id: newBtn
+        text: "+ new"
+        textFormat: Text.PlainText
+        color: newMa.containsMouse ? (dayflow ? dayflow.foreground : Color.foreground)
+                                   : (dayflow ? dayflow.dim : Color.dim)
+        font.family: dayflow ? dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.caption
+        font.underline: newMa.containsMouse
+        anchors.verticalCenter: parent.verticalCenter
+        MouseArea {
+          id: newMa
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: { root.newConversation(); root.historyOpen = false }
+        }
+      }
+    }
+
+    // Conversation history — plain rows, collapsed by default.
+    Column {
+      visible: root.historyOpen
+      width: parent.width
+      spacing: 0
 
       Repeater {
         model: root.conversations
         delegate: Rectangle {
-          height: Style.space(26)
-          width: convText.implicitWidth + Style.space(16)
-          radius: Style.cornerRadius
-          color: root.chatConversation === Number(modelData.id)
-            ? (dayflow ? dayflow.accentFill(0.18) : "transparent")
-            : (convMouse.containsMouse
-                ? (dayflow ? dayflow.accentFill(0.08) : "transparent")
-                : "transparent")
-          border.color: dayflow ? dayflow.accentFill(0.45) : "transparent"
+          height: Style.space(24)
+          width: parent.width
+          radius: Style.space(4)
+          color: convMouse.containsMouse
+            ? (dayflow ? dayflow.accentFill(0.08) : "transparent")
+            : "transparent"
 
           Text {
-            id: convText
-            anchors.centerIn: parent
-            text: modelData.title
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - Style.space(12)
+            text: (root.chatConversation === Number(modelData.id) ? "● " : "")
+                  + (modelData.title || "conversation")
             textFormat: Text.PlainText
-            color: dayflow ? dayflow.foreground : Color.foreground
+            color: root.chatConversation === Number(modelData.id)
+              ? (dayflow ? dayflow.foreground : Color.foreground)
+              : (dayflow ? dayflow.dim : Color.dim)
             font.family: dayflow ? dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
           }
 
           MouseArea {
             id: convMouse
             anchors.fill: parent
             hoverEnabled: true
-            onClicked: root.loadConversation(Number(modelData.id))
+            cursorShape: Qt.PointingHandCursor
+            onClicked: { root.loadConversation(Number(modelData.id)); root.historyOpen = false }
           }
         }
       }
@@ -222,27 +262,28 @@ Flickable {
         model: root.chatMessages
         delegate: Rectangle {
           property bool showThis: modelData.role !== "tool" && !(modelData.role === "assistant" && modelData.tool_calls && modelData.tool_calls.length > 0)
+          property bool isUser: modelData.role === "user"
 
           visible: showThis
-          width: parent.width
-          height: showThis ? msgText.implicitHeight + Style.space(16) : 0
+          // Chat convention instead of speaker labels: user right-aligned
+          // accent bubble, assistant left-aligned plain card.
+          width: isUser ? Math.min(parent.width * 0.82, msgText.implicitWidth + Style.space(16))
+                        : parent.width
+          x: isUser ? parent.width - width : 0
+          height: showThis ? msgText.implicitHeight + Style.space(14) : 0
           radius: Style.cornerRadius
-          color: modelData.role === "user"
-            ? (dayflow ? dayflow.accentFill(0.10) : "transparent")
+          color: isUser
+            ? (dayflow ? dayflow.accentFill(0.14) : "transparent")
             : (dayflow ? dayflow.fgFill(0.04) : "transparent")
-          border.color: dayflow ? dayflow.fgFill(0.08) : "transparent"
 
           Text {
             id: msgText
             visible: parent.showThis
-            anchors.fill: parent
-            anchors.margins: Style.space(8)
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: Style.space(7)
             textFormat: Text.RichText
-            text: showThis
-              ? (modelData.role === "assistant"
-                  ? "<b>Assistant</b>:<br/>" + root.fmtMsg(modelData.content)
-                  : "<b>You</b>:<br/>" + root.fmtMsg(modelData.content))
-              : ""
+            text: showThis ? root.fmtMsg(modelData.content) : ""
             color: dayflow ? dayflow.foreground : Color.foreground
             font.family: dayflow ? dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
@@ -284,15 +325,6 @@ Flickable {
       }
     }
 
-    Text {
-      visible: autoRecapTimer.running
-      width: parent.width
-      text: "auto-recap in a few seconds…"
-      color: dayflow ? dayflow.dim : Color.dim
-      font.family: dayflow ? dayflow.fontFamily : Style.font.family
-      font.pixelSize: Style.font.caption
-    }
-
     Flow {
       visible: root.chatMessages.length === 0 && !root.chatLoading
       width: parent.width
@@ -302,12 +334,11 @@ Flickable {
         model: [
           "What did I work on yesterday?",
           "Draft my standup",
-          "Where did I lose focus this week?",
           "Summarize today"
         ]
         delegate: Rectangle {
-          height: Style.space(26)
-          width: chipText.implicitWidth + Style.space(16)
+          height: Style.space(24)
+          width: chipText.implicitWidth + Style.space(14)
           radius: Style.cornerRadius
           color: chipMouse.containsMouse
             ? (dayflow ? dayflow.accentFill(0.10) : "transparent")
@@ -336,61 +367,62 @@ Flickable {
       }
     }
 
+    // Input row: send lives inside the box — no separate button row.
     Rectangle {
       width: parent.width
-      height: inputEdit.implicitHeight + Style.space(12)
+      height: inputRow.implicitHeight + Style.space(10)
       radius: Style.cornerRadius
       color: dayflow ? dayflow.fgFill(0.04) : "transparent"
       border.color: dayflow ? dayflow.fgFill(0.12) : "transparent"
       clip: true
 
-      TextEdit {
-        id: inputEdit
-        anchors.fill: parent
-        anchors.margins: Style.space(6)
-        text: root.chatInput
-        color: dayflow ? dayflow.foreground : Color.foreground
-        font.family: dayflow ? dayflow.fontFamily : Style.font.family
-        font.pixelSize: Style.font.body
-        wrapMode: TextEdit.Wrap
-        onTextChanged: root.chatInput = text
-        enabled: !root.chatLoading
-        Keys.onReturnPressed: function(event) {
-          if (event.modifiers & Qt.ShiftModifier) {
-            event.accepted = false // newline
-            return
-          }
-          if (!event.isAutoRepeat) {
-            event.accepted = true
-            root.sendChat()
+      Row {
+        id: inputRow
+        width: parent.width - Style.space(10)
+        anchors.centerIn: parent
+        spacing: Style.space(6)
+
+        TextEdit {
+          id: inputEdit
+          width: parent.width - sendLbl.width - Style.space(6)
+          text: root.chatInput
+          color: dayflow ? dayflow.foreground : Color.foreground
+          font.family: dayflow ? dayflow.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+          wrapMode: TextEdit.Wrap
+          onTextChanged: root.chatInput = text
+          enabled: !root.chatLoading
+          Keys.onReturnPressed: function(event) {
+            if (event.modifiers & Qt.ShiftModifier) {
+              event.accepted = false // newline
+              return
+            }
+            if (!event.isAutoRepeat) {
+              event.accepted = true
+              root.sendChat()
+            }
           }
         }
-      }
-    }
 
-    Rectangle {
-      height: Style.space(32)
-      width: Style.space(64)
-      radius: Style.cornerRadius
-      color: sendMouse.containsMouse
-        ? (dayflow ? dayflow.accentFill(0.12) : "transparent")
-        : "transparent"
-      border.color: dayflow ? dayflow.accentFill(0.5) : "transparent"
-
-      Text {
-        anchors.centerIn: parent
-        text: root.chatLoading ? "..." : "Send"
-        color: dayflow ? dayflow.foreground : Color.foreground
-        font.family: dayflow ? dayflow.fontFamily : Style.font.family
-        font.pixelSize: Style.font.caption
-      }
-
-      MouseArea {
-        id: sendMouse
-        anchors.fill: parent
-        hoverEnabled: true
-        enabled: !root.chatLoading
-        onClicked: root.sendChat()
+        Text {
+          id: sendLbl
+          anchors.verticalCenter: parent.verticalCenter
+          text: "➤"
+          textFormat: Text.PlainText
+          color: (sendMa.containsMouse && !root.chatLoading)
+            ? (dayflow ? dayflow.foreground : Color.foreground)
+            : (dayflow ? dayflow.dim : Color.dim)
+          font.family: dayflow ? dayflow.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+          MouseArea {
+            id: sendMa
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            enabled: !root.chatLoading
+            onClicked: root.sendChat()
+          }
+        }
       }
     }
   }

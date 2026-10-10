@@ -207,7 +207,7 @@ Flickable {
   Column {
     id: col
     width: parent.width
-    spacing: Style.space(14)
+    spacing: Style.space(8)
 
     LoadingBar {
       width: parent.width
@@ -286,14 +286,6 @@ Flickable {
               })()
             : ""
           visible: text !== ""
-        }
-
-        DimNote { text: "OpenRouter sends this app name in the HTTP-Referer and X-Title headers so its analytics know which app is calling." }
-
-        Field { label: "App / site name"
-          value: dayflow.configDraft.site_name || "dayflow-linux"
-          hint: "dayflow-linux"
-          onEdited: function(t) { root.setDraft("site_name", t) }
         }
 
         PanelCard {
@@ -456,25 +448,6 @@ Flickable {
           }
         }
 
-        DimNote { text: "Decisions endpoint — judges which agent sessions are worth summarizing." }
-
-        Field { label: "Decisions URL"
-          value: dayflow.configDraft.decisions_url || ""
-          hint: "blank = OpenRouter"
-          onEdited: function(t) { root.setDraft("decisions_url", t) }
-        }
-        DimNote { text: "URL shape picks transport — `/v1` base or `…/chat/completions` selects chat transport." }
-        Field { label: "Decisions model"
-          value: dayflow.configDraft.decisions_model || ""
-          hint: "blank = classification model"
-          onEdited: function(t) { root.setDraft("decisions_model", t) }
-        }
-        Field { label: "Decisions API key"
-          value: dayflow.configDraft.decisions_api_key || ""
-          hint: "blank = no Authorization header"
-          secret: true
-          onEdited: function(t) { root.setDraft("decisions_api_key", t) }
-        }
       }
 
       // ---- Capture ----
@@ -597,8 +570,7 @@ Flickable {
           onEdited: function(t) { root.setDraft("classification_model", t) }
         }
 
-        DimNote { text: "Category buckets"; font.bold: true; color: root.dayflow.foreground }
-        DimNote { text: "The model uses these names and descriptions to classify every block. A category like 'browsing' can be work or personal depending on what is on screen — the classification instructions below decide that." }
+        DimNote { text: "Category buckets — names + descriptions the model classifies each block into." }
 
         Repeater {
           model: dayflow.settingsCatModel
@@ -682,8 +654,7 @@ Flickable {
           onClicked: dayflow.settingsCatModel.append({ name: "", description: "" })
         }
 
-        DimNote { text: "Classification instructions"; font.bold: true; color: root.dayflow.foreground }
-        DimNote { text: "Extra prompt text appended to every summarization request. Use it to teach the model what counts as work vs. personal for you." }
+        DimNote { text: "Classification instructions — extra prompt text appended to every summary request." }
 
         PanelCard {
           pal: root.dayflow
@@ -727,6 +698,25 @@ Flickable {
           label: "Record agent completions immediately (hooks + opt-in watcher)"
           on: dayflow.configDraft.agent_completions === true
           onToggled: root.setDraft("agent_completions", !on)
+        }
+
+        DimNote { text: "Decisions endpoint — judges which agent sessions are worth summarizing." }
+
+        Field { label: "Decisions URL"
+          value: dayflow.configDraft.decisions_url || ""
+          hint: "blank = OpenRouter"
+          onEdited: function(t) { root.setDraft("decisions_url", t) }
+        }
+        Field { label: "Decisions model"
+          value: dayflow.configDraft.decisions_model || ""
+          hint: "blank = classification model"
+          onEdited: function(t) { root.setDraft("decisions_model", t) }
+        }
+        Field { label: "Decisions API key"
+          value: dayflow.configDraft.decisions_api_key || ""
+          hint: "blank = no Authorization header"
+          secret: true
+          onEdited: function(t) { root.setDraft("decisions_api_key", t) }
         }
       }
 
@@ -845,6 +835,11 @@ Flickable {
           value: dayflow.configDraft.capture_command || ""
           hint: "blank = auto-detect backend"
           onEdited: function(t) { root.setDraft("capture_command", t) }
+        }
+        Field { label: "App / site name (OpenRouter analytics)"
+          value: dayflow.configDraft.site_name || "dayflow-linux"
+          hint: "dayflow-linux"
+          onEdited: function(t) { root.setDraft("site_name", t) }
         }
         Toggle {
           label: "Debug logging to debug.log"

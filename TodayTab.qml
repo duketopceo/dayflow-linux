@@ -9,6 +9,8 @@ Flickable {
   property var dayflow: parent && parent.panel ? parent.panel : null
   // Day calendar selection — index into dayflow.spans; -1 = no detail card.
   property int selectedSpan: -1
+  // Filter chips: all | core | distract | idle (DayTimeline.keep()).
+  property string spanFilter: "all"
   width: parent.width
   implicitHeight: Math.min(col.implicitHeight, Style.space(360))
   height: implicitHeight
@@ -206,6 +208,36 @@ Flickable {
       }
     }
 
+    // ---- span filter chips — macOS Dayflow style ----
+    Flow {
+      visible: dayflow.spans.length > 0
+      width: parent.width
+      spacing: Style.space(4)
+
+      Repeater {
+        model: [
+          { id: "all", label: "All tasks" },
+          { id: "core", label: "Core tasks" },
+          { id: "distract", label: "Distractions" },
+          { id: "idle", label: "Idle time" }
+        ]
+        delegate: Item {
+          required property var modelData
+          width: fchip.implicitWidth
+          height: fchip.implicitHeight
+          PanelButton {
+            id: fchip
+            pal: root.dayflow
+            frame: "quiet"
+            compact: true
+            selected: root.spanFilter === modelData.id
+            text: modelData.label
+            onClicked: root.spanFilter = modelData.id
+          }
+        }
+      }
+    }
+
     Text {
       visible: dayflow.spans.length === 0 && dayflow.errorText === "" && dayflow.configured
       width: parent.width
@@ -229,6 +261,7 @@ Flickable {
       width: parent.width
       pal: dayflow
       spans: dayflow.spans
+      filter: root.spanFilter
       selectedIndex: root.selectedSpan
       showNow: dayflow.dayOffset === 0
       onSpanClicked: function(i) { root.selectedSpan = i }
