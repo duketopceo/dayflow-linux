@@ -27,6 +27,7 @@ pragma Singleton
 import QtQuick
 QtObject {
   readonly property int rounding: %(rounding)d
+  readonly property int cornerRadius: %(rounding)d
   readonly property string fontFamilyMonospace: "%(mono)s"
   readonly property string fontFamilyInterface: "%(ui)s"
   readonly property int fontMonospaceSize: %(monopx)d
@@ -49,6 +50,7 @@ QtObject {
     readonly property int caption: %(uipx)d
     readonly property int body: %(uipx)d + 1
     readonly property int section: %(uipx)d + 2
+    readonly property int subtitle: %(uipx)d + 3
     readonly property int title: %(uipx)d + 4
     readonly property int display: %(uipx)d + 8
     readonly property int barHeight: 26
@@ -163,8 +165,9 @@ case "$1" in
   playback) printf '%s\\n' '{"state":"idle"}' ;;
   doctor) printf '%s\\n' '{"ok":true,"checks":[{"name":"stub","ok":true}]}' ;;
   ignore) printf '%s\\n' '{"ignored":"code"}' ;;
+  unignore) printf 'ok\\n' ;;
   edit|toggle|log|summarize|install|export|timelapse) printf 'ok\\n' ;;
-  key) printf 'openrouter: absent\\n' ;;
+  key) printf 'devin\\n' ;;
   *) exit 2 ;;
 esac
 """

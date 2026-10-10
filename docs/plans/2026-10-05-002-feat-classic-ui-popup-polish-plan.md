@@ -30,6 +30,31 @@ Shipped since this plan was written — remaining units are U1, U3, U4, U5:
 - **Settings.qml is now ~959 lines** (was ~809 at planning) — the U4 group
   rework is more necessary, not less.
 
+## Status at second resume (2026-10-09, post-implementation)
+
+- **U1 done** (`21231442`): `PanelCard`/`PanelButton`/`PanelChip`/`StatRow`
+  shared components adopted in the tab delegate + footer chips; offscreen
+  harness `tests/ui/{fit.qml,verify-fit.py}` renders the classic surfaces
+  against a fail-closed `dayflow` stub and reports geometry/contract
+  failures — currently 0 failures across 40 scenarios.
+- **U3 done**: `AgentsPane.innerW` fixes the padded-Column right overflow;
+  `PanelSeparator` widths subtract content padding; `StandupTab`/
+  `DailyWorkflowGrid` anchor-in-Row fixes; harness stays green.
+- **U4 done**: Settings regrouped into 8 collapsible `SettingsGroup`s
+  (provider open by default; state in `dayflow.settingsOpenGroups`,
+  hoisted so tab Loader churn preserves it). All mapped engine keys are
+  surfaced; `saveConfig` diffs the draft and strips dedicated-path keys;
+  `queuePatch`/`keySetQueue`/`fieldCmd` queues serialize stdin patches,
+  `key set`, ignore/unignore deltas, and `config set notifications.enabled`.
+  New surfaces: `SettingsGroup.qml`, `SettingsToggle.qml`,
+  `SettingsField.committed`/`secret`. Carry pins extended
+  (`delete patch.*` guards + `spec.key` read) in `panel_carry_test.go`.
+- **U5 done**: this status block + ROADMAP entry.
+
+Deferred (unchanged): the `⋯` overlay menu (chip-swap shipped instead),
+prompt-override stdin transport, `routing.task_provider` editing,
+FullView pane polish, keyboard navigation in the footer.
+
 ## Problem frame
 
 The classic popup is the v1.6.0 baseline and the daily surface. It reads loose:

@@ -9,8 +9,12 @@ Column {
   property string value: ""
   property string hint: ""
   property bool numeric: false
+  property bool secret: false
 
   signal edited(string text)
+  // Enter/focus-out — fields with dedicated write paths commit here, not
+  // per keystroke like the draft-bound `edited`.
+  signal committed(string text)
 
   spacing: Style.space(2)
 
@@ -57,7 +61,12 @@ Column {
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.body
       inputMethodHints: root.numeric ? Qt.ImhDigitsOnly : Qt.ImhNone
-      onTextChanged: root.edited(text)
+      echoMode: root.secret ? TextInput.Password : TextInput.Normal
+      // textEdited fires on user input only — onTextChanged would also fire
+      // when the `text: root.value` binding re-binds on draft refresh,
+      // looping write-back into the draft.
+      onTextEdited: root.edited(text)
+      onEditingFinished: root.committed(text)
     }
   }
 }

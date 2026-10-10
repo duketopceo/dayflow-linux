@@ -59,6 +59,12 @@ ShellRoot {
     property var weeklyPayload: ({})
     property int dayOffset: 0
     property int todayIndex: 0
+    // Settings write-path + group state surface.
+    property bool keyringOpenrouter: false
+    property var keySetQueue: []
+    property var pendingPatches: []
+    property var patchFailures: []
+    property var settingsOpenGroups: ({ "provider": true })
 
     function fgFill(a) { return Qt.rgba(foreground.r, foreground.g, foreground.b, a) }
     function accentFill(a) { return Qt.rgba(accent.r, accent.g, accent.b, a) }
@@ -90,6 +96,19 @@ ShellRoot {
     function weekDayOrder() { return [] }
     function weekDaySpans() { return [] }
     function weekDayNames() { return [] }
+    function queuePatch(payload, label) { pendingPatches = pendingPatches.concat([{ payload: payload, label: label }]) }
+    function configDiff(draft, base) {
+      var patch = {}
+      var src = draft || {}
+      var ref = base || {}
+      for (var k in src) { if (JSON.stringify(src[k]) !== JSON.stringify(ref[k])) patch[k] = src[k] }
+      return patch
+    }
+    function settingsGroupToggle(id) {
+      var m = Object.assign({}, settingsOpenGroups)
+      m[id] = !(m[id] === true)
+      settingsOpenGroups = m
+    }
   }
 
   // Bar stand-in for the real panel root — it reads bar.foreground /
@@ -97,6 +116,7 @@ ShellRoot {
   QtObject {
     id: barStub
     property color foreground: model.foreground
+    property color barForeground: model.foreground
     property string fontFamily: model.fontFamily
     property string position: "top"
     function switchPanelFrom(w, d) { return false }

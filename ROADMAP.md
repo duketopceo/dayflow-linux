@@ -29,7 +29,7 @@ Last updated: 2026-10-05.
    `knowledge_transport: http`, sync verified landing `lane: "trusted"` in
    default search.
 2. Per-agent-conversation playback ranges (upstream `AgentPlaybackView` parity; stats half shipped in #44).
-3. Classic-UI polish/redesign — gated track (U3 of the v1.6.0 plan): dense, specific, not bloated; design brief first, incremental on the classic architecture.
+3. Classic-UI polish/redesign — gated track (U3 of the v1.6.0 plan): dense, specific, not bloated; design brief first, incremental on the classic architecture. In progress per `docs/brainstorms/2026-10-05-classic-ui-polish-requirements.md` + `docs/plans/2026-10-05-002-feat-classic-ui-popup-polish-plan.md`: shared components + offscreen UI harness (`python tests/ui/verify-fit.py`), footer compression, and the grouped/diff-write Settings rework are landing; FullView polish stays deferred.
 4. Open issues: #2 morning/evening reflections UI, #3 summary quality ratings, #4 streaming chat.
 5. Windows capture adapter research (grabscreen equivalents) — parked until asked for.
 

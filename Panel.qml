@@ -156,6 +156,7 @@ Panel {
       if (!weeklyProc.running) weeklyProc.running = true
     } else if (tab === "settings") {
       if (!configProc.running) configProc.running = true
+      if (!keyStatusProc.running) keyStatusProc.running = true
     } else if (tab === "agents") {
       // Lazy + staleness-aware: load once, reload when the viewed day
       // drifted since the briefing was fetched.
@@ -204,22 +205,71 @@ Panel {
     }
   }
 
+  // Deep-diff draft against the last-loaded config — untouched keys are
+  // never sent, so an externally-written key (ignore --active, provider
+  // set, panel_expanded) can't be reverted by a stale draft.
+  function configDiff(draft, base) {
+    var patch = {}
+    var src = draft || {}
+    var ref = base || {}
+    for (var k in src) {
+      if (JSON.stringify(src[k]) !== JSON.stringify(ref[k])) patch[k] = src[k]
+    }
+    return patch
+  }
+
   function saveConfig() {
-    var patch = dayflow.cloneConfig(dayflow.configDraft)
-    if (patch.openrouter_api_key === "***redacted***") delete patch.openrouter_api_key
-    if (patch.decisions_api_key === "***redacted***") delete patch.decisions_api_key
-    // Advanced provider fields are saved independently. Round-tripping this
-    // stale snapshot would undo prompt overrides written since loadConfig.
+    var patch = dayflow.configDiff(dayflow.configDraft, dayflow.config)
+    // Keys with dedicated write paths never ride the draft patch. Advanced
+    // provider fields are saved independently — round-tripping the stale
+    // snapshot would undo prompt overrides written since loadConfig.
     delete patch.providers
     delete patch.routing
-    patch.categories = []
+    delete patch.ignore_apps
+    delete patch.notifications
+    delete patch.request_timeout_sec
+    delete patch.pricing
+    for (var k in patch) {
+      if (k.indexOf("knowledge_") === 0) delete patch[k]
+    }
+    if (patch.openrouter_api_key === "***redacted***") delete patch.openrouter_api_key
+    if (patch.decisions_api_key === "***redacted***") delete patch.decisions_api_key
+    // When the keyring holds the account, key edits go through `key set`
+    // on stdin — a config.json copy would silently win over keyring.
+    if (dayflow.keyringOpenrouter && patch.openrouter_api_key !== undefined && patch.openrouter_api_key !== "") {
+      dayflow.keySetQueue = dayflow.keySetQueue.concat([patch.openrouter_api_key])
+      delete patch.openrouter_api_key
+      if (!keySetProc.running) { keySetProc.didStart = false; keySetProc.running = true }
+    }
+    var cats = []
     for (var i = 0; i < settingsCatModel.count; i++) {
       var item = settingsCatModel.get(i)
-      if (item.name) patch.categories.push({ name: item.name, description: item.description, color: item.color || "" })
+      if (item.name) cats.push({ name: item.name, description: item.description, color: item.color || "" })
     }
-    patchProc.pendingPatch = JSON.stringify(patch)
-    patchProc.command = ["dayflow", "config", "patch", "-"]
-    patchProc.running = true
+    if (JSON.stringify(cats) !== JSON.stringify(dayflow.config.categories || [])) patch.categories = cats
+    dayflow.queuePatch(JSON.stringify(patch), "settings")
+  }
+
+  // One stdin-patch Process drains every `config patch -` write — the
+  // draft-diff save and the per-field dedicated-path patches (knowledge_*,
+  // routing, pricing, request_timeout_sec) share it so writes serialize.
+  property var pendingPatches: []
+  property var patchFailures: []
+
+  function queuePatch(payload, label) {
+    if (dayflow.pendingPatches.length === 0) dayflow.patchFailures = []
+    dayflow.pendingPatches = dayflow.pendingPatches.concat([{ payload: payload, label: label }])
+    if (!patchProc.running) { patchProc.didStart = false; patchProc.running = true }
+  }
+
+  // Settings group collapsed state, hoisted so it survives the tab
+  // Loader's destroy/recreate within a session. "provider" opens by
+  // default; the rest start closed.
+  property var settingsOpenGroups: ({ "provider": true })
+  function settingsGroupToggle(id) {
+    var m = Object.assign({}, dayflow.settingsOpenGroups)
+    m[id] = !(m[id] === true)
+    dayflow.settingsOpenGroups = m
   }
 
   function loadConfig() {
@@ -1185,23 +1235,81 @@ Panel {
 
   Process {
     id: patchProc
-    property string pendingPatch: ""
     property bool didStart: false
     stdinEnabled: true
-    onStarted: { write(pendingPatch + "\n"); pendingPatch = ""; patchProc.didStart = true }
+    onStarted: {
+      if (dayflow.pendingPatches.length) write(dayflow.pendingPatches[0].payload + "\n")
+      patchProc.didStart = true
+    }
     command: ["dayflow", "config", "patch", "-"]
     onExited: function(exitCode) {
-      if (exitCode === 0) {
-        dayflow.notice = "settings saved"
-        configProc.running = true
+      var done = dayflow.pendingPatches.length ? dayflow.pendingPatches[0] : { payload: "", label: "settings" }
+      dayflow.pendingPatches = dayflow.pendingPatches.slice(1)
+      if (exitCode !== 0) dayflow.patchFailures = dayflow.patchFailures.concat([done.label])
+      configProc.running = true
+      if (dayflow.pendingPatches.length) {
+        patchProc.didStart = false
+        patchProc.running = true
       } else {
-        dayflow.notice = "settings save failed"
+        // Batch settled — one aggregate notice, not one per key.
+        dayflow.notice = dayflow.patchFailures.length
+          ? "saved except: " + dayflow.patchFailures.join(", ")
+          : "settings saved"
       }
     }
     onRunningChanged: {
-      if (!patchProc.running && !patchProc.didStart) dayflow.notice = "settings save failed"
+      // FailedToStart emits no exited — flush the queue so writes aren't stranded.
+      if (!patchProc.running && !patchProc.didStart && dayflow.pendingPatches.length) {
+        dayflow.patchFailures = dayflow.pendingPatches.map(function(p) { return p.label })
+        dayflow.pendingPatches = []
+        dayflow.notice = "settings save failed"
+      }
       if (!patchProc.running) patchProc.didStart = false
     }
+  }
+
+  // `key set <account>` reads the secret on stdin — one queue, like patches.
+  property var keySetQueue: []
+  Process {
+    id: keySetProc
+    property bool didStart: false
+    stdinEnabled: true
+    command: ["dayflow", "key", "set", "openrouter"]
+    onStarted: {
+      if (dayflow.keySetQueue.length) write(dayflow.keySetQueue[0] + "\n")
+      keySetProc.didStart = true
+    }
+    onExited: function(exitCode) {
+      dayflow.keySetQueue = dayflow.keySetQueue.slice(1)
+      if (exitCode === 0) {
+        dayflow.notice = "key stored in keyring"
+        configProc.running = true
+        keyStatusProc.running = true
+      } else {
+        dayflow.notice = "keyring store failed"
+      }
+      if (dayflow.keySetQueue.length) { keySetProc.didStart = false; keySetProc.running = true }
+    }
+    onRunningChanged: {
+      if (!keySetProc.running && !keySetProc.didStart && dayflow.keySetQueue.length) {
+        dayflow.keySetQueue = []
+        dayflow.notice = "keyring store failed"
+      }
+      if (!keySetProc.running) keySetProc.didStart = false
+    }
+  }
+
+  // `key status` lists dayflow accounts present in the keyring; it fatals
+  // when omaseal is absent, which just reads as "no keyring" to the UI.
+  property bool keyringOpenrouter: false
+  Process {
+    id: keyStatusProc
+    command: ["dayflow", "key", "status"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: { dayflow.keyringOpenrouter = text.indexOf("openrouter") >= 0 }
+    }
+    onExited: function(exitCode) { if (exitCode !== 0) dayflow.keyringOpenrouter = false }
   }
 
 
