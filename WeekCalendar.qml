@@ -46,35 +46,50 @@ Item {
   }
 
   readonly property int gutterW: Style.space(30)
+  // Pixels per hour on the shared axis; today's column width factor.
+  // The expanded whole-week layout raises hourH and equalizes columns.
+  property real hourH: Style.space(16)
+  property real todayScale: 1.7
   implicitWidth: 100
-  // Full day: 24h at ~16px/hour — the whole day mapped, not a cropped
-  // window around the spans. The tab's Flickable scrolls it.
-  implicitHeight: headH + 24 * Style.space(16)
+  // Axis starts at the first recording of the week (floored to the 2h
+  // gridline) and runs to 24:00 — no dead night hours at the top.
+  implicitHeight: headH + (1440 - viewStart) * pxPerMin
   clip: true
 
   readonly property int headH: Style.space(18)
-  readonly property real pxPerMin: (height - headH) / 1440
+  readonly property real pxPerMin: hourH / 60
+  readonly property int viewStart: {
+    var m = 1440
+    for (var d = 0; d < 7; d++) {
+      var ss = cal.daySpans(d)
+      for (var i = 0; i < ss.length; i++) {
+        var sm = cal.toMin(ss[i], "start")
+        if (sm < m) m = sm
+      }
+    }
+    return m >= 1440 ? 0 : Math.floor(m / 120) * 120
+  }
 
-  // Column x/width for dayIndex — today's column stretches.
+  // Column x/width for dayIndex — today's column stretches by todayScale.
   function colX(d) {
-    var unit = (width - gutterW) / 7.7
+    var unit = (width - gutterW) / (6 + todayScale)
     var x = gutterW
-    for (var i = 0; i < d; i++) x += (i === todayIndex ? unit * 1.7 : unit)
+    for (var i = 0; i < d; i++) x += (i === todayIndex ? unit * todayScale : unit)
     return x
   }
   function colW(d) {
-    var unit = (width - gutterW) / 7.7
-    return d === todayIndex ? unit * 1.7 : unit
+    var unit = (width - gutterW) / (6 + todayScale)
+    return d === todayIndex ? unit * todayScale : unit
   }
 
-  // Gridlines + gutter labels every 2 hours — 12 ticks on the day axis.
+  // Gridlines + gutter labels every 2 hours from the first recording on.
   Repeater {
-    model: 12
+    model: Math.max(1, Math.ceil((1440 - cal.viewStart) / 120))
     delegate: Item {
-      property int hourMin: index * 120
+      property int hourMin: cal.viewStart + index * 120
       width: cal.width
       height: 1
-      y: cal.headH + hourMin * cal.pxPerMin
+      y: cal.headH + (hourMin - cal.viewStart) * cal.pxPerMin
 
       Rectangle {
         anchors.left: parent.left
@@ -149,13 +164,13 @@ Item {
         delegate: Rectangle {
           id: blk
           required property var modelData
-          property int startM: cal.toMin(modelData, "start")
+          property int startM: Math.max(cal.viewStart, cal.toMin(modelData, "start"))
           property int endM: Math.max(startM + 1, cal.toMin(modelData, "end"))
           property real rawH: (endM - startM) * cal.pxPerMin
           property bool tall: rawH >= 13
 
           x: 2
-          y: cal.headH + startM * cal.pxPerMin
+          y: cal.headH + (startM - cal.viewStart) * cal.pxPerMin
           width: dayCol.width - 4
           height: Math.max(4, Math.min(rawH, cal.height - y))
           radius: Style.space(3)
@@ -198,10 +213,10 @@ Item {
       var d = new Date()
       return d.getHours() * 60 + d.getMinutes()
     }
-    visible: cal.todayIndex >= 0
+    visible: cal.todayIndex >= 0 && nowMin >= cal.viewStart
     x: cal.colX(cal.todayIndex) + 1
     width: cal.colW(cal.todayIndex) - 2
-    y: cal.headH + nowMin * cal.pxPerMin
+    y: cal.headH + (nowMin - cal.viewStart) * cal.pxPerMin
     height: 2
     color: cal.pal ? cal.pal.accentFill(0.95) : "white"
     Timer {

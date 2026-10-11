@@ -270,6 +270,7 @@ ShellRoot {
     stage.width = test.width - 80
     stage.height = test.height - 80
     if (test.kind === "panel" && test.tab) popup.currentTab = test.tab
+    if (test.kind === "panel") model.expanded = test.expanded === true
     if (test.kind === "panel" && test.actionsOpen !== undefined) popup.actionsOpen = test.actionsOpen
     if (test.kind === "panel" && test.notice !== undefined) { popup.notice = test.notice; popup.noticeAt = Date.now() }
     if (test.kind === "onboarding") onboardingHostApply(test)
@@ -321,6 +322,8 @@ ShellRoot {
       for (var tab of ["today", "standup", "chat", "agents", "settings"])
         list.push({ name: "panel-" + w + "-" + tab, kind: "panel", width: w + 80, height: 800, tab: tab })
       list.push({ name: "panel-" + w + "-actions-open", kind: "panel", width: w + 80, height: 800, tab: "today", actionsOpen: true })
+      if (w === 780)
+        list.push({ name: "panel-780-expanded-today", kind: "panel", width: w + 80, height: 800, tab: "today", expanded: true })
       list.push({ name: "panel-" + w + "-notice", kind: "panel", width: w + 80, height: 800, tab: "today", notice: "settings saved" })
     }
     // Settings + onboarding at three viewport sizes, dark theme.

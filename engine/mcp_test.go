@@ -245,3 +245,57 @@ func TestMCPArgTypeValidation(t *testing.T) {
 		t.Fatalf("valid args rejected: %v", err)
 	}
 }
+
+func TestMCPGetWeek(t *testing.T) {
+	cfg := testEnv(t)
+	db, err := openDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Seed two days of this week: an early block on day 0 (earliest
+	// minute-of-day in the week) and two same-title blocks on today,
+	// which mergeCards folds into one card-derived span.
+	weekStart, _ := weekBounds(time.Now())
+	early := time.Date(weekStart.Year(), weekStart.Month(), weekStart.Day(), 7, 30, 0, 0, time.Local)
+	seedBlock(t, db, early, "Morning review", "skimmed mail", "admin", "mail", "done")
+	todayS, _ := dayBounds(time.Now())
+	b1 := todayS.Add(10 * time.Hour)
+	seedBlock(t, db, b1, "Shipped the adapter", "merged it", "coding", "nvim", "done")
+	seedBlock(t, db, b1.Add(15*time.Minute), "Shipped the adapter", "still on it", "coding", "nvim", "done")
+
+	res, err := mcpCall(db, cfg, true, "get_week", map[string]any{})
+	if err != nil {
+		t.Fatalf("get_week: %v", err)
+	}
+	m, ok := res.(map[string]any)
+	if !ok {
+		t.Fatalf("get_week returned %T", res)
+	}
+	days, ok := m["days"].([]map[string]any)
+	if !ok || len(days) != 7 {
+		t.Fatalf("days: %v", m["days"])
+	}
+	if got := m["first_activity_min"]; got != 7*60+30 {
+		t.Fatalf("first_activity_min = %v, want 450", got)
+	}
+	// Exactly one day flagged today, and it carries the merged span.
+	todayCount := 0
+	for _, d := range days {
+		if d["today"] != true {
+			continue
+		}
+		todayCount++
+		spans, _ := d["spans"].([]map[string]any)
+		if len(spans) != 1 {
+			t.Fatalf("today spans = %v, want 1 merged card span", spans)
+		}
+		if spans[0]["blocks"] != 2 || spans[0]["title"] != "Shipped the adapter" {
+			t.Fatalf("merged span wrong: %v", spans[0])
+		}
+	}
+	if todayCount != 1 {
+		t.Fatalf("today flags = %d, want 1", todayCount)
+	}
+}

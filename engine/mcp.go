@@ -38,6 +38,8 @@ var mcpTools = []map[string]any{
 	{"name": "get_timeline", "description": "Summarized activity blocks for a date (YYYY-MM-DD, 'today', 'yesterday') or a range ('week', 'month'). Returns title/summary/category per 15-min block plus 'cards' — the same merged activity-card array as 'timeline --json'.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"date": map[string]any{"type": "string", "description": "YYYY-MM-DD, today, yesterday, week, month"}}}},
+	{"name": "get_week", "description": "The merged week view the UI renders: Mon–Sun days, each with card-derived activity spans segmented per day (a card spanning midnight appears in every day it touches) plus that day's raw blocks, and first_activity_min — the earliest minute-of-day recorded this week (the calendar axis origin).",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "get_status", "description": "Current recording state: paused, frames today, blocks done/pending, model.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "search_journal", "description": "Search block titles/summaries for a substring (e.g. an app, file, or topic). Returns matching blocks.",
@@ -188,6 +190,14 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		res["start"] = start.Format("2006-01-02")
 		res["end"] = end.Format("2006-01-02")
 		return res, nil
+
+	case "get_week":
+		start, end := weekBounds(time.Now())
+		blocks, err := blocksBetween(db, start, end)
+		if err != nil {
+			return nil, err
+		}
+		return weekGridJSON(blocks, start), nil
 
 	case "get_status":
 		now := time.Now()

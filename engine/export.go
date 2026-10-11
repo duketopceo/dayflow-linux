@@ -164,6 +164,70 @@ func timelineJSON(blocks []Block) map[string]any {
 	return map[string]any{"blocks": blocks, "cards": mergeCards(blocks)}
 }
 
+// weekGridJSON builds the per-day grid the merged Today view renders:
+// each Mon–Sun day carries its card-derived spans (children filtered to
+// that day, mirroring the UI's weekDaySpans — a card spanning midnight
+// contributes a span to every day it touches), the day's raw blocks, and
+// the week-wide first_activity_min the calendar uses as its axis origin.
+func weekGridJSON(blocks []Block, weekStart time.Time) map[string]any {
+	cards := mergeCards(blocks)
+	todayS, todayE := dayBounds(time.Now())
+	firstMin := -1
+	minuteOfDay := func(ts int64) int {
+		t := time.Unix(ts, 0).Local()
+		return t.Hour()*60 + t.Minute()
+	}
+	var days []map[string]any
+	for i := 0; i < 7; i++ {
+		ds := weekStart.AddDate(0, 0, i)
+		de := ds.AddDate(0, 0, 1)
+		var dayBlocks []Block
+		var spans []map[string]any
+		for _, b := range blocks {
+			if b.StartTs >= ds.Unix() && b.StartTs < de.Unix() {
+				dayBlocks = append(dayBlocks, b)
+				if m := minuteOfDay(b.StartTs); firstMin < 0 || m < firstMin {
+					firstMin = m
+				}
+			}
+		}
+		for _, c := range cards {
+			var kids []Block
+			dayMins := 0
+			for _, k := range c.Children {
+				if k.StartTs >= ds.Unix() && k.StartTs < de.Unix() {
+					kids = append(kids, k)
+					dayMins += int((k.EndTs - k.StartTs) / 60)
+				}
+			}
+			if len(kids) == 0 {
+				continue
+			}
+			last := kids[len(kids)-1]
+			spans = append(spans, map[string]any{
+				"start_ts": kids[0].StartTs, "end_ts": last.EndTs,
+				"start": kids[0].StartStr, "end": last.EndStr,
+				"app": c.App, "app_name": c.AppName,
+				"title": c.Title, "summary": c.Summary,
+				"category": c.Category, "productive": c.Productive,
+				"blocks": len(kids), "minutes": dayMins,
+				"children": kids,
+			})
+		}
+		days = append(days, map[string]any{
+			"index": i, "date": ds.Format("2006-01-02"),
+			"weekday": ds.Format("Monday"),
+			"today":   !ds.Before(todayS) && ds.Before(todayE),
+			"blocks":  dayBlocks, "spans": spans,
+		})
+	}
+	return map[string]any{
+		"start": weekStart.Format("2006-01-02"),
+		"end":   weekStart.AddDate(0, 0, 7).Format("2006-01-02"),
+		"days":  days, "first_activity_min": firstMin,
+	}
+}
+
 // blockLowConfidence reports whether Jev scored any of the block's judgments
 // below the low-confidence threshold — the UI's flag signal.
 func blockLowConfidence(b Block) bool {

@@ -54,6 +54,17 @@ Item {
   readonly property int cardMinH: Style.space(44)
   readonly property int gutterW: Style.space(46)
 
+  // The gutter starts at the first recording of the day (floored to the
+  // hour), not 00:00 — dead pre-dawn hours aren't mapped space.
+  readonly property int viewStart: {
+    var m = 1440
+    for (var i = 0; i < spans.length; i++) {
+      var s = toMin(spans[i], "start")
+      if (s < m) m = s
+    }
+    return m >= 1440 ? 0 : Math.floor(m / 60) * 60
+  }
+
   function relayout() {
     var out = []
     var bottom = -6
@@ -63,7 +74,7 @@ Item {
       var startM = toMin(s, "start")
       var endM = Math.max(startM + 1, toMin(s, "end"))
       var h = Math.min(Math.max(cardMinH, (endM - startM) * pxPerMin), 24 * 60 * pxPerMin)
-      var y = Math.max(startM * pxPerMin, bottom + 6)
+      var y = Math.max((startM - viewStart) * pxPerMin, bottom + 6)
       out.push({ i: i, y: y, h: h })
       bottom = y + h
     }
@@ -98,10 +109,10 @@ Item {
   Repeater {
     model: layout.length ? Math.ceil((layout[layout.length - 1].y + layout[layout.length - 1].h) / tl.pxPerMin / 60) + 1 : 0
     delegate: Item {
-      property int hourMin: index * 60
+      property int hourMin: tl.viewStart + index * 60
       width: tl.width
       height: 1
-      y: hourMin * tl.pxPerMin
+      y: (hourMin - tl.viewStart) * tl.pxPerMin
       visible: y >= 0 && y < tl.height && (index % 2 === 0)
 
       Rectangle {
@@ -221,10 +232,10 @@ Item {
     anchors.left: parent.left
     anchors.leftMargin: tl.gutterW - Style.space(10)
     anchors.right: parent.right
-    y: Math.min(tl.height - 1, Math.max(0, nowMin * tl.pxPerMin))
+    y: Math.min(tl.height - 1, Math.max(0, (nowMin - tl.viewStart) * tl.pxPerMin))
     height: 2
     color: tl.pal ? tl.pal.accentFill(0.95) : "white"
-    opacity: nowMin * tl.pxPerMin <= tl.height ? 1 : 0
+    opacity: nowMin >= tl.viewStart && (nowMin - tl.viewStart) * tl.pxPerMin <= tl.height ? 1 : 0
     Timer { interval: 30000; running: tl.showNow; repeat: true; onTriggered: parent.nowMinChanged() }
   }
 }
