@@ -52,6 +52,14 @@ Panel {
   property bool timelineQueued: false
   property var weeklyPayload: ({ start: "", end: "", total_minutes: 0, focus_minutes: 0, distraction_minutes: 0, idle_minutes: 0, category_donut: [], app_treemap: [], context_shifts: [], context_shift_count: 0, top_distractions: [], focus_blocks: [], highlights: [], suggestions: [], heatmap: [] })
   property var spans: []
+  // The viewed day's captured frames ({ts, path, exists}) — SpanCard
+  // thumbnails pick the frame nearest the selected span's start.
+  property var dayFrames: []
+  property bool dayFramesQueued: false
+  // A week-grid click carries the span's first child start_ts here —
+  // DayPane resolves it into a selection once the jumped-to day's
+  // timeline lands (child-level match survives midnight-split cards).
+  property double pendingSpanTs: 0
   property int dayOffset: 0
   property bool expanded: false
   property bool expandedLoaded: false
@@ -346,6 +354,14 @@ Panel {
       dayflow.timelineQueued = true
     } else {
       timelineProc.running = true
+    }
+    // Frame thumbnails are day-scoped too — refetch with the timeline so
+    // SpanCard's nearest-frame lookup always matches the viewed day.
+    dayFramesProc.command = ["dayflow", "frames", dayflow.viewDateStr(), "--json"]
+    if (dayFramesProc.running) {
+      dayflow.dayFramesQueued = true
+    } else {
+      dayFramesProc.running = true
     }
     dayflow.loadWorkflow()
   }
@@ -854,6 +870,35 @@ Panel {
           dayflow.timelineLoading = true
           timelineProc.running = true
         }
+      }
+    }
+  }
+
+  // Viewed-day frame list — feeds SpanCard thumbnails. Same queue-on-busy
+  // pattern as timelineProc; a mid-flight run keeps the old day's list
+  // until the queued rerun lands.
+  Process {
+    id: dayFramesProc
+    command: ["dayflow", "frames", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var d = JSON.parse(text)
+          dayflow.dayFrames = d.frames || []
+        } catch (e) {}
+      }
+    }
+    onExited: function(exitCode) {
+      if (dayflow.dayFramesQueued) {
+        dayflow.dayFramesQueued = false
+        dayFramesProc.running = true
+      }
+    }
+    onRunningChanged: {
+      if (!dayFramesProc.running && dayflow.dayFramesQueued) {
+        dayflow.dayFramesQueued = false
+        dayFramesProc.running = true
       }
     }
   }

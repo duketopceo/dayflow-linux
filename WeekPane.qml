@@ -2,8 +2,10 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// FullView "Week" pane — forecast strip, stat strip, focus heatmap,
-// category/app breakdowns, and the weekly summary.
+// FullView "Week" pane — the week calendar is the hero: a full-density
+// 7-day time grid sized to fill the pane, with the clicked day's card
+// timeline + detail beside it. Analytics (forecast, stats, heatmap,
+// breakdowns, summary) follow below.
 // `host` is the FullView window; `host.forecast` holds the forecast payload.
 Flickable {
   id: pane
@@ -11,17 +13,90 @@ Flickable {
   property var host: null
   readonly property var dayflow: host ? host.dayflow : null
   readonly property var forecast: host ? host.forecast : null
+  // Day detail state for the hero's right column.
+  property int selSpan: -1
+  property string spanFilter: "all"
 
   width: parent ? parent.width : 0
   height: parent ? parent.height : 0
   contentHeight: weekCol.implicitHeight
   clip: true
 
+  // A block click jumps the viewed day to that column and queues the
+  // span's child ts — the same contract the popup's jumpToDay uses, so
+  // the DayPane beside the grid selects it once the timeline lands.
+  function jumpToDay(dayIndex, span) {
+    if (!pane.dayflow) return
+    var offset = dayIndex - pane.dayflow.todayIndex()
+    pane.dayflow.uilog("fullview week cal jump " + offset)
+    if (span) {
+      var kids = span.children || []
+      pane.dayflow.pendingSpanTs = Number(kids.length ? kids[0].start_ts : (span.start_ts || 0))
+    }
+    pane.dayflow.dayOffset = offset
+    pane.dayflow.loadTimeline()
+  }
+
   Column {
     id: weekCol
     width: pane.width - Style.space(32)
     x: Style.space(16)
     spacing: Style.space(10)
+
+    // ---- hero: the week grid + clicked day's detail ----
+    Row {
+      width: parent.width
+      height: Math.max(heroCal.implicitHeight, heroDay.implicitHeight)
+      spacing: Style.space(10)
+
+      Column {
+        width: Math.floor(parent.width * 0.62)
+        spacing: Style.space(3)
+
+        WeekCalendar {
+          id: heroCal
+          width: parent.width
+          pal: pane.dayflow
+          // Fill the pane's visible height with the day's active span —
+          // the "no wasted space" tier. Clamped into the full-density
+          // band so every card carries icon + wrapped title + time + app.
+          hourH: Math.min(80, Math.max(40,
+            (pane.height - Style.space(48)) * 60 / Math.max(60, 1440 - heroCal.viewStart)))
+          todayScale: 1.0
+          todayIndex: pane.dayflow ? pane.dayflow.todayIndex() : -1
+          selectedIndex: pane.dayflow ? pane.dayflow.todayIndex() + pane.dayflow.dayOffset : -1
+          spansFor: function(d) { return pane.dayflow ? pane.dayflow.weekDaySpans(d) : [] }
+          onDayClicked: function(dayIndex, span) { pane.jumpToDay(dayIndex, span) }
+        }
+
+        Text {
+          width: parent.width
+          height: visible ? implicitHeight : 0
+          visible: heroCal.hoveredSpan !== null && heroCal.hoveredSpan !== undefined
+          text: heroCal.hoveredSpan
+            ? heroCal.hoveredSpan.start + "–" + heroCal.hoveredSpan.end +
+              "  " + (heroCal.hoveredSpan.title || "") +
+              (heroCal.hoveredSpan.appName ? "  ·  " + heroCal.hoveredSpan.appName : "") +
+              (heroCal.hoveredSpan.minutes ? "  ·  " + pane.dayflow.fmtDur(heroCal.hoveredSpan.minutes) : "")
+            : ""
+          textFormat: Text.PlainText
+          color: pane.dayflow ? pane.dayflow.foreground : "white"
+          font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+      }
+
+      DayPane {
+        id: heroDay
+        width: parent.width - heroCal.width - Style.space(10)
+        dayflow: pane.dayflow
+        selectedSpan: pane.selSpan
+        spanFilter: pane.spanFilter
+        onSpanSelected: function(i) { pane.selSpan = i }
+        onFilterPicked: function(f) { pane.spanFilter = f }
+      }
+    }
 
     // tomorrow forecast strip
     Rectangle {
@@ -223,7 +298,8 @@ Flickable {
             }
 
             Text {
-              anchors.right: parent.right
+              width: Style.space(132) - parent.spacing
+              horizontalAlignment: Text.AlignRight
               anchors.verticalCenter: parent.verticalCenter
               text: trendCard.deltaText(modelData.delta_minutes) +
                 "  (" + (modelData.delta_share > 0 ? "+" : "") +
@@ -359,7 +435,8 @@ Flickable {
               }
 
               Text {
-                anchors.right: parent.right
+                width: Style.space(72) - parent.spacing
+                horizontalAlignment: Text.AlignRight
                 text: pane.dayflow ? pane.dayflow.fmtDur(modelData.minutes) : ""
                 color: pane.dayflow ? pane.dayflow.dim : "gray"
                 font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
@@ -413,7 +490,8 @@ Flickable {
               }
 
               Text {
-                anchors.right: parent.right
+                width: Style.space(62) - parent.spacing
+                horizontalAlignment: Text.AlignRight
                 text: pane.dayflow ? pane.dayflow.fmtDur(modelData.minutes) : ""
                 color: pane.dayflow ? pane.dayflow.dim : "gray"
                 font.family: pane.dayflow ? pane.dayflow.fontFamily : ""

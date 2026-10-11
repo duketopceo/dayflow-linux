@@ -58,8 +58,9 @@ Item {
   // hour), not 00:00 — dead pre-dawn hours aren't mapped space.
   readonly property int viewStart: {
     var m = 1440
-    for (var i = 0; i < spans.length; i++) {
-      var s = toMin(spans[i], "start")
+    var list = spans || []
+    for (var i = 0; i < list.length; i++) {
+      var s = toMin(list[i], "start")
       if (s < m) m = s
     }
     return m >= 1440 ? 0 : Math.floor(m / 60) * 60
@@ -68,8 +69,9 @@ Item {
   function relayout() {
     var out = []
     var bottom = -6
-    for (var i = 0; i < spans.length; i++) {
-      var s = spans[i]
+    var list = spans || []
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i]
       if (!keep(s)) continue
       var startM = toMin(s, "start")
       var endM = Math.max(startM + 1, toMin(s, "end"))

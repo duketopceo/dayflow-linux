@@ -11,6 +11,10 @@ Rectangle {
   id: cardRoot
   required property var pal
   required property var span
+  // The viewed day's captured frames ({ts, path, exists}) — the card
+  // renders the frame nearest the span start as a thumbnail. Callers
+  // feed pal.dayFrames; empty hides the image entirely.
+  property var dayFrames: []
 
   width: parent ? parent.width : 0
   height: cardCol.implicitHeight + Style.space(14)
@@ -62,8 +66,8 @@ Rectangle {
 
       Text {
         width: parent.width - appIcon.width - categoryPill.width - (productiveMark.visible ? productiveMark.width : 0) - (lowConfMark.visible ? lowConfMark.width : 0) - editText.implicitWidth - parent.spacing * ((productiveMark.visible ? 1 : 0) + (lowConfMark.visible ? 1 : 0) + 3)
-        text: span.start + "–" + span.end +
-              " · " + pal.fmtDur(span.minutes) +
+        text: (span.start || "") + "–" + (span.end || "") +
+              " · " + pal.fmtDur(span.minutes || 0) +
               (span.count > 1 ? " · " + span.count + " blocks" : "") +
               (span.appName ? " · " + span.appName : "")
         textFormat: Text.PlainText
@@ -84,7 +88,7 @@ Rectangle {
         Text {
           id: catText
           anchors.centerIn: parent
-          text: pal.catDisplay(span.category)
+          text: pal.catDisplay(span.category || "")
           textFormat: Text.PlainText
           color: pal.foreground
           font.family: pal.fontFamily
@@ -163,6 +167,28 @@ Rectangle {
       wrapMode: Text.WordWrap
       maximumLineCount: 3
       elide: Text.ElideRight
+    }
+
+    // Timelapse thumbnail — the captured frame nearest the span start.
+    Image {
+      readonly property var nearest: {
+        var best = null, dist = -1
+        var t0 = Number(span.start_ts || 0)
+        for (var i = 0; i < cardRoot.dayFrames.length; i++) {
+          var f = cardRoot.dayFrames[i]
+          if (!f.exists) continue
+          var d = Math.abs(Number(f.ts) - t0)
+          if (dist < 0 || d < dist) { dist = d; best = f }
+        }
+        return best
+      }
+      visible: nearest !== null && status !== Image.Error
+      width: parent.width
+      height: Style.space(64)
+      fillMode: Image.PreserveAspectCrop
+      sourceSize.width: Math.round(width * 2)
+      sourceSize.height: Math.round(height * 2)
+      source: nearest ? "file://" + nearest.path : ""
     }
 
     // ---- inline edit form (title, category, productive) ----
@@ -265,36 +291,63 @@ Rectangle {
       }
     }
 
-    // Merged span: one row per underlying 15-min block.
+    // Merged span: one row per underlying block — app icon + time + title,
+    // the literal "what apps at what times" breakdown.
     Repeater {
       model: span.count > 1 ? span.children : []
 
-      delegate: Text {
+      delegate: Row {
         required property var modelData
         width: parent.width
-        text: "· " + modelData.start + " " + modelData.title
-        textFormat: Text.PlainText
-        color: pal.dim
-        font.family: pal.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideRight
+        spacing: Style.space(3)
+
+        Image {
+          visible: status === Image.Ready
+          width: visible ? Style.space(10) : 0
+          height: Style.space(10)
+          y: Style.space(1)
+          source: pal.appIcon(modelData.app)
+        }
+        Text {
+          width: parent.width - parent.spacing - Style.space(10)
+          text: modelData.start + "–" + modelData.end +
+                (modelData.app ? "  " + pal.appDisplayName(modelData.app) : "") +
+                "  " + modelData.title
+          textFormat: Text.PlainText
+          color: pal.dim
+          font.family: pal.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
       }
     }
 
-    // Single block: per-app segments as before.
+    // Single block: per-app segments with icons.
     Repeater {
       model: span.count === 1 && span.children && span.children[0]
         ? (span.children[0].activities || []) : []
 
-      delegate: Text {
+      delegate: Row {
         required property var modelData
         width: parent.width
-        text: pal.appDisplayName(modelData.app) + " · " + modelData.title
-        textFormat: Text.PlainText
-        color: pal.dim
-        font.family: pal.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideRight
+        spacing: Style.space(3)
+
+        Image {
+          visible: status === Image.Ready
+          width: visible ? Style.space(10) : 0
+          height: Style.space(10)
+          y: Style.space(1)
+          source: pal.appIcon(modelData.app)
+        }
+        Text {
+          width: parent.width - parent.spacing - Style.space(10)
+          text: pal.appDisplayName(modelData.app) + " · " + modelData.title
+          textFormat: Text.PlainText
+          color: pal.dim
+          font.family: pal.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
       }
     }
   }

@@ -50,6 +50,9 @@ Item {
   // The expanded whole-week layout raises hourH and equalizes columns.
   property real hourH: Style.space(16)
   property real todayScale: 1.7
+  // Density tier from the hour scale — drives how much a block renders:
+  // "low" icon+1-line, "high" wrapped title+time, "full" +app+seams.
+  readonly property string density: hourH >= 40 ? "full" : (hourH >= 24 ? "high" : "low")
   implicitWidth: 100
   // Axis starts at the first recording of the week (floored to the 2h
   // gridline) and runs to 24:00 — no dead night hours at the top.
@@ -166,13 +169,33 @@ Item {
           required property var modelData
           property int startM: Math.max(cal.viewStart, cal.toMin(modelData, "start"))
           property int endM: Math.max(startM + 1, cal.toMin(modelData, "end"))
-          property real rawH: (endM - startM) * cal.pxPerMin
-          property bool tall: rawH >= 13
+          property real restH: Math.max(4,
+            Math.min((endM - startM) * cal.pxPerMin, cal.height - y))
+          // Second-most-common child app — the reference's primary/secondary
+          // icon pair, applied to app icons. "" when the card is single-app.
+          property string secondApp: {
+            var kids = modelData.children || []
+            var counts = {}
+            for (var i = 0; i < kids.length; i++) {
+              var a = kids[i].app || ""
+              if (a && a !== modelData.app) counts[a] = (counts[a] || 0) + 1
+            }
+            var best = "", n = 0
+            for (var k in counts) if (counts[k] > n) { n = counts[k]; best = k }
+            return best
+          }
+          // Natural content height drives the hover-expand target (KTD2):
+          // the unbounded wrapped title + caption inside card padding.
+          property real naturalH: Math.max(restH,
+            Style.space(6) + naturalMeasure.implicitHeight +
+            (timeTxt.visible ? timeTxt.implicitHeight : 0))
+          property bool expanded: false
 
           x: 2
           y: cal.headH + (startM - cal.viewStart) * cal.pxPerMin
           width: dayCol.width - 4
-          height: Math.max(4, Math.min(rawH, cal.height - y))
+          height: expanded ? Math.min(naturalH, cal.height - y - 2) : restH
+          z: expanded ? 10 : 0
           radius: Style.space(3)
           color: cal.pal ? cal.pal.payloadFill(modelData.color, modelData.category,
               blkMa.containsMouse ? 0.42 : 0.26) : Qt.rgba(1, 1, 1, 0.2)
@@ -180,17 +203,124 @@ Item {
           border.width: 1
           clip: true
 
-          Text {
-            visible: blk.tall && blk.width > 18
-            x: Style.space(3)
+          Behavior on height { NumberAnimation { duration: 110 } }
+
+          // Expand carries a short intent delay — a fast pointer sweep
+          // across the grid shouldn't strobe cards (reference parity).
+          Timer {
+            id: expandTimer
+            interval: 140
+            onTriggered: blk.expanded = true
+          }
+
+          // Category accent edge — the color identity.
+          Rectangle {
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: Style.space(3)
+            radius: Style.space(2)
+            color: cal.pal ? cal.pal.payloadColor(modelData.color, modelData.category) : "white"
+          }
+
+          Column {
+            x: Style.space(6)
             y: 1
-            width: parent.width - Style.space(6)
+            width: parent.width - Style.space(8)
+            spacing: 0
+
+            Row {
+              width: parent.width
+              spacing: Style.space(2)
+
+              Image {
+                id: appImg
+                visible: status === Image.Ready
+                width: visible ? Style.space(9) : 0
+                height: Style.space(9)
+                y: Style.space(1)
+                source: cal.pal ? cal.pal.appIcon(modelData.app) : ""
+              }
+
+              Text {
+                id: titleWrap
+                width: parent.width - (appImg.visible ? appImg.width + parent.spacing : 0)
+                text: modelData.title || ""
+                textFormat: Text.PlainText
+                color: cal.pal ? cal.pal.foreground : "white"
+                font.family: cal.pal ? cal.pal.fontFamily : ""
+                font.pixelSize: Style.font.caption
+                // Wrapped line count from the card's measured room — the
+                // reference formula: (height - pads - reserved) / lineH.
+                property int lineH: Math.ceil(Style.font.caption * 1.25)
+                property int avail: blk.height - Style.space(6) -
+                  (timeTxt.visible ? timeTxt.implicitHeight : 0)
+                maximumLineCount: Math.max(1, Math.floor(avail / lineH))
+                wrapMode: cal.density === "low" || maximumLineCount <= 1
+                  ? Text.NoWrap : Text.WordWrap
+                elide: Text.ElideRight
+                visible: blk.height >= 12 && blk.width > 18
+              }
+            }
+
+            // Second app icon — full density only, top-right feels cramped;
+            // it rides the caption line instead.
+            Text {
+              id: timeTxt
+              visible: cal.density !== "low" && blk.height >= Style.space(30) && blk.width > 26
+              width: parent.width
+              text: (modelData.start || "") + "–" + (modelData.end || "") +
+                (cal.density === "full" && modelData.appName ? " · " + modelData.appName : "")
+              textFormat: Text.PlainText
+              color: cal.pal ? cal.pal.dim : "gray"
+              font.family: cal.pal ? cal.pal.fontFamily : ""
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+          }
+
+          // Unbounded wrap measurement — the hover-expand height target.
+          Text {
+            id: naturalMeasure
+            visible: false
+            width: parent.width - Style.space(14)
             text: modelData.title || ""
             textFormat: Text.PlainText
-            color: cal.pal ? cal.pal.foreground : "white"
             font.family: cal.pal ? cal.pal.fontFamily : ""
             font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
+            wrapMode: Text.WordWrap
+          }
+
+          // Secondary app icon — full density, pinned top-right so the
+          // title still gets the row.
+          Image {
+            visible: cal.density === "full" && blk.secondApp !== "" &&
+              blk.width > Style.space(30) && status === Image.Ready
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(3)
+            width: Style.space(8)
+            height: Style.space(8)
+            opacity: 0.8
+            source: cal.pal && blk.secondApp !== "" ? cal.pal.appIcon(blk.secondApp) : ""
+          }
+
+          // Child seams — full density hairlines at each child block's
+          // start, so a merged card still reveals where the app changed.
+          Repeater {
+            model: cal.density === "full" && blk.height >= Style.space(48)
+              ? (modelData.children || []) : []
+            delegate: Rectangle {
+              required property int index
+              required property var modelData
+              visible: index > 0
+              property int cm: cal.toMin(modelData, "start")
+              y: Math.max(0, (cm - blk.startM) * cal.pxPerMin)
+              x: Style.space(5)
+              width: parent.width - Style.space(6)
+              height: 1
+              color: cal.pal ? cal.pal.fgFill(0.18) : Qt.rgba(1,1,1,0.18)
+            }
           }
 
           MouseArea {
@@ -198,8 +328,11 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onContainsMouseChanged:
+            onContainsMouseChanged: {
               cal.hoveredSpan = containsMouse ? modelData : null
+              if (containsMouse) expandTimer.restart()
+              else { expandTimer.stop(); blk.expanded = false }
+            }
             onClicked: cal.dayClicked(dayCol.dayIndex, modelData)
           }
         }

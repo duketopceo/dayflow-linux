@@ -18,10 +18,15 @@ Flickable {
   clip: true
 
   // Shared click-through for both calendar placements: jump the day
-  // detail to the clicked column's date.
-  function jumpToDay(dayIndex) {
+  // detail to the clicked column's date, and when a specific block was
+  // clicked mark its child ts so DayPane selects it once the day loads.
+  function jumpToDay(dayIndex, span) {
     var offset = dayIndex - dayflow.todayIndex()
     dayflow.uilog("week cal jump " + offset)
+    if (span) {
+      var kids = span.children || []
+      dayflow.pendingSpanTs = Number(kids.length ? kids[0].start_ts : (span.start_ts || 0))
+    }
     dayflow.dayOffset = offset
     dayflow.loadTimeline()
   }
@@ -64,7 +69,7 @@ Flickable {
           todayIndex: dayflow.todayIndex()
           selectedIndex: dayflow.todayIndex() + dayflow.dayOffset
           spansFor: function(d) { return dayflow.weekDaySpans(d) }
-          onDayClicked: function(dayIndex, span) { root.jumpToDay(dayIndex) }
+          onDayClicked: function(dayIndex, span) { root.jumpToDay(dayIndex, span) }
         }
 
         Text {
@@ -119,7 +124,7 @@ Flickable {
           todayIndex: dayflow.todayIndex()
           selectedIndex: dayflow.todayIndex() + dayflow.dayOffset
           spansFor: function(d) { return dayflow.weekDaySpans(d) }
-          onDayClicked: function(dayIndex, span) { root.jumpToDay(dayIndex) }
+          onDayClicked: function(dayIndex, span) { root.jumpToDay(dayIndex, span) }
         }
 
         // Hover readout — slivers too thin for inline labels still get a

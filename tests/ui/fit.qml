@@ -64,15 +64,41 @@ ShellRoot {
     property var insights: ({ total_minutes: 0, focus_minutes: 0, distraction_minutes: 0,
       idle_minutes: 0, categories: [], apps: [], top_distractions: [], focus_blocks: [], days: 0 })
     property var weekBlocks: [{ start_ts: 1760000000, end_ts: 1760010800, category: "dev" }]
+    // Multi-app children exercise the card's secondary-icon + child-seam
+    // paths; app/app_name/activities feed the icon rows in SpanCard.
     property var weekCards: [{
-      title: "dayflow polish", category: "dev", start: "8:00 AM", end: "10:30 AM",
-      children: [{ start_ts: 1760000000, end_ts: 1760010800, start: "8:00 AM", end: "10:30 AM" }]
+      title: "dayflow polish", category: "dev", app: "ghostty", app_name: "Ghostty",
+      productive: true, summary: "popup work", minutes: 150, blocks: 4,
+      start: "8:00 AM", end: "10:30 AM",
+      children: [
+        { start_ts: 1760000000, end_ts: 1760005400, start: "8:00 AM", end: "9:30 AM",
+          app: "ghostty", title: "polishing the popup", summary: "", category: "dev",
+          activities: [{ app: "ghostty", title: "editing qml" }] },
+        { start_ts: 1760005400, end_ts: 1760010800, start: "9:30 AM", end: "10:30 AM",
+          app: "firefox", title: "checking docs", summary: "", category: "dev",
+          activities: [{ app: "firefox", title: "qt docs" }] }
+      ]
+    }, {
+      title: "inbox + slack", category: "communication", app: "slack", app_name: "Slack",
+      productive: true, summary: "comms", minutes: 45, blocks: 2,
+      start: "11:00 AM", end: "11:45 AM",
+      children: [
+        { start_ts: 1760026800, end_ts: 1760029500, start: "11:00 AM", end: "11:45 AM",
+          app: "slack", title: "team sync", summary: "", category: "communication",
+          activities: [{ app: "slack", title: "standup thread" }] }
+      ]
     }]
+    property var dayFrames: []
+    property double pendingSpanTs: 0
     property string weekStart: "Mon 10-05"
     property string weekEnd: "Sun 10-11"
     property string weekSummary: ""
     property bool weekSummaryLoading: false
-    property var weeklyPayload: ({})
+    property var weeklyPayload: ({ total_minutes: 1200, focus_minutes: 800,
+      distraction_minutes: 120, idle_minutes: 60, context_shift_count: 14,
+      category_donut: [{ name: "dev", display: "Development", minutes: 700, color: "" }],
+      app_treemap: [{ name: "ghostty", display: "Ghostty", minutes: 500 }],
+      top_distractions: [], focus_blocks: [], highlights: [], suggestions: [], heatmap: [] })
     property int dayOffset: 0
     // Settings write-path + group state surface.
     property bool keyringOpenrouter: false
@@ -88,6 +114,7 @@ ShellRoot {
     function saveConfig() { notice = "settings saved" }
     function loadConfig() {}
     function loadTimeline() {}
+    function refreshForTab(tab) {}
     function saveDraft() {}
     function saveBlockEdits() {}
     function requestEngineInstall() {}
@@ -132,6 +159,24 @@ ShellRoot {
       m[id] = !(m[id] === true)
       settingsOpenGroups = m
     }
+  }
+
+  // FullView host stand-in — the panes take `host` and read dayflow,
+  // compactLayout, forecast, and the timelapse surface through it.
+  QtObject {
+    id: fvStub
+    property var dayflow: model
+    property bool compactLayout: false
+    property var forecast: null
+    property var tlFrames: []
+    property bool tlPlaying: false
+    property int tlIndex: 0
+    property bool tlLoading: false
+    property string tlError: ""
+    property bool tlPlaybackOn: false
+    function tlLoad() {}
+    function tlSeek(i) {}
+    function enablePlayback() {}
   }
 
   // Bar stand-in for the real panel root — it reads bar.foreground /
@@ -185,6 +230,26 @@ ShellRoot {
         visible: runner.kindIs("onboarding")
         property var panel: model
         Onboarding { anchors.fill: parent }
+      }
+
+      // FullView panes rendered standalone against the host stub — the
+      // week hero grid and the day-detail pane exercise their real code.
+      Item {
+        id: fvHost
+        anchors.fill: parent
+        visible: runner.kindIs("fullview")
+        Loader {
+          anchors.fill: parent
+          source: {
+            var t = runner.scenario >= 0 && runner.scenario < runner.cases.length
+              ? runner.cases[runner.scenario] : null
+            if (!t || t.kind !== "fullview") return ""
+            // fit.qml runs as root/shell.qml — repo QML is symlinked flat
+            // beside it, so pane paths are bare filenames.
+            return t.fvSection === "today" ? "TodayPane.qml" : "WeekPane.qml"
+          }
+          onLoaded: item.host = fvStub
+        }
       }
 
       // Shared-component spot renders.
@@ -261,6 +326,7 @@ ShellRoot {
     if (test.kind === "settings") return settingsHost
     if (test.kind === "onboarding") return obHost
     if (test.kind === "components") return componentsHost
+    if (test.kind === "fullview") return fvHost
     return stage
   }
 
@@ -274,6 +340,7 @@ ShellRoot {
     if (test.kind === "panel" && test.actionsOpen !== undefined) popup.actionsOpen = test.actionsOpen
     if (test.kind === "panel" && test.notice !== undefined) { popup.notice = test.notice; popup.noticeAt = Date.now() }
     if (test.kind === "onboarding") onboardingHostApply(test)
+    if (test.kind === "fullview") fvStub.compactLayout = test.compact === true
   }
 
   function onboardingHostApply(test) {
@@ -333,6 +400,11 @@ ShellRoot {
         list.push({ name: "onboarding-" + size.width + "x" + size.height + "-" + step, kind: "onboarding", width: size.width, height: size.height, step: step })
     }
     list.push({ name: "components", kind: "components", width: 620, height: 800 })
+    // FullView panes: the week hero grid at full + compact widths, and the
+    // day-detail pane parity check.
+    list.push({ name: "fullview-week", kind: "fullview", width: 1280, height: 800, fvSection: "week" })
+    list.push({ name: "fullview-week-compact", kind: "fullview", width: 900, height: 620, fvSection: "week", compact: true })
+    list.push({ name: "fullview-today", kind: "fullview", width: 1280, height: 800, fvSection: "today" })
     cases = list
   }
 }

@@ -203,7 +203,24 @@ Column {
 
   Connections {
     target: dayflow
-    function onSpansChanged() { if (daypane.selectedSpan >= dayflow.spans.length) daypane.spanSelected(-1) }
+    function onSpansChanged() {
+      // A week-grid click queued a child ts — resolve it to the day span
+      // now that this day's timeline has landed. Child-level matching
+      // finds continuation segments of midnight-crossing cards.
+      if (dayflow.pendingSpanTs > 0) {
+        var ts = dayflow.pendingSpanTs
+        dayflow.pendingSpanTs = 0
+        for (var i = 0; i < dayflow.spans.length; i++) {
+          var s = dayflow.spans[i]
+          if (Number(s.start_ts) === ts) { daypane.spanSelected(i); return }
+          var kids = s.children || []
+          for (var k = 0; k < kids.length; k++) {
+            if (Number(kids[k].start_ts) === ts) { daypane.spanSelected(i); return }
+          }
+        }
+      }
+      if (daypane.selectedSpan >= dayflow.spans.length) daypane.spanSelected(-1)
+    }
   }
 
   // Day calendar — proportional time blocks; click selects and the
@@ -223,6 +240,7 @@ Column {
     visible: daypane.selectedSpan >= 0 && daypane.selectedSpan < dayflow.spans.length
     width: parent.width
     pal: dayflow
+    dayFrames: dayflow.dayFrames || []
     span: daypane.selectedSpan >= 0 && daypane.selectedSpan < dayflow.spans.length
       ? dayflow.spans[daypane.selectedSpan] : ({})
   }
