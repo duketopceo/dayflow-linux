@@ -7,20 +7,7 @@ import qs.Ui
 Panel {
   id: dayflow
   moduleName: "io.github.duketopceo.dayflow"
-  ipcTarget: "io.github.duketopceo.dayflow"
-  // manageIpc: false so this panel owns the single IpcHandler for the
-  // target; the shell's managed handler only offers show/hide.
   manageIpc: false
-
-  IpcHandler {
-    target: "io.github.duketopceo.dayflow"
-
-    function open() { dayflow.open() }
-    function show() { dayflow.open() }
-    function close() { dayflow.close() }
-    function hide() { dayflow.close() }
-    function toggle() { dayflow.toggle() }
-  }
 
   signal statusChanged()
 
