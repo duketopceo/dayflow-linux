@@ -88,7 +88,7 @@ Item {
       width: parent.width
       text: root.dayflow ? root.dayflow.installErr : ""
       textFormat: Text.PlainText
-      color: "#c06c60"
+      color: Color.urgent !== undefined ? Color.urgent : (root.dayflow ? root.dayflow.foreground : Color.foreground)
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption
       wrapMode: Text.WordWrap
