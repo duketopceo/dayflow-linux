@@ -320,7 +320,7 @@ FloatingWindow {
   onDayflowChanged: {
     if (root.dayflow) {
       root.dayflow.loadTimeline()
-      root.dayflow.refreshForTab("week")
+      root.dayflow.refreshForTab("today")
     }
   }
 

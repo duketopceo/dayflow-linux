@@ -4,26 +4,14 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-Flickable {
-  id: root
-  property var dayflow: parent && parent.panel ? parent.panel : null
+// The week's supporting surface — stats, charts, review, heatmap, list
+// sections. Lives at the bottom of the merged Today tab; most sections
+// are expanded-gated so the compact popup only shows the stat row.
+Column {
+  id: wstats
+  property var dayflow
   width: parent.width
-  implicitHeight: Math.min(wcol.implicitHeight, Style.space(360))
-  height: implicitHeight
-  contentHeight: wcol.implicitHeight
-  clip: true
-
-  Column {
-    id: wcol
-    width: parent.width
-    spacing: Style.space(8)
-
-    LoadingBar {
-      width: parent.width
-      pal: dayflow
-      active: dayflow.procByName("weeklyProc").running || dayflow.procByName("weekTimelineProc").running || dayflow.procByName("insightsFetchProc").running
-      estimate: 4
-    }
+  spacing: Style.space(8)
 
     Flow {
       width: parent.width
@@ -36,11 +24,11 @@ Flickable {
         ]
         delegate: CopyButton {
           required property var modelData
-          dayflow: root.dayflow
+          dayflow: wstats.dayflow
           label: modelData.label
-          proc: root.dayflow.procByName(modelData.proc)
+          proc: wstats.dayflow.procByName(modelData.proc)
           onActivated: {
-            root.dayflow.uilog(modelData.logName)
+            wstats.dayflow.uilog(modelData.logName)
             proc.running = true
           }
         }
@@ -129,67 +117,6 @@ Flickable {
               }
             }
           }
-        }
-      }
-    }
-
-    // ---- 7-day calendar grid — the week's hero view ----
-    Rectangle {
-      visible: dayflow.weekBlocks.length > 0 || (dayflow.weekCards && dayflow.weekCards.length > 0)
-      width: parent.width
-      height: weekWrapCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
-
-      Column {
-        id: weekWrapCol
-        width: parent.width - Style.space(16)
-        anchors.centerIn: parent
-        spacing: Style.space(6)
-
-        Text {
-          text: "Week" +
-                (dayflow.weekStart ? "  " + dayflow.weekStart.substring(5) + " – " + dayflow.weekEnd.substring(5) : "")
-          textFormat: Text.PlainText
-          color: dayflow.foreground
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.body
-          font.bold: true
-        }
-
-        WeekCalendar {
-          id: weekCal
-          width: parent.width
-          pal: dayflow
-          todayIndex: dayflow.todayIndex()
-          spansFor: function(d) { return dayflow.weekDaySpans(d) }
-          onDayClicked: function(dayIndex, span) {
-            var offset = dayIndex - dayflow.todayIndex()
-            dayflow.uilog("week cal jump " + offset)
-            dayflow.dayOffset = offset
-            dayflow.loadTimeline()
-            dayflow.currentTab = "today"
-          }
-        }
-
-        // Hover readout — slivers too thin for inline labels still get a
-        // literal "what was I doing" line here.
-        Text {
-          width: parent.width
-          height: visible ? implicitHeight : 0
-          visible: weekCal.hoveredSpan !== null && weekCal.hoveredSpan !== undefined
-          text: weekCal.hoveredSpan
-            ? weekCal.hoveredSpan.start + "–" + weekCal.hoveredSpan.end +
-              "  " + (weekCal.hoveredSpan.title || "") +
-              (weekCal.hoveredSpan.appName ? "  ·  " + weekCal.hoveredSpan.appName : "") +
-              (weekCal.hoveredSpan.minutes ? "  ·  " + dayflow.fmtDur(weekCal.hoveredSpan.minutes) : "")
-            : ""
-          textFormat: Text.PlainText
-          color: dayflow.foreground
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
         }
       }
     }
@@ -726,7 +653,6 @@ Flickable {
         }
       }
     }
-  }
 
   // ---- helpers ----
   Component {

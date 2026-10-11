@@ -26,6 +26,9 @@ Flickable {
       width: parent.width
       pal: dayflow
       active: dayflow.timelineLoading
+        || dayflow.procByName("weeklyProc").running
+        || dayflow.procByName("weekTimelineProc").running
+        || dayflow.procByName("insightsFetchProc").running
       estimate: 2
     }
 
@@ -168,42 +171,53 @@ Flickable {
       dayflow: root.dayflow
     }
 
-    // ---- this-week day jump ----
-    Flow {
+    // ---- week calendar: the day selector + week overview in one grid ----
+    Rectangle {
+      visible: dayflow.weekBlocks.length > 0 || (dayflow.weekCards && dayflow.weekCards.length > 0)
       width: parent.width
-      spacing: Style.space(3)
+      height: weekWrapCol.implicitHeight + Style.space(12)
+      radius: Style.cornerRadius
+      color: dayflow.fgFill(0.04)
+      border.color: dayflow.fgFill(0.08)
 
-      Repeater {
-        model: 7
-        delegate: Rectangle {
-          property int offset: index - dayflow.todayIndex()
-          height: Style.space(22)
-          width: chipLbl.implicitWidth + Style.space(10)
-          radius: Style.cornerRadius
-          opacity: offset > 0 ? 0.4 : 1
-          color: dayflow.dayOffset === offset
-            ? dayflow.accentFill(0.18)
-            : (chipMa.containsMouse ? dayflow.accentFill(0.08) : "transparent")
-          border.color: dayflow.dayOffset === offset
-            ? dayflow.accentFill(0.5) : dayflow.fgFill(0.12)
+      Column {
+        id: weekWrapCol
+        width: parent.width - Style.space(12)
+        anchors.centerIn: parent
+        spacing: Style.space(4)
 
-          Text {
-            id: chipLbl
-            anchors.centerIn: parent
-            text: dayflow.dayName(index)
-            textFormat: Text.PlainText
-            color: dayflow.dayOffset === offset ? dayflow.foreground : dayflow.dim
-            font.family: dayflow.fontFamily
-            font.pixelSize: Style.font.caption
+        WeekCalendar {
+          id: weekCal
+          width: parent.width
+          pal: dayflow
+          todayIndex: dayflow.todayIndex()
+          selectedIndex: dayflow.todayIndex() + dayflow.dayOffset
+          spansFor: function(d) { return dayflow.weekDaySpans(d) }
+          onDayClicked: function(dayIndex, span) {
+            var offset = dayIndex - dayflow.todayIndex()
+            dayflow.uilog("week cal jump " + offset)
+            dayflow.dayOffset = offset
+            dayflow.loadTimeline()
           }
-          MouseArea {
-            id: chipMa
-            anchors.fill: parent
-            hoverEnabled: true
-            enabled: offset <= 0
-            cursorShape: Qt.PointingHandCursor
-            onClicked: { dayflow.uilog("week chip " + modelData); dayflow.dayOffset = offset; dayflow.loadTimeline() }
-          }
+        }
+
+        // Hover readout — slivers too thin for inline labels still get a
+        // literal "what was I doing" line here.
+        Text {
+          width: parent.width
+          height: visible ? implicitHeight : 0
+          visible: weekCal.hoveredSpan !== null && weekCal.hoveredSpan !== undefined
+          text: weekCal.hoveredSpan
+            ? weekCal.hoveredSpan.start + "–" + weekCal.hoveredSpan.end +
+              "  " + (weekCal.hoveredSpan.title || "") +
+              (weekCal.hoveredSpan.appName ? "  ·  " + weekCal.hoveredSpan.appName : "") +
+              (weekCal.hoveredSpan.minutes ? "  ·  " + dayflow.fmtDur(weekCal.hoveredSpan.minutes) : "")
+            : ""
+          textFormat: Text.PlainText
+          color: dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
         }
       }
     }
@@ -273,6 +287,12 @@ Flickable {
       pal: dayflow
       span: root.selectedSpan >= 0 && root.selectedSpan < dayflow.spans.length
         ? dayflow.spans[root.selectedSpan] : ({})
+    }
+
+    // ---- this week: stats, charts, review, heatmap (expanded-gated) ----
+    WeekStats {
+      width: parent.width
+      dayflow: root.dayflow
     }
 
   }

@@ -147,13 +147,15 @@ Panel {
   // refreshForTab fetches only what the given tab renders — the panel no
   // longer fires standup/insights/weekly/config on every open.
   function refreshForTab(tab) {
-    if (tab === "standup") {
-      if (!standupFetchProc.running) standupFetchProc.running = true
-      if (!goalProc.running) goalProc.running = true
-    } else if (tab === "week") {
+    if (tab === "today") {
+      // The merged day+week view renders the week calendar, stats, and
+      // charts alongside the day timeline — fetch the lot.
       if (!insightsFetchProc.running) insightsFetchProc.running = true
       if (!weekTimelineProc.running) weekTimelineProc.running = true
       if (!weeklyProc.running) weeklyProc.running = true
+    } else if (tab === "standup") {
+      if (!standupFetchProc.running) standupFetchProc.running = true
+      if (!goalProc.running) goalProc.running = true
     } else if (tab === "settings") {
       if (!configProc.running) configProc.running = true
       if (!keyStatusProc.running) keyStatusProc.running = true
@@ -1469,7 +1471,7 @@ Panel {
           spacing: Style.space(4)
 
           Repeater {
-            model: ["today", "standup", "chat", "week", "agents", "settings"]
+            model: ["today", "standup", "chat", "agents", "settings"]
 
             // modelData binds on the wrapper — a delegate root with
             // `required` props (PanelButton.pal) doesn't receive it.
@@ -1537,7 +1539,6 @@ Panel {
             if (dayflow.currentTab === "today") return "TodayTab.qml"
             if (dayflow.currentTab === "standup") return "StandupTab.qml"
             if (dayflow.currentTab === "chat") return "ChatTab.qml"
-            if (dayflow.currentTab === "week") return "WeekTab.qml"
             if (dayflow.currentTab === "agents") return "AgentsTab.qml"
             return "Settings.qml"
           }

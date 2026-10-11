@@ -318,7 +318,7 @@ ShellRoot {
     var list = []
     // Popup shell: compact + expanded widths, every tab, footer states.
     for (var w of [540, 780]) {
-      for (var tab of ["today", "standup", "chat", "week", "agents", "settings"])
+      for (var tab of ["today", "standup", "chat", "agents", "settings"])
         list.push({ name: "panel-" + w + "-" + tab, kind: "panel", width: w + 80, height: 800, tab: tab })
       list.push({ name: "panel-" + w + "-actions-open", kind: "panel", width: w + 80, height: 800, tab: "today", actionsOpen: true })
       list.push({ name: "panel-" + w + "-notice", kind: "panel", width: w + 80, height: 800, tab: "today", notice: "settings saved" })

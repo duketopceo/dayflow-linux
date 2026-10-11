@@ -16,6 +16,8 @@ Item {
   // the standalone app + harness can feed the same grid.
   property var spansFor: null
   property int todayIndex: -1
+  // Which column is the viewed day (wash + bold). -1 = fall back to today.
+  property int selectedIndex: -1
   // Set while the pointer is over a span block — the caller renders the
   // hover readout (the grid is too dense for inline labels on slivers).
   property var hoveredSpan: null
@@ -100,6 +102,7 @@ Item {
       id: dayCol
       property int dayIndex: index
       property bool isToday: index === cal.todayIndex
+      property bool isSel: index === (cal.selectedIndex >= 0 ? cal.selectedIndex : cal.todayIndex)
       property var spans: cal.daySpans(index)
 
       x: cal.colX(index)
@@ -107,10 +110,10 @@ Item {
       width: cal.colW(index)
       height: cal.height
 
-      // Today gets a faint accent wash behind the whole column.
+      // The viewed day gets a faint accent wash behind the whole column.
       Rectangle {
         anchors.fill: parent
-        visible: dayCol.isToday
+        visible: dayCol.isSel
         radius: Style.space(4)
         color: cal.pal ? cal.pal.accentFill(0.06) : "transparent"
         border.color: cal.pal ? cal.pal.accentFill(0.25) : "transparent"
@@ -133,11 +136,11 @@ Item {
         height: cal.headH
         text: cal.pal ? cal.pal.dayName(index) : ""
         textFormat: Text.PlainText
-        color: dayCol.isToday ? (cal.pal ? cal.pal.foreground : "white")
+        color: (dayCol.isSel || dayCol.isToday) ? (cal.pal ? cal.pal.foreground : "white")
                               : (cal.pal ? cal.pal.dim : "gray")
         font.family: cal.pal ? cal.pal.fontFamily : ""
         font.pixelSize: Style.font.caption
-        font.bold: dayCol.isToday
+        font.bold: dayCol.isSel || dayCol.isToday
         verticalAlignment: Text.AlignVCenter
       }
 
