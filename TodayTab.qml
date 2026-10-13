@@ -64,7 +64,7 @@ Flickable {
           id: weekCalExp
           width: parent.width
           pal: dayflow
-          hourH: Style.space(26)
+          hourH: Style.space(30)
           todayScale: 1.0
           todayIndex: dayflow.todayIndex()
           selectedIndex: dayflow.todayIndex() + dayflow.dayOffset

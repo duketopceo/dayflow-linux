@@ -198,7 +198,7 @@ Item {
           z: expanded ? 10 : 0
           radius: Style.space(3)
           color: cal.pal ? cal.pal.payloadFill(modelData.color, modelData.category,
-              blkMa.containsMouse ? 0.42 : 0.26) : Qt.rgba(1, 1, 1, 0.2)
+              blkMa.containsMouse ? 0.50 : 0.34) : Qt.rgba(1, 1, 1, 0.2)
           border.color: cal.pal ? cal.pal.payloadColor(modelData.color, modelData.category) : "transparent"
           border.width: 1
           clip: true
@@ -250,6 +250,7 @@ Item {
                 color: cal.pal ? cal.pal.foreground : "white"
                 font.family: cal.pal ? cal.pal.fontFamily : ""
                 font.pixelSize: Style.font.caption
+                font.weight: Font.Medium
                 // Wrapped line count from the card's measured room — the
                 // reference formula: (height - pads - reserved) / lineH.
                 property int lineH: Math.ceil(Style.font.caption * 1.25)
@@ -259,7 +260,11 @@ Item {
                 wrapMode: cal.density === "low" || maximumLineCount <= 1
                   ? Text.NoWrap : Text.WordWrap
                 elide: Text.ElideRight
-                visible: blk.height >= 12 && blk.width > 18
+                // Below ~64px wide a title is illegible fragments — at
+                // compact density drop to icon-only and let hover speak.
+                visible: blk.height >= 12 &&
+                  (blk.width > 18) &&
+                  (cal.density !== "low" || blk.width >= Style.space(64) || dayCol.isSel || dayCol.isToday)
               }
             }
 
