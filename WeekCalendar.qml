@@ -45,7 +45,7 @@ Item {
     return h * 60 + mn
   }
 
-  readonly property int gutterW: Style.space(30)
+  readonly property int gutterW: Style.space(26)
   // Pixels per hour on the shared axis; today's column width factor.
   // The expanded whole-week layout raises hourH and equalizes columns.
   property real hourH: Style.space(16)

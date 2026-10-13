@@ -57,7 +57,7 @@ Flickable {
 
       Column {
         id: weekWrapExp
-        width: Math.floor(parent.width * 0.58)
+        width: Math.floor(parent.width * 0.62)
         spacing: Style.space(4)
 
         WeekCalendar {

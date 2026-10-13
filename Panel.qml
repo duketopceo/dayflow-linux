@@ -1391,7 +1391,10 @@ Panel {
     bar: dayflow.bar
     open: dayflow.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(dayflow.expanded ? Style.space(780) : Style.space(540))
+    // Expanded is a whole-week window — the 7-column grid + day detail
+    // need real width or titles fragment. fittedContentWidth caps at the
+    // screen anyway, so on small displays it degrades gracefully.
+    contentWidth: panel.fittedContentWidth(dayflow.expanded ? Style.space(1080) : Style.space(540))
     contentHeight: panel.fittedContentHeight(content.implicitHeight)
 
     PanelKeyCatcher {
