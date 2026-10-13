@@ -2,7 +2,8 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// FullView "Today" pane — the viewed day's card timeline: filter chips,
+// FullView "Today" pane — the viewed day's card timeline: day switcher
+// (DayPane's own — no separate DayNavRow, it would be a second nav), filter chips,
 // app-icon blocks on a time gutter, click-to-detail (SpanCard with the
 // per-app breakdown and frame thumbnail). Same surface as the popup's
 // DayPane — `host` is the FullView window; dayflow state is read through it.
@@ -24,11 +25,6 @@ Flickable {
     width: pane.width - Style.space(32)
     x: Style.space(16)
     spacing: Style.space(10)
-
-    DayNavRow {
-      width: parent.width
-      dayflow: pane.dayflow
-    }
 
     LoadingBar {
       width: parent.width

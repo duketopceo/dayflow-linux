@@ -22,21 +22,6 @@ Flickable {
   contentHeight: weekCol.implicitHeight
   clip: true
 
-  // A block click jumps the viewed day to that column and queues the
-  // span's child ts — the same contract the popup's jumpToDay uses, so
-  // the DayPane beside the grid selects it once the timeline lands.
-  function jumpToDay(dayIndex, span) {
-    if (!pane.dayflow) return
-    var offset = dayIndex - pane.dayflow.todayIndex()
-    pane.dayflow.uilog("fullview week cal jump " + offset)
-    if (span) {
-      var kids = span.children || []
-      pane.dayflow.pendingSpanTs = Number(kids.length ? kids[0].start_ts : (span.start_ts || 0))
-    }
-    pane.dayflow.dayOffset = offset
-    pane.dayflow.loadTimeline()
-  }
-
   Column {
     id: weekCol
     width: pane.width - Style.space(32)
@@ -49,42 +34,17 @@ Flickable {
       height: Math.max(heroCal.implicitHeight, heroDay.implicitHeight)
       spacing: Style.space(10)
 
-      Column {
+      WeekHero {
+        id: heroCal
         width: Math.floor(parent.width * 0.62)
-        spacing: Style.space(3)
-
-        WeekCalendar {
-          id: heroCal
-          width: parent.width
-          pal: pane.dayflow
-          // Fill the pane's visible height with the day's active span —
-          // the "no wasted space" tier. Clamped into the full-density
-          // band so every card carries icon + wrapped title + time + app.
-          hourH: Math.min(80, Math.max(40,
-            (pane.height - Style.space(48)) * 60 / Math.max(60, heroCal.viewEnd - heroCal.viewStart)))
-          todayScale: 1.0
-          todayIndex: pane.dayflow ? pane.dayflow.todayIndex() : -1
-          selectedIndex: pane.dayflow ? pane.dayflow.todayIndex() + pane.dayflow.dayOffset : -1
-          spansFor: function(d) { return pane.dayflow ? pane.dayflow.weekDaySpans(d) : [] }
-          onDayClicked: function(dayIndex, span) { pane.jumpToDay(dayIndex, span) }
-        }
-
-        Text {
-          width: parent.width
-          height: visible ? implicitHeight : 0
-          visible: heroCal.hoveredSpan !== null && heroCal.hoveredSpan !== undefined
-          text: heroCal.hoveredSpan
-            ? heroCal.hoveredSpan.start + "–" + heroCal.hoveredSpan.end +
-              "  " + (heroCal.hoveredSpan.title || "") +
-              (heroCal.hoveredSpan.appName ? "  ·  " + heroCal.hoveredSpan.appName : "") +
-              (heroCal.hoveredSpan.minutes ? "  ·  " + pane.dayflow.fmtDur(heroCal.hoveredSpan.minutes) : "")
-            : ""
-          textFormat: Text.PlainText
-          color: pane.dayflow ? pane.dayflow.foreground : "white"
-          font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-        }
+        dayflow: pane.dayflow
+        logPrefix: "fullview week cal jump "
+        // Fill the pane's visible height with the day's active span —
+        // the "no wasted space" tier. Clamped into the full-density
+        // band so every card carries icon + wrapped title + time + app.
+        hourH: Math.min(80, Math.max(40,
+          (pane.height - Style.space(48)) * 60 / Math.max(60, 1440 - heroCal.calendar.viewStart)))
+        todayScale: 1.0
       }
 
       DayPane {
@@ -167,15 +127,13 @@ Flickable {
           { label: "Shifts",      val: String(pane.dayflow.weeklyPayload.context_shift_count) }
         ] : []
 
-        delegate: Rectangle {
+        delegate: PanelCard {
+          pal: pane.dayflow
           required property var modelData
           height: Style.space(52)
           width: host && host.compactLayout
             ? (weekCol.width - Style.space(8)) / 2
             : (weekCol.width - Style.space(24)) / 4
-          radius: Style.cornerRadius
-          color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
-          border.color: pane.dayflow ? pane.dayflow.fgFill(0.08) : "transparent"
 
           Column {
             anchors.centerIn: parent
@@ -203,15 +161,13 @@ Flickable {
     }
 
     // week-over-week trends
-    Rectangle {
+    PanelCard {
       id: trendCard
+      pal: pane.dayflow
       visible: pane.dayflow !== null && pane.dayflow.weeklyPayload.trends !== undefined &&
         pane.dayflow.weeklyPayload.trends !== null && pane.dayflow.weeklyPayload.trends.has_prev
       width: parent.width
       height: trendCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
-      border.color: pane.dayflow ? pane.dayflow.fgFill(0.08) : "transparent"
 
       property var trends: pane.dayflow && pane.dayflow.weeklyPayload.trends
         ? pane.dayflow.weeklyPayload.trends : null
@@ -317,12 +273,10 @@ Flickable {
     }
 
     // heatmap — 7 days x 24 hours
-    Rectangle {
+    PanelCard {
+      pal: pane.dayflow
       width: parent.width
       height: heatCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
-      border.color: pane.dayflow ? pane.dayflow.fgFill(0.08) : "transparent"
 
       Column {
         id: heatCol
@@ -382,14 +336,12 @@ Flickable {
       width: parent.width
       spacing: Style.space(10)
 
-      Rectangle {
+      PanelCard {
+        pal: pane.dayflow
         width: host && host.compactLayout
           ? parent.width
           : (parent.width - Style.space(10)) / 2
         height: catCol.implicitHeight + Style.space(16)
-        radius: Style.cornerRadius
-        color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
-        border.color: pane.dayflow ? pane.dayflow.fgFill(0.08) : "transparent"
 
         Column {
           id: catCol
@@ -447,14 +399,12 @@ Flickable {
         }
       }
 
-      Rectangle {
+      PanelCard {
+        pal: pane.dayflow
         width: host && host.compactLayout
           ? parent.width
           : (parent.width - Style.space(10)) / 2
         height: appCol.implicitHeight + Style.space(16)
-        radius: Style.cornerRadius
-        color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
-        border.color: pane.dayflow ? pane.dayflow.fgFill(0.08) : "transparent"
 
         Column {
           id: appCol
@@ -504,13 +454,11 @@ Flickable {
     }
 
     // week summary
-    Rectangle {
+    PanelCard {
+      pal: pane.dayflow
       visible: pane.dayflow !== null && pane.dayflow.weekSummary !== ""
       width: parent.width
       height: sumText.implicitHeight + Style.space(20)
-      radius: Style.cornerRadius
-      color: pane.dayflow ? pane.dayflow.fgFill(0.04) : "transparent"
-      border.color: pane.dayflow ? pane.dayflow.fgFill(0.08) : "transparent"
 
       Text {
         id: sumText

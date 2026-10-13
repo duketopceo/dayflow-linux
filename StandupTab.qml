@@ -26,12 +26,10 @@ Flickable {
     }
 
   // ---- day goal ----
-  Rectangle {
+  PanelCard {
+    pal: dayflow
     width: parent.width
     height: goalRow.implicitHeight + Style.space(12)
-    radius: Style.cornerRadius
-    color: dayflow.fgFill(0.04)
-    border.color: dayflow.fgFill(0.08)
 
     Row {
       id: goalRow
@@ -144,15 +142,13 @@ Flickable {
   Component {
     id: standupDay
 
-    Rectangle {
+    PanelCard {
+      pal: dayflow
       property string label: ""
       property var day: ({ date: "", total_minutes: 0, entries: [] })
 
       width: parent.width
       height: sdCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
 
       Column {
         id: sdCol
@@ -263,6 +259,171 @@ Flickable {
     onLoaded: {
       item.label = "Today"
       item.day = Qt.binding(function() { return dayflow.standup.today })
+    }
+  }
+
+  PanelCard {
+    pal: dayflow
+    visible: dayflow.standup.today.entries.length > 0 || dayflow.standup.yesterday.entries.length > 0
+    width: parent.width
+    height: bCol.implicitHeight + Style.space(16)
+
+    Column {
+      id: bCol
+      width: parent.width - Style.space(16)
+      anchors.centerIn: parent
+      spacing: Style.space(6)
+
+      Text {
+        text: "Blockers"
+        textFormat: Text.PlainText
+        color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+
+      Text {
+        width: parent.width
+        text: dayflow.draft.blockers !== ""
+          ? dayflow.draft.blockers
+          : "Nothing flagged — fill this in when you write your update."
+        textFormat: Text.PlainText
+        color: dayflow.draft.blockers !== "" ? dayflow.foreground : dayflow.dim
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WordWrap
+      }
+
+      Text {
+        visible: dayflow.draft.priorities !== ""
+        width: parent.width
+        text: "Priorities: " + dayflow.draft.priorities
+        textFormat: Text.PlainText
+        color: dayflow.foreground
+        font.family: dayflow.fontFamily
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WordWrap
+      }
+
+      Rectangle {
+        id: copyBtn
+        height: Style.space(28)
+        width: cpy.implicitWidth + Style.space(16)
+        radius: Style.cornerRadius
+        color: mcp.containsMouse
+          ? dayflow.accentFill(0.12)
+          : "transparent"
+        border.color: dayflow.accentFill(0.25)
+
+        Text {
+          id: cpy
+          anchors.centerIn: parent
+          text: "Copy standup"
+          textFormat: Text.PlainText
+          color: dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        MouseArea {
+          id: mcp
+          anchors.fill: parent
+          hoverEnabled: true
+          onClicked: { dayflow.uilog("standup refresh"); if (!dayflow.procByName("standupProc").running) dayflow.procByName("standupProc").running = true }
+        }
+      }
+    }
+  }
+  PanelCard {
+    pal: dayflow
+    width: parent.width
+    height: draftCol.implicitHeight + Style.space(16)
+
+    Column {
+      id: draftCol
+      width: parent.width - Style.space(16)
+      anchors.centerIn: parent
+      spacing: Style.space(6)
+
+      Row {
+        width: parent.width
+
+        Text {
+          text: "Standup draft" + (dayflow.draft.date ? " · " + dayflow.draft.date : "")
+          textFormat: Text.PlainText
+          color: dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+
+        Text {
+          anchors.right: parent.right
+          visible: dayflow.draftDirty
+          text: "unsaved changes"
+          textFormat: Text.PlainText
+          color: dayflow.dim
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      Loader {
+        width: parent.width
+        height: item ? item.implicitHeight : 0
+        sourceComponent: draftField
+        onLoaded: { item.label = "Highlights"; item.field = "highlights" }
+      }
+
+      Loader {
+        width: parent.width
+        height: item ? item.implicitHeight : 0
+        sourceComponent: draftField
+        onLoaded: { item.label = "Tasks"; item.field = "tasks" }
+      }
+
+      Loader {
+        width: parent.width
+        height: item ? item.implicitHeight : 0
+        sourceComponent: draftField
+        onLoaded: { item.label = "Blockers"; item.field = "blockers" }
+      }
+
+      Loader {
+        width: parent.width
+        height: item ? item.implicitHeight : 0
+        sourceComponent: draftField
+        onLoaded: { item.label = "Priorities"; item.field = "priorities" }
+      }
+
+      Rectangle {
+        height: Style.space(28)
+        width: saveDraftText.implicitWidth + Style.space(16)
+        radius: Style.cornerRadius
+        color: mSaveDraft.containsMouse
+          ? dayflow.accentFill(0.12)
+          : "transparent"
+        border.color: dayflow.accentFill(0.5)
+
+        Text {
+          id: saveDraftText
+          anchors.centerIn: parent
+          text: dayflow.procByName("draftSaveProc").running ? "Saving..." : "Save draft"
+          textFormat: Text.PlainText
+          color: dayflow.foreground
+          font.family: dayflow.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        MouseArea {
+          id: mSaveDraft
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: { dayflow.uilog("draft save"); dayflow.saveDraft() }
+        }
+      }
     }
   }
 

@@ -6,8 +6,9 @@ import qs.Ui
 // macOS-style daily workflow grid: rows are categories, columns are
 // fixed-size time slots (15 minutes by default). Data comes from
 // `dayflow day <date> --grid --json` via dayflow.workflow.
-Rectangle {
+PanelCard {
   id: root
+  pal: dayflow
   property var dayflow: parent && parent.panel ? parent.panel : null
 
   readonly property var workflow: dayflow && dayflow.workflow
@@ -19,9 +20,6 @@ Rectangle {
   width: parent ? parent.width : 0
   implicitHeight: slotCount > 0 ? gridCol.implicitHeight + Style.space(16) : 0
   height: implicitHeight
-  radius: Style.cornerRadius
-  color: dayflow ? dayflow.fgFill(0.04) : "transparent"
-  border.color: dayflow ? dayflow.fgFill(0.08) : "transparent"
 
   function slotColor(cat) {
     if (!dayflow) return "transparent"

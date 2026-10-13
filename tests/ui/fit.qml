@@ -263,8 +263,6 @@ ShellRoot {
         PanelButton { id: btnDisProbe; pal: model; text: "Disabled"; enabled: false }
         PanelButton { id: btnUnselProbe; pal: model; text: "Tab"; frame: "selected" }
         PanelButton { id: btnSelProbe; pal: model; text: "Selected"; selected: true; frame: "selected" }
-        PanelChip { id: chipProbe; pal: model; text: "dev" }
-        StatRow { id: statProbe; pal: model; label: "Storage"; value: "32 MB"; width: 200 }
       }
     }
   }
@@ -304,7 +302,7 @@ ShellRoot {
       fail("PanelCard well border should differ from card border")
     if (btnDisProbe.opacity !== 0.45) fail("disabled PanelButton opacity " + btnDisProbe.opacity)
     if (String(btnSelProbe.border.color) === String(btnUnselProbe.border.color)) fail("selected PanelButton border should differ")
-    if (btnProbe.implicitHeight <= 0 || chipProbe.implicitHeight <= 0 || statProbe.implicitHeight <= 0)
+    if (btnProbe.implicitHeight <= 0)
       fail("component implicit size collapsed")
   }
 

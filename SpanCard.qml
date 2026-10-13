@@ -7,9 +7,8 @@ import qs.Ui
 // Full detail card for one timeline span — title, summary, per-block
 // children / per-app segments, and the inline edit form (title, category,
 // productive). Rendered under the DayTimeline for the clicked block.
-Rectangle {
+PanelCard {
   id: cardRoot
-  required property var pal
   required property var span
   // The viewed day's captured frames ({ts, path, exists}) — the card
   // renders the frame nearest the span start as a thumbnail. Callers
@@ -18,9 +17,6 @@ Rectangle {
 
   width: parent ? parent.width : 0
   height: cardCol.implicitHeight + Style.space(14)
-  radius: Style.cornerRadius
-  color: pal.fgFill(0.04)
-  border.color: pal.fgFill(0.08)
   clip: true
 
   property bool editing: false
