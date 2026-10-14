@@ -344,6 +344,28 @@ func cliProgress(ev map[string]any) {
 	fmt.Fprintln(os.Stderr, string(b))
 }
 
+// cliProgressTick emits fn every couple of seconds until the returned
+// stop func runs — a heartbeat inside long single-item operations (a fat
+// store scan, a minutes-long transcript decode) so the QML bar creeps
+// instead of parking. Events carry "tick": true so UIs creep rather than
+// re-jump to the slot start.
+func cliProgressTick(fn func()) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				fn()
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
 // scanAgentSources runs every registered source adapter over the day window
 // and returns the merged, start-sorted session list plus per-source scan
 // status. A failed source degrades to a status note — never a hard error.
@@ -365,7 +387,11 @@ func scanAgentSources(d time.Time, srcs ...agentSource) ([]AgentSession, []sourc
 	statuses := make([]sourceScanStatus, 0, len(srcs))
 	for i, src := range srcs {
 		cliProgress(map[string]any{"phase": "scan", "source": src.Name(), "i": i + 1, "n": len(srcs)})
+		stopTick := cliProgressTick(func() {
+			cliProgress(map[string]any{"phase": "scan", "source": src.Name(), "i": i + 1, "n": len(srcs), "tick": true})
+		})
 		sessions, note := src.Scan(s, e)
+		stopTick()
 		st := sourceScanStatus{Source: src.Name(), Sessions: len(sessions), Note: note.text}
 		switch {
 		case note.text != "" && len(sessions) == 0 && !note.absent:

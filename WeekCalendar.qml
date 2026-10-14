@@ -48,15 +48,16 @@ Item {
   readonly property int gutterW: Style.space(26)
   // Pixels per hour on the shared axis; today's column width factor.
   // The expanded whole-week layout raises hourH and equalizes columns.
-  property real hourH: Style.space(16)
+  property real hourH: Style.space(20)
   property real todayScale: 1.7
   // Density tier from the hour scale — drives how much a block renders:
   // "low" icon+1-line, "high" wrapped title+time, "full" +app+seams.
   readonly property string density: hourH >= 40 ? "full" : (hourH >= 24 ? "high" : "low")
   implicitWidth: 100
-  // Axis starts at the first recording of the week (floored to the 2h
-  // gridline) and runs to 24:00 — no dead night hours at the top.
-  implicitHeight: headH + (1440 - viewStart) * pxPerMin
+  // Axis spans the recorded week: first activity floored to the 2h
+  // gridline through the last activity ceiled to it (8h floor) — no
+  // dead night hours at either end.
+  implicitHeight: headH + (viewEnd - viewStart) * pxPerMin
   clip: true
 
   readonly property int headH: Style.space(18)
@@ -72,6 +73,18 @@ Item {
     }
     return m >= 1440 ? 0 : Math.floor(m / 120) * 120
   }
+  readonly property int viewEnd: {
+    var m = 0
+    for (var d = 0; d < 7; d++) {
+      var ss = cal.daySpans(d)
+      for (var i = 0; i < ss.length; i++) {
+        var em = cal.toMin(ss[i], "end")
+        if (em > m) m = em
+      }
+    }
+    var e = m <= 0 ? 1440 : Math.min(1440, Math.ceil(m / 120) * 120)
+    return Math.max(viewStart + 480, e)
+  }
 
   // Column x/width for dayIndex — today's column stretches by todayScale.
   function colX(d) {
@@ -85,9 +98,9 @@ Item {
     return d === todayIndex ? unit * todayScale : unit
   }
 
-  // Gridlines + gutter labels every 2 hours from the first recording on.
+  // Gridlines + gutter labels every 2 hours across the recorded span.
   Repeater {
-    model: Math.max(1, Math.ceil((1440 - cal.viewStart) / 120))
+    model: Math.max(1, Math.floor((cal.viewEnd - cal.viewStart) / 120) + 1)
     delegate: Item {
       property int hourMin: cal.viewStart + index * 120
       width: cal.width
@@ -168,7 +181,7 @@ Item {
           id: blk
           required property var modelData
           property int startM: Math.max(cal.viewStart, cal.toMin(modelData, "start"))
-          property int endM: Math.max(startM + 1, cal.toMin(modelData, "end"))
+          property int endM: Math.max(startM + 1, Math.min(cal.viewEnd, cal.toMin(modelData, "end")))
           property real restH: Math.max(4,
             Math.min((endM - startM) * cal.pxPerMin, cal.height - y))
           // Second-most-common child app — the reference's primary/secondary
@@ -191,6 +204,11 @@ Item {
             (timeTxt.visible ? timeTxt.implicitHeight : 0))
           property bool expanded: false
 
+          // Title type scale — a point bigger once the density can show
+          // wrapped text; naturalMeasure must share it or the expand
+          // target mismeasures.
+          readonly property real titlePx: cal.density === "low"
+            ? Style.font.caption : Style.font.body
           x: 2
           y: cal.headH + (startM - cal.viewStart) * cal.pxPerMin
           width: dayCol.width - 4
@@ -236,8 +254,10 @@ Item {
               Image {
                 id: appImg
                 visible: status === Image.Ready
-                width: visible ? Style.space(9) : 0
-                height: Style.space(9)
+                // Icon-only columns are the reading surface at compact
+                // density — they get the largest glyph.
+                width: visible ? Style.space(cal.density === "low" ? 12 : 10) : 0
+                height: Style.space(cal.density === "low" ? 12 : 10)
                 y: Style.space(1)
                 source: cal.pal ? cal.pal.appIcon(modelData.app) : ""
               }
@@ -249,11 +269,11 @@ Item {
                 textFormat: Text.PlainText
                 color: cal.pal ? cal.pal.foreground : "white"
                 font.family: cal.pal ? cal.pal.fontFamily : ""
-                font.pixelSize: Style.font.caption
+                font.pixelSize: blk.titlePx
                 font.weight: Font.Medium
                 // Wrapped line count from the card's measured room — the
                 // reference formula: (height - pads - reserved) / lineH.
-                property int lineH: Math.ceil(Style.font.caption * 1.25)
+                property int lineH: Math.ceil(blk.titlePx * 1.25)
                 property int avail: blk.height - Style.space(6) -
                   (timeTxt.visible ? timeTxt.implicitHeight : 0)
                 maximumLineCount: Math.max(1, Math.floor(avail / lineH))
@@ -292,7 +312,7 @@ Item {
             text: modelData.title || ""
             textFormat: Text.PlainText
             font.family: cal.pal ? cal.pal.fontFamily : ""
-            font.pixelSize: Style.font.caption
+            font.pixelSize: blk.titlePx
             wrapMode: Text.WordWrap
           }
 
@@ -351,7 +371,7 @@ Item {
       var d = new Date()
       return d.getHours() * 60 + d.getMinutes()
     }
-    visible: cal.todayIndex >= 0 && nowMin >= cal.viewStart
+    visible: cal.todayIndex >= 0 && nowMin >= cal.viewStart && nowMin <= cal.viewEnd
     x: cal.colX(cal.todayIndex) + 1
     width: cal.colW(cal.todayIndex) - 2
     y: cal.headH + (nowMin - cal.viewStart) * cal.pxPerMin

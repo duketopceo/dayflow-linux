@@ -115,11 +115,13 @@ Column {
       id: refreshText
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
-      text: "refresh"
+      text: pane.host !== null && pane.host.agentsRefreshing ? "refreshing…" : "refresh"
       textFormat: Text.PlainText
-      color: refreshMa.containsMouse
+      color: pane.host !== null && pane.host.agentsRefreshing
         ? (pane.dayflow ? pane.dayflow.foreground : "white")
-        : (pane.dayflow ? pane.dayflow.dim : "gray")
+        : (refreshMa.containsMouse
+            ? (pane.dayflow ? pane.dayflow.foreground : "white")
+            : (pane.dayflow ? pane.dayflow.dim : "gray"))
       font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
       font.pixelSize: Style.font.caption
       font.underline: refreshMa.containsMouse
@@ -128,7 +130,9 @@ Column {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        enabled: pane.host !== null && !pane.host.agentsLoading
+        // Always clickable — a press mid-run queues a refresh behind the
+        // in-flight run (loader.pending) rather than dead-pressing.
+        enabled: pane.host !== null && !pane.host.agentsRefreshing
         onClicked: pane.host.agentsLoad(true)
       }
     }
@@ -143,13 +147,19 @@ Column {
   }
   readonly property string agentPhase: host && host.agentsPhase ? host.agentsPhase : ""
 
+  // Elapsed heartbeat — only worth the label space once the run has been
+  // alive long enough to look stalled (~3s).
+  readonly property int agentElapsed: host && host.agentsElapsed !== undefined ? host.agentsElapsed : 0
+
   LoadingBar {
     width: pane.innerW
     pal: pane.dayflow
     active: host !== null && host.agentsLoading
     progress: pane.agentProgress
     estimate: 60
-    label: pane.agentPhase + (pane.agentProgress >= 0 ? " · " + Math.round(pane.agentProgress * 100) + "%" : "")
+    label: pane.agentPhase +
+      (pane.agentProgress >= 0 ? " · " + Math.round(pane.agentProgress * 100) + "%" : "") +
+      (pane.agentElapsed >= 3 ? " · " + pane.agentElapsed + "s" : "")
   }
 
   Text {

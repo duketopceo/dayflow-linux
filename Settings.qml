@@ -356,24 +356,20 @@ Flickable {
           onEdited: function(t) { root.setDraft("api_base_url", t) }
         }
 
-        // ---- Local models ----
-        Column {
+        // ---- Local models — collapsible; reachable, never primary ----
+        SettingsGroup {
+          pal: root.dayflow
+          groupId: "localModels"
+          title: "Local models"
+          caption: root.localDetect && (root.localDetect.ollama || root.localDetect.lmstudio)
+            ? "endpoint found" : "Ollama / LM Studio"
+          open: dayflow.settingsOpenGroups.localModels === true
+          onToggled: dayflow.settingsGroupToggle("localModels")
           width: parent.width
-          spacing: Style.space(6)
 
           Item {
             width: parent.width
-            height: Math.max(lmTitle.implicitHeight, rescanBtn.implicitHeight)
-            Text {
-              id: lmTitle
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              text: "Local models"
-              color: dayflow.foreground
-              font.family: dayflow.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-            }
+            height: rescanBtn.implicitHeight
             PanelButton {
               id: rescanBtn
               anchors.right: parent.right
@@ -520,8 +516,16 @@ Flickable {
             numeric: true
             onEdited: function(t) { root.setDraft("retention_days", parseInt(t, 10) || 0) }
           }
+        }
+
+        // One cost line: the three storage caps + what they're using now,
+        // in a single row instead of a field row plus a notes line.
+        Row {
+          width: parent.width
+          spacing: Style.space(6)
+
           Field {
-            width: (parent.width - 2 * parent.spacing) / 3
+            width: (parent.width - 2 * parent.spacing - useNote.width) / 3
             label: "Frames cap (MB)"
             value: String(dayflow.configDraft.max_frames_mb !== undefined ? dayflow.configDraft.max_frames_mb : 20480)
             hint: "20480"
@@ -529,25 +533,33 @@ Flickable {
             onEdited: function(t) { root.setDraft("max_frames_mb", parseInt(t, 10) || 0) }
           }
           Field {
-            width: (parent.width - 2 * parent.spacing) / 3
-            label: "Text data cap (MB)"
+            width: (parent.width - 2 * parent.spacing - useNote.width) / 3
+            label: "Text cap (MB)"
             value: String(dayflow.configDraft.max_db_mb !== undefined ? dayflow.configDraft.max_db_mb : 10240)
             hint: "10240"
             numeric: true
             onEdited: function(t) { root.setDraft("max_db_mb", parseInt(t, 10) || 0) }
           }
           Field {
-            width: (parent.width - 2 * parent.spacing) / 3
-            label: "Total cap, legacy (MB)"
+            width: (parent.width - 2 * parent.spacing - useNote.width) / 3
+            label: "Total cap (MB)"
             value: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 0)
             hint: "0 = off"
             numeric: true
             onEdited: function(t) { root.setDraft("max_storage_mb", parseInt(t, 10) || 0) }
           }
-        }
 
-        DimNote {
-          text: "Currently using " + (root.usageText !== "" ? root.usageText : "—") + " of data."
+          Text {
+            id: useNote
+            width: implicitWidth
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Style.space(6)
+            text: "using " + (root.usageText !== "" ? root.usageText : "—")
+            textFormat: Text.PlainText
+            color: dayflow.dim
+            font.family: dayflow.fontFamily
+            font.pixelSize: Style.font.caption
+          }
         }
       }
 

@@ -70,7 +70,15 @@ Item {
     var out = []
     var bottom = -6
     var list = spans || []
-    for (var i = 0; i < list.length; i++) {
+    // Cascade must run oldest-first: `bottom` only clears cards that start
+    // earlier. `spans` arrives newest-first — with that order the newest
+    // card claims its late-time y and every earlier card is pushed below
+    // it, leaving the whole top of the axis empty.
+    var order = []
+    for (var i = 0; i < list.length; i++) order.push(i)
+    order.sort(function(a, b) { return toMin(list[a], "start") - toMin(list[b], "start") })
+    for (var k = 0; k < order.length; k++) {
+      var i = order[k]
       var s = list[i]
       if (!keep(s)) continue
       var startM = toMin(s, "start")

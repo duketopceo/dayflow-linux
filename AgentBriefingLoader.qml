@@ -32,6 +32,15 @@ Item {
   property string pending: ""
   property int run: 0
   property bool timedOut: false
+  // Seconds since the current run started — the heartbeat that keeps a
+  // long decode/polish phase reading as working, not frozen.
+  property int elapsedSec: 0
+  // A refresh was requested and its result hasn't landed yet — the
+  // "refresh" affordance gets a visible ack instead of a dead press.
+  property bool refreshing: false
+  // Whether the in-flight run carries --refresh (clears `refreshing`
+  // when it lands or fails).
+  property bool runIsRefresh: false
 
   // One JSON progress line per stderr write — see agentProgress in the
   // engine. Non-JSON stderr noise is ignored.
@@ -48,14 +57,24 @@ Item {
     loader.phase = ev.phase
     if (ev.phase === "scan") {
       loader.phaseLabel = "scanning " + (ev.source || "stores")
-      loader.progress = n > 0 ? 0.05 + 0.10 * (i / n) : 0.05
+      // A tick event is the engine's in-slot heartbeat — creep toward the
+      // slot's end instead of snapping back to its start.
+      var scanEnd = n > 0 ? 0.05 + 0.10 * ((i + 1) / n) : 0.05
+      loader.progress = ev.tick
+        ? Math.min(Math.max(loader.progress, 0.05) + 0.003, scanEnd)
+        : (n > 0 ? 0.05 + 0.10 * (i / n) : 0.05)
     } else if (ev.phase === "decode") {
       loader.phaseLabel = "reading session " + i + " of " + n
-      loader.progress = n > 0 ? 0.15 + 0.60 * (i / n) : 0.15
+      var decEnd = n > 0 ? 0.15 + 0.60 * (i / n) : 0.15
+      loader.progress = ev.tick
+        ? Math.min(Math.max(loader.progress, 0.15) + 0.006, decEnd)
+        : decEnd
     } else if (ev.phase === "polish") {
-      // One long model call — the creep timer keeps the bar alive.
+      // One long model call — ticks creep 0.8 → 0.97 while it runs.
       loader.phaseLabel = "writing briefing"
-      loader.progress = Math.max(loader.progress, 0.8)
+      loader.progress = ev.tick
+        ? Math.min(Math.max(loader.progress, 0.8) + 0.005, 0.97)
+        : Math.max(loader.progress, 0.8)
     }
   }
 
@@ -67,6 +86,8 @@ Item {
     loader.phaseLabel = ""
     loader.run = loader.run + 1
     loader.timedOut = false
+    loader.elapsedSec = 0
+    if (refresh) loader.refreshing = true
     var cmd = ["dayflow", "briefing", loader.panel.viewDateStr(), "--json"]
     if (refresh) cmd.push("--refresh")
     agentsProc.command = cmd
@@ -78,6 +99,7 @@ Item {
       // Stamp the run on the process only at actual start — callbacks from a
       // still-terminating previous run then fail the runId check.
       agentsProc.runId = loader.run
+      loader.runIsRefresh = refresh === true
       agentsProc.running = true
     }
   }
@@ -128,6 +150,10 @@ Item {
         // timeout message survive. (streamFinished can fire on exit.)
         if (agentsProc.runId !== loader.run || loader.timedOut) return
         loader.loading = false
+        if (loader.runIsRefresh) {
+          loader.runIsRefresh = false
+          loader.refreshing = false
+        }
         try {
           var d = JSON.parse(text)
           // Day changed mid-run — this payload is for the old day; the
@@ -155,6 +181,10 @@ Item {
         return
       }
       loader.loading = false
+      if (loader.runIsRefresh) {
+        loader.runIsRefresh = false
+        loader.refreshing = false
+      }
       if (exitCode !== 0 && !loader.timedOut) {
         loader.briefing = null
         loader.sources = []
@@ -216,9 +246,20 @@ Item {
       loader.timedOut = true
       agentsProc.running = false
       loader.loading = false
+      loader.runIsRefresh = false
+      loader.refreshing = false
       loader.briefing = null
       loader.sources = []
       loader.error = "agent briefing timed out"
     }
+  }
+
+  // Elapsed heartbeat — ticks only while a run is live so a minutes-long
+  // decode/polish shows "Ns elapsed" instead of a parked bar.
+  Timer {
+    interval: 1000
+    repeat: true
+    running: loader.loading
+    onTriggered: loader.elapsedSec += 1
   }
 }

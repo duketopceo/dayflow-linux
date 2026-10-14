@@ -12,7 +12,11 @@ Flickable {
   // Filter chips: all | core | distract | idle (DayTimeline.keep()).
   property string spanFilter: "all"
   width: parent.width
-  implicitHeight: Math.min(col.implicitHeight, Style.space(360))
+  // Expanded gets real room — the side-by-side week+day layout crammed
+  // into the compact cap is what made the right rail read as broken.
+  implicitHeight: dayflow.expanded
+    ? Math.min(col.implicitHeight, Style.space(640))
+    : Math.min(col.implicitHeight, Style.space(360))
   height: implicitHeight
   contentHeight: col.implicitHeight
   clip: true
@@ -29,6 +33,37 @@ Flickable {
     }
     dayflow.dayOffset = offset
     dayflow.loadTimeline()
+  }
+
+  // Click feedback: the detail card must be on screen when it selects —
+  // in compact it can sit below the Flickable fold, so scroll it into
+  // view; in both layouts it flashes so the click has a visible result.
+  NumberAnimation {
+    id: scrollAnim
+    target: root
+    property: "contentY"
+    duration: 160
+    easing.type: Easing.OutCubic
+  }
+  function revealDetail(pane) {
+    if (!pane || !pane.detailCard) return
+    var card = pane.detailCard
+    Qt.callLater(function() {
+      if (!card.visible) return
+      card.flash()
+      if (!root.visible || dayflow.expanded) return
+      var p = card.mapToItem(col, 0, 0)
+      if (!p) return
+      var top = p.y, bottom = p.y + card.height
+      if (top < root.contentY) {
+        scrollAnim.to = Math.max(0, top - Style.space(4))
+        scrollAnim.restart()
+      } else if (bottom > root.contentY + root.height) {
+        scrollAnim.to = Math.min(col.implicitHeight - root.height,
+          bottom - root.height + Style.space(4))
+        scrollAnim.restart()
+      }
+    })
   }
 
   Column {
@@ -64,7 +99,7 @@ Flickable {
           id: weekCalExp
           width: parent.width
           pal: dayflow
-          hourH: Style.space(30)
+          hourH: Style.space(36)
           todayScale: 1.0
           todayIndex: dayflow.todayIndex()
           selectedIndex: dayflow.todayIndex() + dayflow.dayOffset
@@ -74,7 +109,7 @@ Flickable {
 
         Text {
           width: parent.width
-          height: visible ? implicitHeight : 0
+          height: visible ? Math.ceil(Style.font.caption * 1.4) : 0
           visible: weekCalExp.hoveredSpan !== null && weekCalExp.hoveredSpan !== undefined
           text: weekCalExp.hoveredSpan
             ? weekCalExp.hoveredSpan.start + "–" + weekCalExp.hoveredSpan.end +
@@ -90,14 +125,25 @@ Flickable {
         }
       }
 
-      DayPane {
-        id: expDay
+      // Detail rail — bounded to the grid's height so the right column
+      // fills exactly and scrolls its overflow, never trails dead space.
+      Flickable {
         width: parent.width - weekWrapExp.width - Style.space(8)
-        dayflow: root.dayflow
-        selectedSpan: root.selectedSpan
-        spanFilter: root.spanFilter
-        onSpanSelected: function(i) { root.selectedSpan = i }
-        onFilterPicked: function(f) { root.spanFilter = f }
+        height: weekWrapExp.implicitHeight
+        contentHeight: expDay.implicitHeight
+        contentWidth: width
+        clip: true
+        interactive: contentHeight > height
+
+        DayPane {
+          id: expDay
+          width: parent.width
+          dayflow: root.dayflow
+          selectedSpan: root.selectedSpan
+          spanFilter: root.spanFilter
+          onSpanSelected: function(i) { root.selectedSpan = i; root.revealDetail(expDay) }
+          onFilterPicked: function(f) { root.spanFilter = f }
+        }
       }
     }
 
@@ -131,7 +177,7 @@ Flickable {
         // literal "what was I doing" line here.
         Text {
           width: parent.width
-          height: visible ? implicitHeight : 0
+          height: visible ? Math.ceil(Style.font.caption * 1.4) : 0
           visible: weekCal.hoveredSpan !== null && weekCal.hoveredSpan !== undefined
           text: weekCal.hoveredSpan
             ? weekCal.hoveredSpan.start + "–" + weekCal.hoveredSpan.end +
@@ -149,12 +195,13 @@ Flickable {
     }
 
     DayPane {
+      id: cmpDay
       visible: !dayflow.expanded
       width: parent.width
       dayflow: root.dayflow
       selectedSpan: root.selectedSpan
       spanFilter: root.spanFilter
-      onSpanSelected: function(i) { root.selectedSpan = i }
+      onSpanSelected: function(i) { root.selectedSpan = i; root.revealDetail(cmpDay) }
       onFilterPicked: function(f) { root.spanFilter = f }
     }
 

@@ -50,12 +50,25 @@ FloatingWindow {
   property bool agentRecapsEnabled: true
   property bool agentsLoading: false
   property string agentsError: ""
+  // Determinate progress + phase label — same contract the compact
+  // panel's AgentBriefingLoader exposes (AgentsPane reads these).
+  property real agentsProgress: -1
+  property string agentsPhase: ""
+  // Elapsed heartbeat + refresh ack — same semantics as the compact
+  // panel's AgentBriefingLoader (AgentsPane reads these off the host).
+  property int agentsElapsed: 0
+  property bool agentsRefreshing: false
+  property bool agentsRunIsRefresh: false
 
   function agentsLoad(refresh) {
     if (!root.dayflow) return
     root.dayflow.uilog("agents load " + root.dayflow.viewDateStr() + (refresh ? " (refresh)" : ""))
     root.agentsRun = root.agentsRun + 1
     root.agentsTimedOut = false
+    root.agentsElapsed = 0
+    root.agentsProgress = -1
+    root.agentsPhase = ""
+    if (refresh) root.agentsRefreshing = true
     var cmd = ["dayflow", "briefing", root.dayflow.viewDateStr(), "--json"]
     if (refresh) cmd.push("--refresh")
     agentsProc.command = cmd
@@ -67,6 +80,7 @@ FloatingWindow {
       // Stamp the run on the process only at actual start — callbacks from a
       // still-terminating previous run then fail the runId check.
       agentsProc.runId = root.agentsRun
+      root.agentsRunIsRefresh = refresh === true
       agentsProc.running = true
     }
   }
@@ -83,6 +97,40 @@ FloatingWindow {
     id: agentsProc
     property int runId: 0
     command: ["dayflow", "briefing", "--json"]
+    // Progress events stream on stderr — same parser as
+    // AgentBriefingLoader.handleProgress (scan/decode/polish + tick creep).
+    stderr: SplitParser {
+      onRead: function(line) {
+        if (agentsProc.runId !== root.agentsRun) return
+        var ev
+        try {
+          ev = JSON.parse(line)
+        } catch (e) {
+          return
+        }
+        if (!ev || typeof ev.phase !== "string") return
+        var n = ev.n || 0
+        var i = ev.i || 0
+        if (ev.phase === "scan") {
+          root.agentsPhase = "scanning " + (ev.source || "stores")
+          var scanEnd = n > 0 ? 0.05 + 0.10 * ((i + 1) / n) : 0.05
+          root.agentsProgress = ev.tick
+            ? Math.min(Math.max(root.agentsProgress, 0.05) + 0.003, scanEnd)
+            : (n > 0 ? 0.05 + 0.10 * (i / n) : 0.05)
+        } else if (ev.phase === "decode") {
+          root.agentsPhase = "reading session " + i + " of " + n
+          var decEnd = n > 0 ? 0.15 + 0.60 * (i / n) : 0.15
+          root.agentsProgress = ev.tick
+            ? Math.min(Math.max(root.agentsProgress, 0.15) + 0.006, decEnd)
+            : decEnd
+        } else if (ev.phase === "polish") {
+          root.agentsPhase = "writing briefing"
+          root.agentsProgress = ev.tick
+            ? Math.min(Math.max(root.agentsProgress, 0.8) + 0.005, 0.97)
+            : Math.max(root.agentsProgress, 0.8)
+        }
+      }
+    }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -91,6 +139,10 @@ FloatingWindow {
         // timeout message survive. (streamFinished can fire on exit.)
         if (agentsProc.runId !== root.agentsRun || root.agentsTimedOut) return
         root.agentsLoading = false
+        if (root.agentsRunIsRefresh) {
+          root.agentsRunIsRefresh = false
+          root.agentsRefreshing = false
+        }
         try {
           var d = JSON.parse(text)
           // Day changed mid-run — this payload is for the old day; the
@@ -115,6 +167,10 @@ FloatingWindow {
         return
       }
       root.agentsLoading = false
+      if (root.agentsRunIsRefresh) {
+        root.agentsRunIsRefresh = false
+        root.agentsRefreshing = false
+      }
       if (exitCode !== 0 && !root.agentsTimedOut) {
         root.agentBriefing = null
         root.agentSources = []
@@ -165,10 +221,21 @@ FloatingWindow {
       root.agentsTimedOut = true
       agentsProc.running = false
       root.agentsLoading = false
+      root.agentsRunIsRefresh = false
+      root.agentsRefreshing = false
       root.agentBriefing = null
       root.agentSources = []
       root.agentsError = "agent briefing timed out"
     }
+  }
+
+  // Elapsed heartbeat — ticks only while a run is live so a minutes-long
+  // decode shows "Ns elapsed" instead of a parked bar.
+  Timer {
+    interval: 1000
+    repeat: true
+    running: root.agentsLoading
+    onTriggered: root.agentsElapsed += 1
   }
 
   // ---- context-shift graph ----

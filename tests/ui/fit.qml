@@ -337,6 +337,7 @@ ShellRoot {
     stage.height = test.height - 80
     if (test.kind === "panel" && test.tab) popup.currentTab = test.tab
     if (test.kind === "panel") model.expanded = test.expanded === true
+    if (test.kind === "panel" && test.standup !== undefined) model.standup = test.standup
     if (test.kind === "panel" && test.actionsOpen !== undefined) popup.actionsOpen = test.actionsOpen
     if (test.kind === "panel" && test.notice !== undefined) { popup.notice = test.notice; popup.noticeAt = Date.now() }
     if (test.kind === "onboarding") onboardingHostApply(test)
@@ -389,8 +390,22 @@ ShellRoot {
       for (var tab of ["today", "standup", "chat", "agents", "settings"])
         list.push({ name: "panel-" + w + "-" + tab, kind: "panel", width: w + 80, height: 800, tab: tab })
       list.push({ name: "panel-" + w + "-actions-open", kind: "panel", width: w + 80, height: 800, tab: "today", actionsOpen: true })
-      if (w === 780)
+      if (w === 780) {
         list.push({ name: "panel-780-expanded-today", kind: "panel", width: w + 80, height: 800, tab: "today", expanded: true })
+        list.push({ name: "panel-780-expanded-chat", kind: "panel", width: w + 80, height: 800, tab: "chat", expanded: true })
+        list.push({ name: "panel-780-expanded-standup", kind: "panel", width: w + 80, height: 800, tab: "standup", expanded: true })
+        list.push({ name: "panel-780-expanded-agents", kind: "panel", width: w + 80, height: 800, tab: "agents", expanded: true })
+        // Recap with a populated today — exercises the entry rows + the
+        // Copy recap action (no Blockers/draft surfaces must render).
+        list.push({ name: "panel-780-standup-entries", kind: "panel", width: w + 80, height: 800, tab: "standup",
+          standup: { yesterday: { date: "", total_minutes: 0, entries: [] },
+            today: { date: "Wed 10-14", total_minutes: 210, entries: [
+              { title: "dayflow polish work", app: "Ghostty", category: "coding",
+                productive: true, minutes: 150, span: "8:00–10:30" },
+              { title: "standup + team review", app: "Slack", category: "communication",
+                productive: true, minutes: 60, span: "10:30–11:30" }
+            ] } } })
+      }
       list.push({ name: "panel-" + w + "-notice", kind: "panel", width: w + 80, height: 800, tab: "today", notice: "settings saved" })
     }
     // Settings + onboarding at three viewport sizes, dark theme.

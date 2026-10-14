@@ -61,7 +61,7 @@ Flickable {
           // the "no wasted space" tier. Clamped into the full-density
           // band so every card carries icon + wrapped title + time + app.
           hourH: Math.min(80, Math.max(40,
-            (pane.height - Style.space(48)) * 60 / Math.max(60, 1440 - heroCal.viewStart)))
+            (pane.height - Style.space(48)) * 60 / Math.max(60, heroCal.viewEnd - heroCal.viewStart)))
           todayScale: 1.0
           todayIndex: pane.dayflow ? pane.dayflow.todayIndex() : -1
           selectedIndex: pane.dayflow ? pane.dayflow.todayIndex() + pane.dayflow.dayOffset : -1
@@ -93,7 +93,7 @@ Flickable {
         dayflow: pane.dayflow
         selectedSpan: pane.selSpan
         spanFilter: pane.spanFilter
-        onSpanSelected: function(i) { pane.selSpan = i }
+        onSpanSelected: function(i) { pane.selSpan = i; heroDay.detailCard.flash() }
         onFilterPicked: function(f) { pane.spanFilter = f }
       }
     }

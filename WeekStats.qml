@@ -19,8 +19,8 @@ Column {
 
       Repeater {
         model: [
-          { label: "Copy week · md", proc: "copyWeekProc", logName: "copy week md" },
-          { label: "Copy week · mini", proc: "copyWeekMiniProc", logName: "copy week mini" }
+          { label: "Copy week (markdown)", proc: "copyWeekProc", logName: "copy week md" },
+          { label: "Copy week (brief)", proc: "copyWeekMiniProc", logName: "copy week mini" }
         ]
         delegate: CopyButton {
           required property var modelData

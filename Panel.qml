@@ -98,6 +98,8 @@ Panel {
   readonly property alias agentsError: agentLoader.error
   readonly property alias agentProgress: agentLoader.progress
   readonly property alias agentPhase: agentLoader.phaseLabel
+  readonly property alias agentsElapsed: agentLoader.elapsedSec
+  readonly property alias agentsRefreshing: agentLoader.refreshing
   function agentsLoad(refresh) { agentLoader.load(refresh) }
 
   function lastLine(t) {
@@ -1268,7 +1270,7 @@ Panel {
     id: standupProc
     command: ["bash", "-c", "dayflow standup | wl-copy"]
     onExited: function(exitCode) {
-      dayflow.notice = exitCode === 0 ? "copied standup" : "standup copy failed"
+      dayflow.notice = exitCode === 0 ? "copied recap" : "recap copy failed"
     }
   }
 
@@ -1443,7 +1445,10 @@ Panel {
             }
 
             Text {
-              text: (dayflow.paused ? "paused" : "recording") + " · " + dayflow.modelShort()
+              // Quiet state caption — the model name is gone (nobody acts
+              // on it); only non-default states are worth header space.
+              visible: dayflow.paused || !dayflow.configured
+              text: !dayflow.configured ? "not configured" : "paused"
               textFormat: Text.PlainText
               color: dayflow.dim
               font.family: dayflow.fontFamily
@@ -1533,7 +1538,10 @@ Panel {
                 pal: dayflow
                 frame: "selected"
                 selected: dayflow.currentTab === tabDelegate.tabName
-                text: tabDelegate.tabName.charAt(0).toUpperCase() + tabDelegate.tabName.slice(1)
+                // Display name — internal tab ids stay stable; renaming a
+                // tab is a one-word change in this map.
+                text: ({"standup": "Recap"})[tabDelegate.tabName]
+                  || tabDelegate.tabName.charAt(0).toUpperCase() + tabDelegate.tabName.slice(1)
                 onClicked: { dayflow.uilog("tab " + tabDelegate.tabName); dayflow.currentTab = tabDelegate.tabName }
               }
             }

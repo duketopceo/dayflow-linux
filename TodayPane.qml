@@ -38,11 +38,12 @@ Flickable {
     }
 
     DayPane {
+      id: todayDay
       width: parent.width
       dayflow: pane.dayflow
       selectedSpan: pane.selSpan
       spanFilter: pane.spanFilter
-      onSpanSelected: function(i) { pane.selSpan = i }
+      onSpanSelected: function(i) { pane.selSpan = i; todayDay.detailCard.flash() }
       onFilterPicked: function(f) { pane.spanFilter = f }
     }
   }

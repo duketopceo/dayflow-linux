@@ -28,6 +28,10 @@ Rectangle {
     return dayflow.cellColor(cat)
   }
 
+  // Set while the pointer is over a slot — feeds the readout below the
+  // grid ("what was that colored bar").
+  property var hoveredSlot: null
+
   Column {
     id: gridCol
     width: parent.width - Style.space(16)
@@ -104,10 +108,37 @@ Rectangle {
               color: modelData.category === catRowDelegate.catRow.name
                 ? root.slotColor(modelData.category)
                 : (dayflow ? dayflow.fgFill(0.04) : "transparent")
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                onContainsMouseChanged: root.hoveredSlot = containsMouse ? modelData : null
+              }
             }
           }
         }
       }
+    }
+
+    // Hover readout — same pattern as the week grid: the cells are too
+    // small for inline labels, so "what was that bar" answers here.
+    Text {
+      width: parent.width
+      height: visible ? implicitHeight : 0
+      visible: root.hoveredSlot !== null && root.hoveredSlot !== undefined
+      text: root.hoveredSlot
+        ? (root.hoveredSlot.time || "") +
+          (root.hoveredSlot.title ? "  ·  " + root.hoveredSlot.title : "") +
+          (root.hoveredSlot.category
+            ? "  ·  " + (dayflow && dayflow.catDisplay
+                ? dayflow.catDisplay(root.hoveredSlot.category)
+                : root.hoveredSlot.category)
+            : "")
+        : ""
+      textFormat: Text.PlainText
+      color: dayflow ? dayflow.foreground : Color.foreground
+      font.family: dayflow ? dayflow.fontFamily : Style.font.family
+      font.pixelSize: Style.font.caption
+      elide: Text.ElideRight
     }
   }
 }

@@ -9,7 +9,8 @@ Flickable {
   property var dayflow: parent && parent.panel ? parent.panel : null
 
   width: parent ? parent.width : 0
-  implicitHeight: Math.min(col.implicitHeight + Style.space(12), Style.space(420))
+  implicitHeight: Math.min(col.implicitHeight + Style.space(12),
+    dayflow && dayflow.expanded ? Style.space(560) : Style.space(420))
   height: implicitHeight
   contentHeight: col.implicitHeight + Style.space(12)
   clip: true
@@ -141,7 +142,10 @@ Flickable {
 
   Column {
     id: col
-    width: parent.width
+    // Expanded: the thread keeps a readable measure and the rail fills
+    // the right side — the full-width stretch read as empty.
+    width: dayflow && dayflow.expanded
+      ? Math.floor(parent.width * 0.62) : parent.width
     spacing: Style.space(6)
 
     LoadingBar {
@@ -333,7 +337,7 @@ Flickable {
       Repeater {
         model: [
           "What did I work on yesterday?",
-          "Draft my standup",
+          "Draft my recap",
           "Summarize today"
         ]
         delegate: Rectangle {
@@ -421,6 +425,97 @@ Flickable {
             cursorShape: Qt.PointingHandCursor
             enabled: !root.chatLoading
             onClicked: root.sendChat()
+          }
+        }
+      }
+    }
+  }
+
+  // Expanded context rail — the right ~38% of the tab: today at a glance
+  // plus the conversation list the compact header hides behind "history".
+  Column {
+    id: rail
+    visible: dayflow && dayflow.expanded
+    x: col.width + Style.space(10)
+    width: parent.width - col.width - Style.space(10)
+    spacing: Style.space(8)
+
+    Text {
+      text: "Today"
+      textFormat: Text.PlainText
+      color: dayflow ? dayflow.foreground : Color.foreground
+      font.family: dayflow ? dayflow.fontFamily : Style.font.family
+      font.pixelSize: Style.font.body
+      font.bold: true
+    }
+
+    Rectangle {
+      visible: root.recapText() !== ""
+      width: parent.width
+      height: railRecap.implicitHeight + Style.space(14)
+      radius: Style.cornerRadius
+      color: dayflow ? dayflow.fgFill(0.04) : "transparent"
+      border.color: dayflow ? dayflow.accentFill(0.25) : "transparent"
+
+      Text {
+        id: railRecap
+        anchors.fill: parent
+        anchors.margins: Style.space(7)
+        text: root.recapText()
+        textFormat: Text.PlainText
+        color: dayflow ? dayflow.foreground : Color.foreground
+        font.family: dayflow ? dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+    }
+
+    Text {
+      visible: root.conversations.length > 0
+      text: "Conversations"
+      textFormat: Text.PlainText
+      color: dayflow ? dayflow.foreground : Color.foreground
+      font.family: dayflow ? dayflow.fontFamily : Style.font.family
+      font.pixelSize: Style.font.body
+      font.bold: true
+    }
+
+    Column {
+      width: parent.width
+      spacing: 0
+
+      Repeater {
+        model: root.conversations
+        delegate: Rectangle {
+          height: Style.space(24)
+          width: parent.width
+          radius: Style.space(4)
+          color: railConvMouse.containsMouse
+            ? (dayflow ? dayflow.accentFill(0.08) : "transparent")
+            : "transparent"
+
+          Text {
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - Style.space(12)
+            text: (root.chatConversation === Number(modelData.id) ? "● " : "")
+                  + (modelData.title || "conversation")
+            textFormat: Text.PlainText
+            color: root.chatConversation === Number(modelData.id)
+              ? (dayflow ? dayflow.foreground : Color.foreground)
+              : (dayflow ? dayflow.dim : Color.dim)
+            font.family: dayflow ? dayflow.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+
+          MouseArea {
+            id: railConvMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.loadConversation(Number(modelData.id))
           }
         }
       }

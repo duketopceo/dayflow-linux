@@ -134,8 +134,8 @@ Column {
     Repeater {
       // Copies the currently viewed day, not always today.
       model: [
-        { label: "Copy day · md", proc: "copyProc", logName: "copy day md", extra: "" },
-        { label: "Copy day · mini", proc: "copyMiniProc", logName: "copy day mini", extra: " --brief" }
+        { label: "Copy day (markdown)", proc: "copyProc", logName: "copy day md", extra: "" },
+        { label: "Copy day (brief)", proc: "copyMiniProc", logName: "copy day mini", extra: " --brief" }
       ]
       delegate: CopyButton {
         required property var modelData
@@ -237,6 +237,7 @@ Column {
   }
 
   SpanCard {
+    id: spanCard
     visible: daypane.selectedSpan >= 0 && daypane.selectedSpan < dayflow.spans.length
     width: parent.width
     pal: dayflow
@@ -244,4 +245,8 @@ Column {
     span: daypane.selectedSpan >= 0 && daypane.selectedSpan < dayflow.spans.length
       ? dayflow.spans[daypane.selectedSpan] : ({})
   }
+
+  // Exposed so hosts can scroll the detail into view + flash it on a
+  // week-grid jump (the click's visible result).
+  property alias detailCard: spanCard
 }

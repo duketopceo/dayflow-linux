@@ -18,6 +18,8 @@ Item {
   readonly property string agentsError: dayflow ? dayflow.agentsError : ""
   readonly property real agentsProgress: dayflow ? dayflow.agentProgress : -1
   readonly property string agentsPhase: dayflow ? dayflow.agentPhase : ""
+  readonly property int agentsElapsed: dayflow ? dayflow.agentsElapsed : 0
+  readonly property bool agentsRefreshing: dayflow ? dayflow.agentsRefreshing : false
   function agentsLoad(refresh) { if (dayflow) dayflow.agentsLoad(refresh) }
 
   width: parent ? parent.width : 0

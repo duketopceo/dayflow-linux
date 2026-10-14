@@ -292,11 +292,18 @@ func buildBriefing(d time.Time, sessions []AgentSession, statuses []sourceScanSt
 	now := time.Now()
 	threads := make([]briefingThread, 0, len(sessions))
 	for i, sess := range sessions {
-		cliProgress(map[string]any{"phase": "decode", "i": i + 1, "n": len(sessions)})
+		stopTick := cliProgressTick(func() {
+			cliProgress(map[string]any{"phase": "decode", "i": i + 1, "n": len(sessions), "tick": true})
+		})
 		var turns []sessionTurn
 		if src := agentSourceNamed(srcs, sess.Source); src != nil {
 			turns = src.Turns(sess)
 		}
+		stopTick()
+		// Emit after the decode, not before: progress = work done. A fat
+		// transcript's Turns() can take minutes — a pre-decode event
+		// parks the bar at a session nobody has finished.
+		cliProgress(map[string]any{"phase": "decode", "i": i + 1, "n": len(sessions)})
 		th := briefingThread{
 			ID:          briefingThreadID(sess),
 			Title:       sess.Title,
@@ -564,6 +571,10 @@ func polishBriefing(db *sql.DB, cfg Config, b *agentBriefing, polishKey string) 
 		{Role: "user", Content: []orContent{{Type: "text", Text: briefingModelPayload(b)}}},
 	}
 	cliProgress(map[string]any{"phase": "polish"})
+	stopTick := cliProgressTick(func() {
+		cliProgress(map[string]any{"phase": "polish", "tick": true})
+	})
+	defer stopTick()
 	type result struct {
 		text string
 		err  error

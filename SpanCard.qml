@@ -28,6 +28,23 @@ Rectangle {
   property string editCategory: ""
   property bool editProd: false
 
+  // Selection feedback — a quick accent wash so a week-grid or timeline
+  // click has an unmistakable visual result even before the eye parses
+  // the card contents.
+  function flash() { flashAnim.restart() }
+  Rectangle {
+    id: flashRect
+    anchors.fill: parent
+    radius: cardRoot.radius
+    color: pal.accentFill(0.35)
+    opacity: 0
+  }
+  SequentialAnimation {
+    id: flashAnim
+    NumberAnimation { target: flashRect; property: "opacity"; to: 1; duration: 90 }
+    NumberAnimation { target: flashRect; property: "opacity"; to: 0; duration: 480 }
+  }
+
   function beginEdit() {
     editTitle = span.title || ""
     editCategory = span.category || ""
