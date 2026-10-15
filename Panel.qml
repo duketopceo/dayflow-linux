@@ -60,6 +60,9 @@ Panel {
   // DayPane resolves it into a selection once the jumped-to day's
   // timeline lands (child-level match survives midnight-split cards).
   property double pendingSpanTs: 0
+  // Which surface armed the pending jump — "popup" or "fullview". A hidden
+  // pane must not consume a selection destined for the other surface.
+  property string pendingSpanFor: ""
   property int dayOffset: 0
   property bool expanded: false
   property bool expandedLoaded: false
@@ -312,6 +315,8 @@ Panel {
   function goDay(delta) {
     var next = dayflow.dayOffset + delta
     if (next > 0) return
+    dayflow.pendingSpanTs = 0
+    dayflow.pendingSpanFor = ""
     dayflow.dayOffset = next
     dayflow.blocks = []
     dayflow.spans = []

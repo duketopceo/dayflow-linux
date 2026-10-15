@@ -121,9 +121,11 @@ Rectangle {
 
     // Hover readout — same pattern as the week grid: the cells are too
     // small for inline labels, so "what was that bar" answers here.
+    // Fixed line height — the implicitHeight binding produced a live
+    // binding-loop warning in the sibling week-grid readout.
     Text {
       width: parent.width
-      height: visible ? implicitHeight : 0
+      height: visible ? Math.ceil(Style.font.caption * 1.4) : 0
       visible: root.hoveredSlot !== null && root.hoveredSlot !== undefined
       text: root.hoveredSlot
         ? (root.hoveredSlot.time || "") +

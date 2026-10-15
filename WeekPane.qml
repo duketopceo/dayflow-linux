@@ -30,8 +30,9 @@ Flickable {
     var offset = dayIndex - pane.dayflow.todayIndex()
     pane.dayflow.uilog("fullview week cal jump " + offset)
     if (span) {
-      var kids = span.children || []
-      pane.dayflow.pendingSpanTs = Number(kids.length ? kids[0].start_ts : (span.start_ts || 0))
+      // cardToSpan already maps start_ts to the first child's ts.
+      pane.dayflow.pendingSpanFor = "fullview"
+      pane.dayflow.pendingSpanTs = Number(span.start_ts || 0)
     }
     pane.dayflow.dayOffset = offset
     pane.dayflow.loadTimeline()
@@ -71,7 +72,9 @@ Flickable {
 
         Text {
           width: parent.width
-          height: visible ? implicitHeight : 0
+          // Fixed line height — implicitHeight here produced a live
+          // binding-loop warning (same fix as the TodayTab readouts).
+          height: visible ? Math.ceil(Style.font.caption * 1.4) : 0
           visible: heroCal.hoveredSpan !== null && heroCal.hoveredSpan !== undefined
           text: heroCal.hoveredSpan
             ? heroCal.hoveredSpan.start + "–" + heroCal.hoveredSpan.end +
@@ -89,6 +92,7 @@ Flickable {
 
       DayPane {
         id: heroDay
+        paneScope: "fullview"
         width: parent.width - heroCal.width - Style.space(10)
         dayflow: pane.dayflow
         selectedSpan: pane.selSpan

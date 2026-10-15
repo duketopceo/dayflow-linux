@@ -37,14 +37,18 @@ Item {
   property int elapsedSec: 0
   // A refresh was requested and its result hasn't landed yet — the
   // "refresh" affordance gets a visible ack instead of a dead press.
+  // Cleared unconditionally wherever the current run settles: a drained
+  // plain load after invalidate() must release the ack too, not just
+  // refresh-flagged runs.
   property bool refreshing: false
-  // Whether the in-flight run carries --refresh (clears `refreshing`
-  // when it lands or fails).
-  property bool runIsRefresh: false
 
   // One JSON progress line per stderr write — see agentProgress in the
   // engine. Non-JSON stderr noise is ignored.
   function handleProgress(line) {
+    // Buffered lines from a killed/superseded run must not restamp phase
+    // or creep the bar backward onto the fresh run (FullView's parser
+    // carries the same guard).
+    if (agentsProc.runId !== loader.run || loader.timedOut) return
     var ev
     try {
       ev = JSON.parse(line)
@@ -99,7 +103,6 @@ Item {
       // Stamp the run on the process only at actual start — callbacks from a
       // still-terminating previous run then fail the runId check.
       agentsProc.runId = loader.run
-      loader.runIsRefresh = refresh === true
       agentsProc.running = true
     }
   }
@@ -122,6 +125,9 @@ Item {
     loader.progress = -1
     loader.phase = ""
     loader.phaseLabel = ""
+    // The ack'd request's context is gone — a queued refresh still runs,
+    // but an in-flight refresh's press must not outlive its day.
+    if (loader.pending !== "refresh") loader.refreshing = false
     loader.run = loader.run + 1
     if (loader.loading && loader.pending !== "refresh") loader.pending = "load"
   }
@@ -150,10 +156,10 @@ Item {
         // timeout message survive. (streamFinished can fire on exit.)
         if (agentsProc.runId !== loader.run || loader.timedOut) return
         loader.loading = false
-        if (loader.runIsRefresh) {
-          loader.runIsRefresh = false
-          loader.refreshing = false
-        }
+        // Any current-run settle resolves the press — a drained plain load
+        // after invalidate() would otherwise leave "refreshing…" + a dead
+        // button for the rest of the session.
+        if (loader.pending !== "refresh") loader.refreshing = false
         try {
           var d = JSON.parse(text)
           // Day changed mid-run — this payload is for the old day; the
@@ -181,10 +187,7 @@ Item {
         return
       }
       loader.loading = false
-      if (loader.runIsRefresh) {
-        loader.runIsRefresh = false
-        loader.refreshing = false
-      }
+      if (loader.pending !== "refresh") loader.refreshing = false
       if (exitCode !== 0 && !loader.timedOut) {
         loader.briefing = null
         loader.sources = []
@@ -204,6 +207,7 @@ Item {
           return
         }
         loader.loading = false
+        if (loader.pending !== "refresh") loader.refreshing = false
         // If neither exited nor streamFinished ran (FailedToStart — e.g.
         // dayflow missing from PATH), no callback sets an error: check
         // after they settle so the pane reports failure, not blank.
@@ -246,8 +250,7 @@ Item {
       loader.timedOut = true
       agentsProc.running = false
       loader.loading = false
-      loader.runIsRefresh = false
-      loader.refreshing = false
+      if (loader.pending !== "refresh") loader.refreshing = false
       loader.briefing = null
       loader.sources = []
       loader.error = "agent briefing timed out"

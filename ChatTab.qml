@@ -24,8 +24,11 @@ Flickable {
   property string chatAttribution: ""
   property bool recapFired: false
 
-  // Instant local recap from the already-loaded timeline spans — no LLM call.
-  function recapText() {
+  // Instant local recap from the already-loaded timeline spans — no LLM
+  // call. Bound property: the recap was evaluated once per consumer
+  // (compact label + rail) on every spans change.
+  readonly property string recap: computeRecap()
+  function computeRecap() {
     var spans = (dayflow && dayflow.spans) ? dayflow.spans : []
     if (spans.length === 0) return ""
     var byCat = {}
@@ -41,7 +44,7 @@ Flickable {
     var parts = []
     for (i = 0; i < cats.length; i++)
       parts.push(dayflow.catDisplay(cats[i]) + " " + dayflow.fmtDur(byCat[cats[i]]))
-    var last = spans[spans.length - 1]
+    var last = spans[0]
     var head = (dayflow.dateLabel || "Today") + " · " + dayflow.fmtDur(total) + " tracked — " + parts.join(" · ")
     if (last && last.title) head += "\nLatest: " + last.title
     return head
@@ -63,11 +66,14 @@ Flickable {
     root.chatLoading = false
     try {
       var d = JSON.parse(raw)
+      var cid = Number(d.conversation_id || 0)
+      // A reply in the current conversation doesn't change the list —
+      // only refetch when a new one was created.
+      if (cid !== root.chatConversation) conversationsProc.running = true
       root.chatMessages = d.messages || []
-      root.chatConversation = Number(d.conversation_id || 0)
+      root.chatConversation = cid
       root.chatAttribution = d.provider ? d.provider + " · " + (d.model || "") : ""
       if (dayflow) dayflow.notice = ""
-      conversationsProc.running = true // a new conversation may have been created
     } catch (e) {
       root.chatInput = root.lastSent
       if (dayflow) dayflow.notice = "chat failed"
@@ -309,7 +315,7 @@ Flickable {
     // Preloaded mini-recap: local timeline data, shown instantly in the
     // empty state so the tab isn't blank while the LLM recap warms up.
     Rectangle {
-      visible: root.chatMessages.length === 0 && root.recapText() !== ""
+      visible: root.chatMessages.length === 0 && root.recap !== ""
       width: parent.width
       height: recapLabel.implicitHeight + Style.space(14)
       radius: Style.cornerRadius
@@ -320,7 +326,7 @@ Flickable {
         id: recapLabel
         anchors.fill: parent
         anchors.margins: Style.space(7)
-        text: root.recapText()
+        text: root.recap
         textFormat: Text.PlainText
         color: dayflow ? dayflow.foreground : Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
@@ -433,89 +439,103 @@ Flickable {
 
   // Expanded context rail — the right ~38% of the tab: today at a glance
   // plus the conversation list the compact header hides behind "history".
-  Column {
+  // Its own bounded Flickable — a long conversation list must scroll the
+  // rail, not clip silently below the tab's fold.
+  Flickable {
     id: rail
     visible: dayflow && dayflow.expanded
     x: col.width + Style.space(10)
     width: parent.width - col.width - Style.space(10)
-    spacing: Style.space(8)
+    height: root.height
+    contentHeight: railCol.implicitHeight
+    contentWidth: width
+    clip: true
+    interactive: contentHeight > height
 
-    Text {
-      text: "Today"
-      textFormat: Text.PlainText
-      color: dayflow ? dayflow.foreground : Color.foreground
-      font.family: dayflow ? dayflow.fontFamily : Style.font.family
-      font.pixelSize: Style.font.body
-      font.bold: true
-    }
-
-    Rectangle {
-      visible: root.recapText() !== ""
+    Column {
+      id: railCol
       width: parent.width
-      height: railRecap.implicitHeight + Style.space(14)
-      radius: Style.cornerRadius
-      color: dayflow ? dayflow.fgFill(0.04) : "transparent"
-      border.color: dayflow ? dayflow.accentFill(0.25) : "transparent"
+      spacing: Style.space(8)
 
       Text {
-        id: railRecap
-        anchors.fill: parent
-        anchors.margins: Style.space(7)
-        text: root.recapText()
+        // spans follow the viewed day — label it so a dayOffset view
+        // doesn't present yesterday's recap as "Today".
+        text: dayflow && dayflow.dateLabel ? dayflow.dateLabel : "Today"
         textFormat: Text.PlainText
         color: dayflow ? dayflow.foreground : Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.WordWrap
+        font.pixelSize: Style.font.body
+        font.bold: true
       }
-    }
 
-    Text {
-      visible: root.conversations.length > 0
-      text: "Conversations"
-      textFormat: Text.PlainText
-      color: dayflow ? dayflow.foreground : Color.foreground
-      font.family: dayflow ? dayflow.fontFamily : Style.font.family
-      font.pixelSize: Style.font.body
-      font.bold: true
-    }
+      Rectangle {
+        visible: root.recap !== ""
+        width: parent.width
+        height: railRecap.implicitHeight + Style.space(14)
+        radius: Style.cornerRadius
+        color: dayflow ? dayflow.fgFill(0.04) : "transparent"
+        border.color: dayflow ? dayflow.accentFill(0.25) : "transparent"
 
-    Column {
-      width: parent.width
-      spacing: 0
+        Text {
+          id: railRecap
+          anchors.fill: parent
+          anchors.margins: Style.space(7)
+          text: root.recap
+          textFormat: Text.PlainText
+          color: dayflow ? dayflow.foreground : Color.foreground
+          font.family: dayflow ? dayflow.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+      }
 
-      Repeater {
-        model: root.conversations
-        delegate: Rectangle {
-          height: Style.space(24)
-          width: parent.width
-          radius: Style.space(4)
-          color: railConvMouse.containsMouse
-            ? (dayflow ? dayflow.accentFill(0.08) : "transparent")
-            : "transparent"
+      Text {
+        visible: root.conversations.length > 0
+        text: "Conversations"
+        textFormat: Text.PlainText
+        color: dayflow ? dayflow.foreground : Color.foreground
+        font.family: dayflow ? dayflow.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
 
-          Text {
-            anchors.left: parent.left
-            anchors.leftMargin: Style.space(6)
-            anchors.verticalCenter: parent.verticalCenter
-            width: parent.width - Style.space(12)
-            text: (root.chatConversation === Number(modelData.id) ? "● " : "")
-                  + (modelData.title || "conversation")
-            textFormat: Text.PlainText
-            color: root.chatConversation === Number(modelData.id)
-              ? (dayflow ? dayflow.foreground : Color.foreground)
-              : (dayflow ? dayflow.dim : Color.dim)
-            font.family: dayflow ? dayflow.fontFamily : Style.font.family
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
-          }
+      Column {
+        width: parent.width
+        spacing: 0
 
-          MouseArea {
-            id: railConvMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.loadConversation(Number(modelData.id))
+        Repeater {
+          model: root.conversations
+          delegate: Rectangle {
+            height: Style.space(24)
+            width: parent.width
+            radius: Style.space(4)
+            color: railConvMouse.containsMouse
+              ? (dayflow ? dayflow.accentFill(0.08) : "transparent")
+              : "transparent"
+
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - Style.space(12)
+              text: (root.chatConversation === Number(modelData.id) ? "● " : "")
+                    + (modelData.title || "conversation")
+              textFormat: Text.PlainText
+              color: root.chatConversation === Number(modelData.id)
+                ? (dayflow ? dayflow.foreground : Color.foreground)
+                : (dayflow ? dayflow.dim : Color.dim)
+              font.family: dayflow ? dayflow.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+
+            MouseArea {
+              id: railConvMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.loadConversation(Number(modelData.id))
+            }
           }
         }
       }

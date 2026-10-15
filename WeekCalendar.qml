@@ -25,25 +25,9 @@ Item {
 
   function daySpans(d) { return cal.spansFor ? (cal.spansFor(d) || []) : [] }
 
-  // Minute-of-day for a span edge. start_ts/end_ts are authoritative;
-  // the "12:00 AM"-style strings are the fallback for injected fixtures.
-  function toMin(span, key) {
-    var ts = Number(span[key + "_ts"] || 0)
-    if (ts > 0) {
-      var dt = new Date(ts * 1000)
-      return dt.getHours() * 60 + dt.getMinutes()
-    }
-    var s = String(span[key] || "")
-    var m = s.match(/^(\d+):(\d+)\s*(AM|PM)?$/i)
-    if (!m) return 0
-    var h = parseInt(m[1], 10), mn = parseInt(m[2], 10)
-    if (m[3]) {
-      var pm = m[3].toUpperCase() === "PM"
-      if (h === 12) h = pm ? 12 : 0
-      else if (pm) h += 12
-    }
-    return h * 60 + mn
-  }
+  // Minute-of-day + midnight-crossing rules live in SpanTime — shared
+  // with DayTimeline so both surfaces interpret spans identically.
+  SpanTime { id: spanTime }
 
   readonly property int gutterW: Style.space(26)
   // Pixels per hour on the shared axis; today's column width factor.
@@ -62,28 +46,40 @@ Item {
 
   readonly property int headH: Style.space(18)
   readonly property real pxPerMin: hourH / 60
+  // Materialize each day's span list once per invalidation — viewStart,
+  // viewEnd, and the seven columns each scanned all weekCards otherwise
+  // (3× full materialization per change, per instance).
+  readonly property var perDay: {
+    var out = []
+    for (var d = 0; d < 7; d++) out.push(daySpans(d))
+    return out
+  }
+
   readonly property int viewStart: {
     var m = 1440
     for (var d = 0; d < 7; d++) {
-      var ss = cal.daySpans(d)
+      var ss = cal.perDay[d]
       for (var i = 0; i < ss.length; i++) {
-        var sm = cal.toMin(ss[i], "start")
+        var sm = spanTime.toMin(ss[i], "start")
         if (sm < m) m = sm
       }
     }
     return m >= 1440 ? 0 : Math.floor(m / 120) * 120
   }
+
   readonly property int viewEnd: {
     var m = 0
     for (var d = 0; d < 7; d++) {
-      var ss = cal.daySpans(d)
+      var ss = cal.perDay[d]
       for (var i = 0; i < ss.length; i++) {
-        var em = cal.toMin(ss[i], "end")
+        var em = spanTime.endMin(ss[i], spanTime.toMin(ss[i], "start"))
         if (em > m) m = em
       }
     }
     var e = m <= 0 ? 1440 : Math.min(1440, Math.ceil(m / 120) * 120)
-    return Math.max(viewStart + 480, e)
+    // The 8h floor stays inside the day — an evening-only week must not
+    // push the axis past 24:00 (gutter would print "26:00").
+    return Math.max(Math.min(1440, viewStart + 480), e)
   }
 
   // Column x/width for dayIndex — today's column stretches by todayScale.
@@ -134,7 +130,7 @@ Item {
       property int dayIndex: index
       property bool isToday: index === cal.todayIndex
       property bool isSel: index === (cal.selectedIndex >= 0 ? cal.selectedIndex : cal.todayIndex)
-      property var spans: cal.daySpans(index)
+      property var spans: cal.perDay[index]
 
       x: cal.colX(index)
       y: 0
@@ -180,8 +176,8 @@ Item {
         delegate: Rectangle {
           id: blk
           required property var modelData
-          property int startM: Math.max(cal.viewStart, cal.toMin(modelData, "start"))
-          property int endM: Math.max(startM + 1, Math.min(cal.viewEnd, cal.toMin(modelData, "end")))
+          property int startM: Math.max(cal.viewStart, spanTime.toMin(modelData, "start"))
+          property int endM: Math.max(startM + 1, Math.min(cal.viewEnd, spanTime.endMin(modelData, startM)))
           property real restH: Math.max(4,
             Math.min((endM - startM) * cal.pxPerMin, cal.height - y))
           // Second-most-common child app — the reference's primary/secondary
@@ -339,7 +335,7 @@ Item {
               required property int index
               required property var modelData
               visible: index > 0
-              property int cm: cal.toMin(modelData, "start")
+              property int cm: spanTime.toMin(modelData, "start")
               y: Math.max(0, (cm - blk.startM) * cal.pxPerMin)
               x: Style.space(5)
               width: parent.width - Style.space(6)

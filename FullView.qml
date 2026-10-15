@@ -58,7 +58,6 @@ FloatingWindow {
   // panel's AgentBriefingLoader (AgentsPane reads these off the host).
   property int agentsElapsed: 0
   property bool agentsRefreshing: false
-  property bool agentsRunIsRefresh: false
 
   function agentsLoad(refresh) {
     if (!root.dayflow) return
@@ -80,7 +79,6 @@ FloatingWindow {
       // Stamp the run on the process only at actual start — callbacks from a
       // still-terminating previous run then fail the runId check.
       agentsProc.runId = root.agentsRun
-      root.agentsRunIsRefresh = refresh === true
       agentsProc.running = true
     }
   }
@@ -101,7 +99,7 @@ FloatingWindow {
     // AgentBriefingLoader.handleProgress (scan/decode/polish + tick creep).
     stderr: SplitParser {
       onRead: function(line) {
-        if (agentsProc.runId !== root.agentsRun) return
+        if (agentsProc.runId !== root.agentsRun || root.agentsTimedOut) return
         var ev
         try {
           ev = JSON.parse(line)
@@ -139,10 +137,9 @@ FloatingWindow {
         // timeout message survive. (streamFinished can fire on exit.)
         if (agentsProc.runId !== root.agentsRun || root.agentsTimedOut) return
         root.agentsLoading = false
-        if (root.agentsRunIsRefresh) {
-          root.agentsRunIsRefresh = false
-          root.agentsRefreshing = false
-        }
+        // Any current-run settle resolves the press — same wedge fix as
+        // the popup loader (a drained plain load must clear the ack).
+        if (root.agentsPending !== "refresh") root.agentsRefreshing = false
         try {
           var d = JSON.parse(text)
           // Day changed mid-run — this payload is for the old day; the
@@ -167,10 +164,7 @@ FloatingWindow {
         return
       }
       root.agentsLoading = false
-      if (root.agentsRunIsRefresh) {
-        root.agentsRunIsRefresh = false
-        root.agentsRefreshing = false
-      }
+      if (root.agentsPending !== "refresh") root.agentsRefreshing = false
       if (exitCode !== 0 && !root.agentsTimedOut) {
         root.agentBriefing = null
         root.agentSources = []
@@ -190,6 +184,7 @@ FloatingWindow {
           return
         }
         root.agentsLoading = false
+        if (root.agentsPending !== "refresh") root.agentsRefreshing = false
         // If neither exited nor streamFinished ran (FailedToStart — e.g.
         // dayflow missing from PATH), no callback sets an error: check
         // after they settle so the pane reports failure, not blank.
@@ -221,8 +216,7 @@ FloatingWindow {
       root.agentsTimedOut = true
       agentsProc.running = false
       root.agentsLoading = false
-      root.agentsRunIsRefresh = false
-      root.agentsRefreshing = false
+      if (root.agentsPending !== "refresh") root.agentsRefreshing = false
       root.agentBriefing = null
       root.agentSources = []
       root.agentsError = "agent briefing timed out"
@@ -393,7 +387,6 @@ FloatingWindow {
 
   Component.onCompleted: {
     playbackStatusProc.running = true
-    forecastProc.running = true
   }
 
   Rectangle {
@@ -469,6 +462,10 @@ FloatingWindow {
                     root.tlLoad()
                   if (modelData.key === "agents" && root.agentBriefing === null && !root.agentsLoading)
                     root.agentsLoad(false)
+                  // Lazy like the other sections — only WeekPane's
+                  // tomorrow strip consumes the forecast.
+                  if (modelData.key === "week" && root.forecast === null)
+                    forecastProc.running = true
                 }
               }
             }
@@ -560,7 +557,10 @@ FloatingWindow {
       // user lands on; the run's exit drains this.
       if (root.agentsLoading) {
         root.agentsRun = root.agentsRun + 1
-        if (root.agentsPending !== "refresh") root.agentsPending = "load"
+        if (root.agentsPending !== "refresh") {
+          root.agentsPending = "load"
+          root.agentsRefreshing = false
+        }
       }
       if (root.section === "timelapse") root.tlLoad()
       if (root.section === "agents") root.agentsLoad(false)

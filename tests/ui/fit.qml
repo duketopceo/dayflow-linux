@@ -13,6 +13,10 @@ ShellRoot {
   property string outputPath: OUTPUT_PATH
   property var cases: []
   property int failures: 0
+  // Fixture waiting on standupFetchProc — applied when the proc's stub
+  // payload has landed so the fixture wins the race (see applyCase).
+  property var pendingStandup: null
+  property int fixtureWaits: 0
 
   ListModel { id: cats }
 
@@ -40,19 +44,21 @@ ShellRoot {
     property string installScriptPath: "/nonexistent-dayflow-install.sh"
     property bool expanded: false
     property var settingsCatModel: cats
+    // Production spans arrive newest-first (Panel.applyTimeline reverses
+    // engine cards) — the stub matches so "Latest" resolves correctly.
     property var spans: [
-      { start_ts: 1760000000, end_ts: 1760010800, start: "8:00 AM", end: "10:30 AM",
-        title: "dayflow polish work", summary: "working on the popup", category: "coding",
-        productive: true, appName: "Ghostty", minutes: 150, blocks: 4 },
-      { start_ts: 1760014400, end_ts: 1760018000, start: "10:30 AM", end: "11:30 AM",
-        title: "standup + team review", summary: "daily sync", category: "communication",
-        productive: true, appName: "Slack", minutes: 60, blocks: 2 },
+      { start_ts: 1760028800, end_ts: 1760032400, start: "1:20 PM", end: "2:20 PM",
+        title: "hacker news rabbit hole", summary: "distraction", category: "browsing",
+        productive: false, appName: "Firefox", minutes: 60, blocks: 2 },
       { start_ts: 1760021600, end_ts: 1760023400, start: "12:15 PM", end: "12:45 PM",
         title: "idle", summary: "", category: "idle",
         productive: false, appName: "", minutes: 30, blocks: 1 },
-      { start_ts: 1760028800, end_ts: 1760032400, start: "1:20 PM", end: "2:20 PM",
-        title: "hacker news rabbit hole", summary: "distraction", category: "browsing",
-        productive: false, appName: "Firefox", minutes: 60, blocks: 2 }
+      { start_ts: 1760014400, end_ts: 1760018000, start: "10:30 AM", end: "11:30 AM",
+        title: "standup + team review", summary: "daily sync", category: "communication",
+        productive: true, appName: "Slack", minutes: 60, blocks: 2 },
+      { start_ts: 1760000000, end_ts: 1760010800, start: "8:00 AM", end: "10:30 AM",
+        title: "dayflow polish work", summary: "working on the popup", category: "coding",
+        productive: true, appName: "Ghostty", minutes: 150, blocks: 4 }
     ]
     property string dateLabel: "Fri 10-09"
     property bool timelineLoading: false
@@ -215,6 +221,18 @@ ShellRoot {
         anchors.top: parent.top
       }
 
+      // Applies a queued standup fixture only after the proc that would
+      // clobber it has finished writing applyStandup's stub payload.
+      Connections {
+        target: popup.procByName("standupFetchProc")
+        function onRunningChanged() {
+          if (target && !target.running && runner.pendingStandup) {
+            popup.applyStandup(JSON.stringify(runner.pendingStandup))
+            runner.pendingStandup = null
+          }
+        }
+      }
+
       Item {
         id: settingsHost
         anchors.fill: parent
@@ -331,13 +349,26 @@ ShellRoot {
   }
 
   function applyCase(test) {
+    // A fixture still queued from a previous case belongs to that case —
+    // drop it rather than letting it land mid-scenario here.
+    if (test.standup === undefined) runner.pendingStandup = null
     window.implicitWidth = test.width
     window.implicitHeight = test.height
     stage.width = test.width - 80
     stage.height = test.height - 80
     if (test.kind === "panel" && test.tab) popup.currentTab = test.tab
-    if (test.kind === "panel") model.expanded = test.expanded === true
-    if (test.kind === "panel" && test.standup !== undefined) model.standup = test.standup
+    // Inject into the real popup — `model` is the stub for the standalone
+    // hosts (settings/obHost/fvStub); Panel.qml carries its own writable
+    // expanded/standup properties.
+    if (test.kind === "panel") popup.expanded = test.expanded === true
+    if (test.kind === "panel" && test.standup !== undefined) {
+      // Route through the real write path (applyStandup also merges the
+      // draft field). A tab switch just kicked standupFetchProc — its
+      // payload lands after this function, so stash until it settles.
+      var sp = popup.procByName("standupFetchProc")
+      if (sp && sp.running) runner.pendingStandup = test.standup
+      else popup.applyStandup(JSON.stringify(test.standup))
+    }
     if (test.kind === "panel" && test.actionsOpen !== undefined) popup.actionsOpen = test.actionsOpen
     if (test.kind === "panel" && test.notice !== undefined) { popup.notice = test.notice; popup.noticeAt = Date.now() }
     if (test.kind === "onboarding") onboardingHostApply(test)
@@ -361,7 +392,23 @@ ShellRoot {
       if (runner.capturing) return
       if (runner.scenario >= 0 && runner.scenario < runner.cases.length) {
         var test = runner.cases[runner.scenario]
+        // A queued standup fixture must land before the case is judged —
+        // checking early would certify stub data instead of the fixture.
+        if (test.standup !== undefined && runner.pendingStandup !== null) {
+          if (runner.fixtureWaits++ > 8) {
+            fail(test.name + ": standup fixture never applied")
+            runner.pendingStandup = null
+          } else return
+        }
+        runner.fixtureWaits = 0
         var target = targetFor(test)
+        if (test.standup !== undefined) {
+          var want = test.standup.today.entries.length
+          var got = (popup.standup && popup.standup.today && popup.standup.today.entries)
+            ? popup.standup.today.entries.length : -1
+          if (got !== want)
+            fail(test.name + ": standup fixture not applied (entries " + got + " != " + want + ")")
+        }
         runner.checkTree(target, test.name)
         if (test.kind === "components") runner.checkComponents()
         if (test.kind === "panel") runner.checkFooter(test)
@@ -391,10 +438,13 @@ ShellRoot {
         list.push({ name: "panel-" + w + "-" + tab, kind: "panel", width: w + 80, height: 800, tab: tab })
       list.push({ name: "panel-" + w + "-actions-open", kind: "panel", width: w + 80, height: 800, tab: "today", actionsOpen: true })
       if (w === 780) {
-        list.push({ name: "panel-780-expanded-today", kind: "panel", width: w + 80, height: 800, tab: "today", expanded: true })
-        list.push({ name: "panel-780-expanded-chat", kind: "panel", width: w + 80, height: 800, tab: "chat", expanded: true })
-        list.push({ name: "panel-780-expanded-standup", kind: "panel", width: w + 80, height: 800, tab: "standup", expanded: true })
-        list.push({ name: "panel-780-expanded-agents", kind: "panel", width: w + 80, height: 800, tab: "agents", expanded: true })
+        // Expanded popup is ~1080x800 — the window must fit it or every
+        // child trips the stage-bounds check. Window 1200x920 -> stage
+        // 1120x840.
+        list.push({ name: "panel-1200-expanded-today", kind: "panel", width: 1200, height: 920, tab: "today", expanded: true })
+        list.push({ name: "panel-1200-expanded-chat", kind: "panel", width: 1200, height: 920, tab: "chat", expanded: true })
+        list.push({ name: "panel-1200-expanded-standup", kind: "panel", width: 1200, height: 920, tab: "standup", expanded: true })
+        list.push({ name: "panel-1200-expanded-agents", kind: "panel", width: 1200, height: 920, tab: "agents", expanded: true })
         // Recap with a populated today — exercises the entry rows + the
         // Copy recap action (no Blockers/draft surfaces must render).
         list.push({ name: "panel-780-standup-entries", kind: "panel", width: w + 80, height: 800, tab: "standup",
