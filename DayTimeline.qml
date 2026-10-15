@@ -224,6 +224,7 @@ Item {
 
   // Current-time line when viewing today.
   Rectangle {
+    id: nowLine
     visible: tl.showNow
     // Assignable — the timer re-stamps it. Emitting nowMinChanged() on a
     // bound property only refreshes listeners with the stale value.
@@ -245,7 +246,7 @@ Item {
       repeat: true
       onTriggered: {
         var d = new Date()
-        parent.nowMin = d.getHours() * 60 + d.getMinutes()
+        nowLine.nowMin = d.getHours() * 60 + d.getMinutes()
       }
     }
   }

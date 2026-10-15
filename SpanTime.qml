@@ -31,7 +31,10 @@ QtObject {
   function endMin(span, startMin) {
     var e = toMin(span, "end")
     if (e > startMin) return e
+    // Strict: an end in the SAME minute as the start (zero-length or
+    // sub-minute forward spans) is not a crossing — only an end whose
+    // minute-of-day is strictly earlier is.
     var ets = Number(span.end_ts || 0), sts = Number(span.start_ts || 0)
-    return (ets > 0 && sts > 0 && ets > sts) ? 1440 : startMin + 1
+    return (e < startMin && ets > 0 && sts > 0 && ets > sts) ? 1440 : startMin + 1
   }
 }

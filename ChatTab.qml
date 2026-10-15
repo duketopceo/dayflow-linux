@@ -67,9 +67,12 @@ Flickable {
     try {
       var d = JSON.parse(raw)
       var cid = Number(d.conversation_id || 0)
-      // A reply in the current conversation doesn't change the list —
-      // only refetch when a new one was created.
-      if (cid !== root.chatConversation) conversationsProc.running = true
+      // Every reply bumps the conversation's updated_at — the rail sorts
+      // on it — so the list refetches on any reply, not just a new cid.
+      // A running proc can't be re-armed; the dirty flag reruns it on
+      // settle.
+      if (conversationsProc.running) root.conversationsDirty = true
+      else conversationsProc.running = true
       root.chatMessages = d.messages || []
       root.chatConversation = cid
       root.chatAttribution = d.provider ? d.provider + " · " + (d.model || "") : ""
@@ -602,6 +605,10 @@ Flickable {
     }
   }
 
+  // Set when a reply landed while conversationsProc was in flight —
+  // reruns the list fetch on settle so a new/bumped conversation appears.
+  property bool conversationsDirty: false
+
   Process {
     id: conversationsProc
     command: ["dayflow", "conversations", "--json"]
@@ -609,6 +616,12 @@ Flickable {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyConversations(text)
+    }
+    onExited: {
+      if (root.conversationsDirty) {
+        root.conversationsDirty = false
+        running = true
+      }
     }
   }
 }

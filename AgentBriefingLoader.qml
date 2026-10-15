@@ -250,7 +250,9 @@ Item {
       loader.timedOut = true
       agentsProc.running = false
       loader.loading = false
-      if (loader.pending !== "refresh") loader.refreshing = false
+      // pending was just cleared — a queued refresh is dropped too, so
+      // the ack must clear unconditionally.
+      loader.refreshing = false
       loader.briefing = null
       loader.sources = []
       loader.error = "agent briefing timed out"

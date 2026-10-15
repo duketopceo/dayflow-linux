@@ -551,7 +551,10 @@ Flickable {
 
           Text {
             id: useNote
-            width: implicitWidth
+            // Bounded so the note can't widen capRow on narrow panes —
+            // it wraps instead of pushing the fields out of bounds.
+            width: Math.max(0, Math.min(implicitWidth, parent.width - 3 * parent.spacing))
+            wrapMode: Text.WordWrap
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Style.space(6)
             text: "using " + (root.usageText !== "" ? root.usageText : "—")

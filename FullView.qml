@@ -216,7 +216,8 @@ FloatingWindow {
       root.agentsTimedOut = true
       agentsProc.running = false
       root.agentsLoading = false
-      if (root.agentsPending !== "refresh") root.agentsRefreshing = false
+      // agentsPending was just cleared — unconditional ack clear.
+      root.agentsRefreshing = false
       root.agentBriefing = null
       root.agentSources = []
       root.agentsError = "agent briefing timed out"

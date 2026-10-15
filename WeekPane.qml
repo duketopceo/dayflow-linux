@@ -33,6 +33,9 @@ Flickable {
       // cardToSpan already maps start_ts to the first child's ts.
       pane.dayflow.pendingSpanFor = "fullview"
       pane.dayflow.pendingSpanTs = Number(span.start_ts || 0)
+    } else {
+      pane.dayflow.pendingSpanTs = 0
+      pane.dayflow.pendingSpanFor = ""
     }
     pane.dayflow.dayOffset = offset
     pane.dayflow.loadTimeline()

@@ -31,6 +31,10 @@ Flickable {
       // cardToSpan already maps start_ts to the first child's ts.
       dayflow.pendingSpanFor = "popup"
       dayflow.pendingSpanTs = Number(span.start_ts || 0)
+    } else {
+      // A blank-column jump abandons any armed pending selection.
+      dayflow.pendingSpanTs = 0
+      dayflow.pendingSpanFor = ""
     }
     dayflow.dayOffset = offset
     dayflow.loadTimeline()
@@ -45,21 +49,28 @@ Flickable {
     duration: 160
     easing.type: Easing.OutCubic
   }
+  // One anim per Flickable — retargeting a running NumberAnimation cancels
+  // the in-flight scroll.
+  NumberAnimation {
+    id: outerScrollAnim
+    property: "contentY"
+    duration: 160
+    easing.type: Easing.OutCubic
+  }
   // Minimal-reveal scroll: `flick` scrolls until `card`'s bounds (already
   // mapped into `host` content coordinates) are inside the viewport.
-  function scrollCardIntoView(flick, host, card) {
+  function scrollCardIntoView(flick, host, card, anim) {
     var p = card.mapToItem(host, 0, 0)
     if (!p) return
     var top = p.y, bottom = p.y + card.height
+    anim.target = flick
     if (top < flick.contentY) {
-      scrollAnim.target = flick
-      scrollAnim.to = Math.max(0, top - Style.space(4))
-      scrollAnim.restart()
+      anim.to = Math.max(0, top - Style.space(4))
+      anim.restart()
     } else if (bottom > flick.contentY + flick.height) {
-      scrollAnim.target = flick
-      scrollAnim.to = Math.min(Math.max(0, flick.contentHeight - flick.height),
+      anim.to = Math.min(Math.max(0, flick.contentHeight - flick.height),
         bottom - flick.height + Style.space(4))
-      scrollAnim.restart()
+      anim.restart()
     }
   }
   function revealDetail(pane) {
@@ -69,13 +80,15 @@ Flickable {
       if (!card.visible) return
       card.flash()
       if (!root.visible) return
-      // Expanded puts the card in the rail's own Flickable — scroll that,
-      // not the outer page.
+      // Expanded puts the card in the rail's own Flickable — but the rail
+      // itself can sit below the outer viewport's fold, so scroll the
+      // outer page to the card first, then the rail within it.
       if (dayflow.expanded) {
-        scrollCardIntoView(expRail, pane, card)
+        scrollCardIntoView(root, col, card, outerScrollAnim)
+        scrollCardIntoView(expRail, pane, card, scrollAnim)
         return
       }
-      scrollCardIntoView(root, col, card)
+      scrollCardIntoView(root, col, card, outerScrollAnim)
     })
   }
 
