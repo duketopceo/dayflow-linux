@@ -31,10 +31,17 @@ QtObject {
   function endMin(span, startMin) {
     var e = toMin(span, "end")
     if (e > startMin) return e
-    // Strict: an end in the SAME minute as the start (zero-length or
-    // sub-minute forward spans) is not a crossing — only an end whose
-    // minute-of-day is strictly earlier is.
     var ets = Number(span.end_ts || 0), sts = Number(span.start_ts || 0)
-    return (e < startMin && ets > 0 && sts > 0 && ets > sts) ? 1440 : startMin + 1
+    if (e < startMin)
+      return (ets > 0 && sts > 0 && ets > sts) ? 1440 : startMin + 1
+    // e === startMin: a same-day sub-minute span stays a sliver, but an
+    // end on a LATER local calendar date is a real day-crossing span.
+    if (ets > sts && sts > 0) {
+      var sd = new Date(sts * 1000), ed = new Date(ets * 1000)
+      if (ed.getFullYear() !== sd.getFullYear() || ed.getMonth() !== sd.getMonth()
+          || ed.getDate() !== sd.getDate())
+        return 1440
+    }
+    return startMin + 1
   }
 }
