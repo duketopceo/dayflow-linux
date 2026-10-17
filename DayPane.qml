@@ -98,7 +98,7 @@ Column {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: { dayflow.uilog("back to today"); dayflow.dayOffset = 0; dayflow.loadTimeline() }
+        onClicked: { dayflow.uilog("back to today"); dayflow.pendingSpanTs = 0; dayflow.pendingSpanFor = ""; dayflow.dayOffset = 0; dayflow.loadTimeline() }
       }
     }
 
@@ -201,24 +201,53 @@ Column {
     wrapMode: Text.WordWrap
   }
 
+  // "popup" | "fullview" — pendingSpanTs is only resolved by panes on the
+  // surface that armed it; a hidden pane from the other surface would
+  // steal the consume otherwise.
+  property string paneScope: "popup"
+
+  // Index of the day span containing epoch ts — top-level starts first,
+  // then children (continuation segments of midnight-crossing cards).
+  function spanIndexForTs(ts) {
+    for (var i = 0; i < dayflow.spans.length; i++) {
+      var s = dayflow.spans[i]
+      if (Number(s.start_ts) === ts) return i
+      var kids = s.children || []
+      for (var k = 0; k < kids.length; k++) {
+        if (Number(kids[k].start_ts) === ts) return i
+      }
+    }
+    return -1
+  }
+
+  // Resolve a queued week-jump ts — only a visible pane on the surface
+  // that armed it may consume (a hidden sibling would fire flash+scroll
+  // off-screen and eat the selection).
+  function resolvePending() {
+    var armed = dayflow.pendingSpanTs > 0
+      && dayflow.pendingSpanFor === daypane.paneScope
+      && daypane.visible
+    var idx = armed ? daypane.spanIndexForTs(dayflow.pendingSpanTs) : -1
+    if (idx < 0) return false
+    dayflow.pendingSpanTs = 0
+    dayflow.pendingSpanFor = ""
+    daypane.spanSelected(idx)
+    return true
+  }
+
+  // A pane that becomes visible while a pending jump is armed still gets
+  // its consume — covers compact<->expanded toggles mid-load.
+  onVisibleChanged: { if (daypane.visible) Qt.callLater(daypane.resolvePending) }
+
   Connections {
     target: dayflow
     function onSpansChanged() {
-      // A week-grid click queued a child ts — resolve it to the day span
-      // now that this day's timeline has landed. Child-level matching
-      // finds continuation segments of midnight-crossing cards.
-      if (dayflow.pendingSpanTs > 0) {
-        var ts = dayflow.pendingSpanTs
-        dayflow.pendingSpanTs = 0
-        for (var i = 0; i < dayflow.spans.length; i++) {
-          var s = dayflow.spans[i]
-          if (Number(s.start_ts) === ts) { daypane.spanSelected(i); return }
-          var kids = s.children || []
-          for (var k = 0; k < kids.length; k++) {
-            if (Number(kids[k].start_ts) === ts) { daypane.spanSelected(i); return }
-          }
-        }
-      }
+      // Consume only on a match: a mid-flight earlier day's payload lands
+      // first sometimes, and its spans can never contain this day's epoch
+      // ts — eating it there drops the jumped day's selection. Day
+      // navigation (goDay / back-to-today / Cal pick / nav row) clears a
+      // stale pending instead.
+      if (daypane.resolvePending()) return
       if (daypane.selectedSpan >= dayflow.spans.length) daypane.spanSelected(-1)
     }
   }
@@ -233,7 +262,8 @@ Column {
     filter: daypane.spanFilter
     selectedIndex: daypane.selectedSpan
     showNow: dayflow.dayOffset === 0
-    onSpanClicked: function(i) { daypane.spanSelected(i) }
+    // A manual pick takes over from any queued week-jump selection.
+    onSpanClicked: function(i) { dayflow.pendingSpanTs = 0; dayflow.pendingSpanFor = ""; daypane.spanSelected(i) }
   }
 
   SpanCard {

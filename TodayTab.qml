@@ -28,8 +28,13 @@ Flickable {
     var offset = dayIndex - dayflow.todayIndex()
     dayflow.uilog("week cal jump " + offset)
     if (span) {
-      var kids = span.children || []
-      dayflow.pendingSpanTs = Number(kids.length ? kids[0].start_ts : (span.start_ts || 0))
+      // cardToSpan already maps start_ts to the first child's ts.
+      dayflow.pendingSpanFor = "popup"
+      dayflow.pendingSpanTs = Number(span.start_ts || 0)
+    } else {
+      // A blank-column jump abandons any armed pending selection.
+      dayflow.pendingSpanTs = 0
+      dayflow.pendingSpanFor = ""
     }
     dayflow.dayOffset = offset
     dayflow.loadTimeline()
@@ -40,10 +45,33 @@ Flickable {
   // view; in both layouts it flashes so the click has a visible result.
   NumberAnimation {
     id: scrollAnim
-    target: root
     property: "contentY"
     duration: 160
     easing.type: Easing.OutCubic
+  }
+  // One anim per Flickable — retargeting a running NumberAnimation cancels
+  // the in-flight scroll.
+  NumberAnimation {
+    id: outerScrollAnim
+    property: "contentY"
+    duration: 160
+    easing.type: Easing.OutCubic
+  }
+  // Minimal-reveal scroll: `flick` scrolls until `card`'s bounds (already
+  // mapped into `host` content coordinates) are inside the viewport.
+  function scrollCardIntoView(flick, host, card, anim) {
+    var p = card.mapToItem(host, 0, 0)
+    if (!p) return
+    var top = p.y, bottom = p.y + card.height
+    anim.target = flick
+    if (top < flick.contentY) {
+      anim.to = Math.max(0, top - Style.space(4))
+      anim.restart()
+    } else if (bottom > flick.contentY + flick.height) {
+      anim.to = Math.min(Math.max(0, flick.contentHeight - flick.height),
+        bottom - flick.height + Style.space(4))
+      anim.restart()
+    }
   }
   function revealDetail(pane) {
     if (!pane || !pane.detailCard) return
@@ -51,18 +79,16 @@ Flickable {
     Qt.callLater(function() {
       if (!card.visible) return
       card.flash()
-      if (!root.visible || dayflow.expanded) return
-      var p = card.mapToItem(col, 0, 0)
-      if (!p) return
-      var top = p.y, bottom = p.y + card.height
-      if (top < root.contentY) {
-        scrollAnim.to = Math.max(0, top - Style.space(4))
-        scrollAnim.restart()
-      } else if (bottom > root.contentY + root.height) {
-        scrollAnim.to = Math.min(col.implicitHeight - root.height,
-          bottom - root.height + Style.space(4))
-        scrollAnim.restart()
+      if (!root.visible) return
+      // Expanded puts the card in the rail's own Flickable — but the rail
+      // itself can sit below the outer viewport's fold, so scroll the
+      // outer page to the card first, then the rail within it.
+      if (dayflow.expanded) {
+        scrollCardIntoView(root, col, card, outerScrollAnim)
+        scrollCardIntoView(expRail, pane, card, scrollAnim)
+        return
       }
+      scrollCardIntoView(root, col, card, outerScrollAnim)
     })
   }
 
@@ -87,7 +113,10 @@ Flickable {
     Row {
       visible: dayflow.expanded
       width: parent.width
-      height: visible ? Math.max(weekWrapExp.implicitHeight, expDay.implicitHeight) : 0
+      // The grid column is the bound — expDay sits inside the rail
+      // Flickable (self-bounded to weekWrapExp), so asking for its full
+      // implicitHeight would reopen dead space below the rail.
+      height: visible ? weekWrapExp.implicitHeight : 0
       spacing: Style.space(8)
 
       Column {
@@ -128,6 +157,7 @@ Flickable {
       // Detail rail — bounded to the grid's height so the right column
       // fills exactly and scrolls its overflow, never trails dead space.
       Flickable {
+        id: expRail
         width: parent.width - weekWrapExp.width - Style.space(8)
         height: weekWrapExp.implicitHeight
         contentHeight: expDay.implicitHeight

@@ -180,11 +180,6 @@ Flickable {
     }
   }
 
-  Connections {
-    target: dayflow
-    function onStorageTextChanged() { root.usageText = dayflow.storageText }
-  }
-
   // Reusable bits -------------------------------------------------------
 
   component DimNote: Text {
@@ -521,11 +516,16 @@ Flickable {
         // One cost line: the three storage caps + what they're using now,
         // in a single row instead of a field row plus a notes line.
         Row {
+          id: capRow
           width: parent.width
           spacing: Style.space(6)
+          // 4 children -> 3 gaps; three equal fields fill what the usage
+          // note leaves.
+          readonly property real capFieldW:
+            Math.max(0, (width - 3 * spacing - useNote.implicitWidth) / 3)
 
           Field {
-            width: (parent.width - 2 * parent.spacing - useNote.width) / 3
+            width: capRow.capFieldW
             label: "Frames cap (MB)"
             value: String(dayflow.configDraft.max_frames_mb !== undefined ? dayflow.configDraft.max_frames_mb : 20480)
             hint: "20480"
@@ -533,7 +533,7 @@ Flickable {
             onEdited: function(t) { root.setDraft("max_frames_mb", parseInt(t, 10) || 0) }
           }
           Field {
-            width: (parent.width - 2 * parent.spacing - useNote.width) / 3
+            width: capRow.capFieldW
             label: "Text cap (MB)"
             value: String(dayflow.configDraft.max_db_mb !== undefined ? dayflow.configDraft.max_db_mb : 10240)
             hint: "10240"
@@ -541,7 +541,7 @@ Flickable {
             onEdited: function(t) { root.setDraft("max_db_mb", parseInt(t, 10) || 0) }
           }
           Field {
-            width: (parent.width - 2 * parent.spacing - useNote.width) / 3
+            width: capRow.capFieldW
             label: "Total cap (MB)"
             value: String(dayflow.configDraft.max_storage_mb !== undefined ? dayflow.configDraft.max_storage_mb : 0)
             hint: "0 = off"
@@ -551,7 +551,10 @@ Flickable {
 
           Text {
             id: useNote
-            width: implicitWidth
+            // Bounded so the note can't widen capRow on narrow panes —
+            // it wraps instead of pushing the fields out of bounds.
+            width: Math.max(0, Math.min(implicitWidth, parent.width - 3 * parent.spacing))
+            wrapMode: Text.WordWrap
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Style.space(6)
             text: "using " + (root.usageText !== "" ? root.usageText : "—")
