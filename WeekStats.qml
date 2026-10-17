@@ -47,13 +47,11 @@ Column {
       wrapMode: Text.WordWrap
     }
 
-    Rectangle {
+    PanelCard {
+      pal: dayflow
       visible: dayflow.insights.total_minutes > 0
       width: parent.width
       height: statCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
 
       Column {
         id: statCol
@@ -121,14 +119,12 @@ Column {
       }
     }
 
-    Rectangle {
+    PanelCard {
+      pal: dayflow
       // Detailed visuals are reserved for the expanded panel and Full View.
       visible: dayflow.expanded && dayflow.weeklyPayload.category_donut.length > 0
       width: parent.width
       height: chartsCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
 
       Flow {
         id: chartsCol
@@ -385,13 +381,11 @@ Column {
       }
     }
 
-    Rectangle {
+    PanelCard {
+      pal: dayflow
       visible: dayflow.insights.total_minutes > 0
       width: parent.width
       height: reviewCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
 
       Column {
         id: reviewCol
@@ -498,13 +492,11 @@ Column {
       }
     }
 
-    Rectangle {
+    PanelCard {
+      pal: dayflow
       visible: dayflow.expanded && dayflow.weekBlocks.length > 0
       width: parent.width
       height: heatCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
 
       Column {
         id: heatCol
@@ -617,13 +609,11 @@ Column {
     }
     Binding { target: distLoader.item; property: "items"; value: dayflow.insights.top_distractions; when: distLoader.status === Loader.Ready }
 
-    Rectangle {
+    PanelCard {
+      pal: dayflow
       visible: dayflow.expanded && dayflow.insights.focus_blocks.length > 0
       width: parent.width
       height: fCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
 
       Column {
         id: fCol
@@ -657,14 +647,12 @@ Column {
   // ---- helpers ----
   Component {
     id: sectionList
-    Rectangle {
+    PanelCard {
+      pal: dayflow
       visible: items.length > 0
       width: parent ? parent.width : 0
       implicitHeight: sCol.implicitHeight + Style.space(16)
       height: implicitHeight
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
       property var items: []
       property string title: ""
 

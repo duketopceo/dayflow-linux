@@ -21,25 +21,6 @@ Flickable {
   contentHeight: col.implicitHeight
   clip: true
 
-  // Shared click-through for both calendar placements: jump the day
-  // detail to the clicked column's date, and when a specific block was
-  // clicked mark its child ts so DayPane selects it once the day loads.
-  function jumpToDay(dayIndex, span) {
-    var offset = dayIndex - dayflow.todayIndex()
-    dayflow.uilog("week cal jump " + offset)
-    if (span) {
-      // cardToSpan already maps start_ts to the first child's ts.
-      dayflow.pendingSpanFor = "popup"
-      dayflow.pendingSpanTs = Number(span.start_ts || 0)
-    } else {
-      // A blank-column jump abandons any armed pending selection.
-      dayflow.pendingSpanTs = 0
-      dayflow.pendingSpanFor = ""
-    }
-    dayflow.dayOffset = offset
-    dayflow.loadTimeline()
-  }
-
   // Click feedback: the detail card must be on screen when it selects —
   // in compact it can sit below the Flickable fold, so scroll it into
   // view; in both layouts it flashes so the click has a visible result.
@@ -124,33 +105,8 @@ Flickable {
         width: Math.floor(parent.width * 0.62)
         spacing: Style.space(4)
 
-        WeekCalendar {
-          id: weekCalExp
+        WeekHero {
           width: parent.width
-          pal: dayflow
-          hourH: Style.space(36)
-          todayScale: 1.0
-          todayIndex: dayflow.todayIndex()
-          selectedIndex: dayflow.todayIndex() + dayflow.dayOffset
-          spansFor: function(d) { return dayflow.weekDaySpans(d) }
-          onDayClicked: function(dayIndex, span) { root.jumpToDay(dayIndex, span) }
-        }
-
-        Text {
-          width: parent.width
-          height: visible ? Math.ceil(Style.font.caption * 1.4) : 0
-          visible: weekCalExp.hoveredSpan !== null && weekCalExp.hoveredSpan !== undefined
-          text: weekCalExp.hoveredSpan
-            ? weekCalExp.hoveredSpan.start + "–" + weekCalExp.hoveredSpan.end +
-              "  " + (weekCalExp.hoveredSpan.title || "") +
-              (weekCalExp.hoveredSpan.appName ? "  ·  " + weekCalExp.hoveredSpan.appName : "") +
-              (weekCalExp.hoveredSpan.minutes ? "  ·  " + dayflow.fmtDur(weekCalExp.hoveredSpan.minutes) : "")
-            : ""
-          textFormat: Text.PlainText
-          color: dayflow.foreground
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
         }
       }
 
@@ -178,14 +134,12 @@ Flickable {
     }
 
     // ---- compact: week calendar card on top, day detail below ----
-    Rectangle {
+    PanelCard {
+      pal: dayflow
       visible: !dayflow.expanded
         && (dayflow.weekBlocks.length > 0 || (dayflow.weekCards && dayflow.weekCards.length > 0))
       width: parent.width
       height: visible ? weekWrapCol.implicitHeight + Style.space(12) : 0
-      radius: Style.cornerRadius
-      color: dayflow.fgFill(0.04)
-      border.color: dayflow.fgFill(0.08)
 
       Column {
         id: weekWrapCol
@@ -193,33 +147,9 @@ Flickable {
         anchors.centerIn: parent
         spacing: Style.space(4)
 
-        WeekCalendar {
-          id: weekCal
+        WeekHero {
           width: parent.width
-          pal: dayflow
-          todayIndex: dayflow.todayIndex()
-          selectedIndex: dayflow.todayIndex() + dayflow.dayOffset
-          spansFor: function(d) { return dayflow.weekDaySpans(d) }
-          onDayClicked: function(dayIndex, span) { root.jumpToDay(dayIndex, span) }
-        }
-
-        // Hover readout — slivers too thin for inline labels still get a
-        // literal "what was I doing" line here.
-        Text {
-          width: parent.width
-          height: visible ? Math.ceil(Style.font.caption * 1.4) : 0
-          visible: weekCal.hoveredSpan !== null && weekCal.hoveredSpan !== undefined
-          text: weekCal.hoveredSpan
-            ? weekCal.hoveredSpan.start + "–" + weekCal.hoveredSpan.end +
-              "  " + (weekCal.hoveredSpan.title || "") +
-              (weekCal.hoveredSpan.appName ? "  ·  " + weekCal.hoveredSpan.appName : "") +
-              (weekCal.hoveredSpan.minutes ? "  ·  " + dayflow.fmtDur(weekCal.hoveredSpan.minutes) : "")
-            : ""
-          textFormat: Text.PlainText
-          color: dayflow.foreground
-          font.family: dayflow.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
+          dayflow: root.dayflow
         }
       }
     }

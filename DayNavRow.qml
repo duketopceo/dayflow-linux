@@ -2,8 +2,8 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// ‹ Today › navigation row shared by the FullView day-scoped panes.
-// The panel keeps its own variant (it disables forward-nav past today).
+// ‹ Today › navigation row for the FullView panes that have no DayPane
+// (Timelapse, Agents). Today/Week panes use DayPane's own day switcher.
 Row {
   id: nav
 
