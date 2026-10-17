@@ -49,6 +49,8 @@ Row {
           if (!nav.dayflow) return
           if (modelData.act === 0) {
             if (nav.dayflow.dayOffset !== 0) {
+              nav.dayflow.pendingSpanTs = 0
+              nav.dayflow.pendingSpanFor = ""
               nav.dayflow.dayOffset = 0
               nav.dayflow.loadTimeline()
             }

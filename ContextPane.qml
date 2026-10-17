@@ -106,7 +106,7 @@ Column {
         ctx.fillStyle = c
         ctx.fillRect(x1, L.left[n].y, L.nodeW, L.left[n].h)
         ctx.fillRect(x2, L.right[n].y, L.nodeW, L.right[n].h)
-        ctx.fillStyle = Qt.rgba(0.8, 0.8, 0.85, 0.9)
+        ctx.fillStyle = Qt.rgba(pane.dayflow.foreground.r, pane.dayflow.foreground.g, pane.dayflow.foreground.b, 0.9)
         ctx.font = Math.round(Style.font.caption) + "px " + (pane.dayflow ? pane.dayflow.fontFamily : "sans")
         ctx.textAlign = "right"
         ctx.fillText(labelFor(n),

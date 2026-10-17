@@ -18,25 +18,9 @@ Item {
   property string filter: "all"
   signal spanClicked(int index)
 
-  // Minute-of-day — epoch fields are authoritative; "12:00 AM" strings
-  // are the fallback for injected fixtures.
-  function toMin(span, key) {
-    var ts = Number(span[key + "_ts"] || 0)
-    if (ts > 0) {
-      var dt = new Date(ts * 1000)
-      return dt.getHours() * 60 + dt.getMinutes()
-    }
-    var s = String(span[key] || "")
-    var m = s.match(/^(\d+):(\d+)\s*(AM|PM)?$/i)
-    if (!m) return 0
-    var h = parseInt(m[1], 10), mn = parseInt(m[2], 10)
-    if (m[3]) {
-      var pm = m[3].toUpperCase() === "PM"
-      if (h === 12) h = pm ? 12 : 0
-      else if (pm) h += 12
-    }
-    return h * 60 + mn
-  }
+  // Minute-of-day + midnight-crossing rules live in SpanTime — shared
+  // with WeekCalendar so both surfaces interpret spans identically.
+  SpanTime { id: spanTime }
 
   function keep(s) {
     if (tl.filter === "core") return s.productive === true
@@ -60,7 +44,7 @@ Item {
     var m = 1440
     var list = spans || []
     for (var i = 0; i < list.length; i++) {
-      var s = toMin(list[i], "start")
+      var s = spanTime.toMin(list[i], "start")
       if (s < m) m = s
     }
     return m >= 1440 ? 0 : Math.floor(m / 60) * 60
@@ -74,15 +58,21 @@ Item {
     // earlier. `spans` arrives newest-first — with that order the newest
     // card claims its late-time y and every earlier card is pushed below
     // it, leaving the whole top of the axis empty.
+    // Filter before sorting and memoize start minutes — sorting on
+    // spanTime.toMin() calls directly would allocate ~2 Date objects per compare.
     var order = []
-    for (var i = 0; i < list.length; i++) order.push(i)
-    order.sort(function(a, b) { return toMin(list[a], "start") - toMin(list[b], "start") })
+    var sm = []
+    for (var i = 0; i < list.length; i++) {
+      if (!keep(list[i])) continue
+      sm[i] = spanTime.toMin(list[i], "start")
+      order.push(i)
+    }
+    order.sort(function(a, b) { return sm[a] - sm[b] })
     for (var k = 0; k < order.length; k++) {
       var i = order[k]
       var s = list[i]
-      if (!keep(s)) continue
-      var startM = toMin(s, "start")
-      var endM = Math.max(startM + 1, toMin(s, "end"))
+      var startM = sm[i]
+      var endM = Math.max(startM + 1, spanTime.endMin(s, startM))
       var h = Math.min(Math.max(cardMinH, (endM - startM) * pxPerMin), 24 * 60 * pxPerMin)
       var y = Math.max((startM - viewStart) * pxPerMin, bottom + 6)
       out.push({ i: i, y: y, h: h })
@@ -234,11 +224,11 @@ Item {
 
   // Current-time line when viewing today.
   Rectangle {
+    id: nowLine
     visible: tl.showNow
-    readonly property int nowMin: {
-      var d = new Date()
-      return d.getHours() * 60 + d.getMinutes()
-    }
+    // Assignable — the timer re-stamps it. Emitting nowMinChanged() on a
+    // bound property only refreshes listeners with the stale value.
+    property int nowMin: 0
     anchors.left: parent.left
     anchors.leftMargin: tl.gutterW - Style.space(10)
     anchors.right: parent.right
@@ -246,6 +236,18 @@ Item {
     height: 2
     color: tl.pal ? tl.pal.accentFill(0.95) : "white"
     opacity: nowMin >= tl.viewStart && (nowMin - tl.viewStart) * tl.pxPerMin <= tl.height ? 1 : 0
-    Timer { interval: 30000; running: tl.showNow; repeat: true; onTriggered: parent.nowMinChanged() }
+    Component.onCompleted: {
+      var d = new Date()
+      nowMin = d.getHours() * 60 + d.getMinutes()
+    }
+    Timer {
+      interval: 30000
+      running: tl.showNow
+      repeat: true
+      onTriggered: {
+        var d = new Date()
+        nowLine.nowMin = d.getHours() * 60 + d.getMinutes()
+      }
+    }
   }
 }

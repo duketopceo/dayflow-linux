@@ -35,6 +35,7 @@ Flickable {
 
     DayPane {
       id: todayDay
+      paneScope: "fullview"
       width: parent.width
       dayflow: pane.dayflow
       selectedSpan: pane.selSpan

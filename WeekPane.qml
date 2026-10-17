@@ -39,6 +39,7 @@ Flickable {
         width: Math.floor(parent.width * 0.62)
         dayflow: pane.dayflow
         logPrefix: "fullview week cal jump "
+        spanScope: "fullview"
         // Fill the pane's visible height with the day's active span —
         // the "no wasted space" tier. Clamped into the full-density
         // band so every card carries icon + wrapped title + time + app.
@@ -49,6 +50,7 @@ Flickable {
 
       DayPane {
         id: heroDay
+        paneScope: "fullview"
         width: parent.width - heroCal.width - Style.space(10)
         dayflow: pane.dayflow
         selectedSpan: pane.selSpan

@@ -11,6 +11,15 @@ Column {
 
   property int calYear: new Date().getFullYear()
   property int calMonth: new Date().getMonth()
+  // One "today" per open — the cell delegates used to allocate ~5 Date
+  // objects each; re-stamped on show so a picker open across midnight
+  // doesn't gate/label the wrong day.
+  property var todayRef: new Date()
+  property int todayD: todayRef.getDate()
+  property int todayM: todayRef.getMonth()
+  property int todayY: todayRef.getFullYear()
+
+  onVisibleChanged: { if (visible) todayRef = new Date() }
 
   spacing: Style.space(4)
 
@@ -36,6 +45,8 @@ Column {
     var sel = new Date(cal.calYear, cal.calMonth, day)
     var today = new Date()
     today.setHours(0, 0, 0, 0)
+    cal.dayflow.pendingSpanTs = 0
+    cal.dayflow.pendingSpanFor = ""
     cal.dayflow.dayOffset = Math.round((sel - today) / 86400000)
     cal.visible = false
     cal.dayflow.uilog("calendar pick " + Qt.formatDate(sel, "yyyy-MM-dd"))
@@ -98,11 +109,10 @@ Column {
         height: Style.space(24)
         radius: Style.cornerRadius
         property int dayNum: modelData
-        property bool isToday: dayNum === new Date().getDate()
-          && cal.calMonth === new Date().getMonth()
-          && cal.calYear === new Date().getFullYear()
+        property bool isToday: dayNum === cal.todayD
+          && cal.calMonth === cal.todayM && cal.calYear === cal.todayY
         property bool isFuture: dayNum > 0 &&
-          new Date(cal.calYear, cal.calMonth, dayNum) > new Date()
+          new Date(cal.calYear, cal.calMonth, dayNum) > cal.todayRef
         color: isToday ? cal.dayflow.accentFill(0.18)
           : (dayMa.containsMouse && dayNum > 0 && !isFuture ? cal.dayflow.accentFill(0.08) : "transparent")
         border.color: isToday ? cal.dayflow.accentFill(0.5) : "transparent"

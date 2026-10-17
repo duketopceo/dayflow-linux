@@ -18,6 +18,8 @@ Column {
   property real todayScale: 1.7
   // Log prefix so the uilog trail still tells popup from FullView.
   property string logPrefix: "week cal jump "
+  // Which surface's DayPanes may consume the jump (popup | fullview).
+  property string spanScope: "popup"
 
   readonly property alias calendar: cal
 
@@ -27,7 +29,12 @@ Column {
     dayflow.uilog(logPrefix + offset)
     if (span) {
       var kids = span.children || []
+      dayflow.pendingSpanFor = hero.spanScope
       dayflow.pendingSpanTs = Number(kids.length ? kids[0].start_ts : (span.start_ts || 0))
+    } else {
+      // A blank-column jump abandons any armed pending selection.
+      dayflow.pendingSpanTs = 0
+      dayflow.pendingSpanFor = ""
     }
     dayflow.dayOffset = offset
     dayflow.loadTimeline()
