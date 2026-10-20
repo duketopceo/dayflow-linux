@@ -9,10 +9,16 @@ cd "$(dirname "$0")/../.."
 ROOT="$PWD"
 SURFACE="${1:?surface name (bar|popup|fullview-today)}"
 THEME="${2:?theme name}"
-SCALE="${3:-2}"
-STATE="recording"
-if [ "${4:-}" = "--state" ]; then STATE="${5:?state after --state}"; fi
-shift $(( $# > 4 ? 5 : $# > 3 ? 4 : $# )) 2>/dev/null || true
+SCALE=2; STATE="recording"
+shift 2
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --state) STATE="${2:?state after --state}"; shift 2 ;;
+    --state=*) STATE="${1#--state=}"; shift ;;
+    [0-9]*) SCALE="$1"; shift ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
 
 SCRATCH=$(mktemp -d /tmp/dayflow-preview.XXXXXX)
 trap 'rm -rf "$SCRATCH"' EXIT
@@ -36,13 +42,10 @@ export DAYFLOW_DATA_DIR="$SCRATCH/.local/share/dayflow"
 export DAYFLOW_CONFIG="$SCRATCH/.config/dayflow/config.json"
 mkdir -p "$DAYFLOW_DATA_DIR" "$(dirname "$DAYFLOW_CONFIG")"
 printf '{}\n' > "$DAYFLOW_CONFIG"
-# Prefer the repo build (has dev seed-day); fall back to installed.
-if [ -x "$ROOT/engine/dayflow-dev" ]; then
-  export DAYFLOW_REAL_BIN="$ROOT/engine/dayflow-dev"
-else
-  (cd "$ROOT/engine" && go build -o dayflow-dev .)
-  export DAYFLOW_REAL_BIN="$ROOT/engine/dayflow-dev"
-fi
+# Always build — warm cache makes it seconds, and a stale binary would
+# silently seed an outdated fixture.
+(cd "$ROOT/engine" && go build -o dayflow-dev .)
+export DAYFLOW_REAL_BIN="$ROOT/engine/dayflow-dev"
 export DAYFLOW_STATE="$STATE"
 export DAYFLOW_SURFACE="$SURFACE"
 export DAYFLOW_SCALE="$SCALE"

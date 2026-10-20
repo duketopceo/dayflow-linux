@@ -218,6 +218,9 @@ func main() {
 			fatal(fmt.Errorf("dev requires a subcommand (seed-day)"))
 		}
 		date := flagValue(args, "--date")
+		if len(args) > 1 && args[1] != "--date" {
+			date = args[1] // positional date also accepted
+		}
 		if date == "" {
 			date = time.Now().Format("2006-01-02")
 		}

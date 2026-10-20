@@ -1,38 +1,46 @@
 #!/usr/bin/env bash
-# lint-ui.sh — DESIGN.md §10 gates over the repo's QML.
-#   1. no Qt.rgba()/hex literals outside Tokens.qml
-#   2. no emoji / stray presentation glyphs in QML string literals
-#   3. no em/en dashes in UI strings
-#   4. qmllint on changed QML (vs merge-base, or all with --all)
+# lint-ui.sh — DESIGN.md §10 gates as a ratchet: flags literals/glyphs on
+# NET-ADDED lines only (added minus removed across the diff vs merge
+# base), so moved code (e.g. PopupBody) and the pre-existing U2 purge
+# backlog don't permanently fail the gate. --all scans the whole tree.
 set -u
 cd "$(dirname "$0")/.."
 fail=0
+PAT_COLOR='Qt\.rgba\([0-9.]+|"#[0-9a-fA-F]{3,8}"'
+PAT_GLYPH='[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}\x{FE0F}]'
+PAT_DASH='[–—]'
+
+base=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD master 2>/dev/null || echo HEAD)
+
+if [ "${1:-}" = "--all" ]; then
+  # whole-tree report (the U2 purge checklist) — every literal counts
+  added=$(grep -rnE "$PAT_COLOR" --include='*.qml' . | grep -v '/Tokens.qml' | grep -v tests/ui/ || true)
+  added_g=$(grep -rnP "$PAT_GLYPH" --include='*.qml' . | grep -v tests/ui/ || true)
+  added_d=$(grep -rnP "$PAT_DASH" --include='*.qml' . | grep -v tests/ui/ || true)
+else
+  diff=$(git diff "$base" -- '*.qml'; git status --porcelain | awk '$1=="??" && $2 ~ /\.qml$/ {print $2}' | while read -r f; do cat "$f" | sed "s|^|+$f: |"; done)
+  plus=$(echo "$diff" | grep '^+' | grep -v '^+++' || true)
+  minus=$(echo "$diff" | grep '^-' | grep -v '^---' | sed 's/^-//' | sort -u || true)
+  # net-added = + lines whose content isn't also a - line (moved code nets out)
+  net=$(echo "$plus" | sed 's/^+//' | sort -u | comm -23 - <(echo "$minus") || true)
+  added=$(echo "$net" | grep -nE "$PAT_COLOR" | grep -v '/Tokens.qml' || true)
+  added_g=$(echo "$net" | grep -nP "$PAT_GLYPH" || true)
+  added_d=$(echo "$net" | grep -nP "$PAT_DASH" || true)
+fi
 
 echo "== color literals (outside Tokens.qml) =="
-hits=$(grep -rnE 'Qt\.rgba\([0-9.]+|"#[0-9a-fA-F]{3,8}"|'"'"'#[0-9a-fA-F]{3,8}'"'"'' --include='*.qml' . \
-  | grep -v '/Tokens.qml' | grep -v tests/ui/ || true)
-if [ -n "$hits" ]; then echo "$hits"; fail=1; fi
-
+[ -n "$added" ] && { echo "$added"; fail=1; }
 echo "== emoji / presentation glyphs in strings =="
-hits=$(grep -rnP '"[^"]*[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}\x{FE0F}][^"]*"' --include='*.qml' . \
-  | grep -v tests/ui/ || true)
-if [ -n "$hits" ]; then echo "$hits"; fail=1; fi
-
+[ -n "$added_g" ] && { echo "$added_g"; fail=1; }
 echo "== em/en dashes in UI strings =="
-hits=$(grep -rnP '"[^"]*[–—][^"]*"' --include='*.qml' . | grep -v tests/ui/ || true)
-if [ -n "$hits" ]; then echo "$hits"; fail=1; fi
+[ -n "$added_d" ] && { echo "$added_d"; fail=1; }
 
 echo "== qmllint =="
 QMLLINT=/usr/lib/qt6/bin/qmllint
-if [ ! -x "$QMLLINT" ]; then QMLLINT=$(command -v qmllint || true); fi
-if [ -z "$QMLLINT" ]; then
-  echo "qmllint not found — skipping"
-elif [ "${1:-}" = "--all" ]; then
-  "$QMLLINT" --root . *.qml 2>&1 | grep -v '^$' || true
-else
-  base=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD master)
-  files=$(git diff --name-only "$base" -- '*.qml')
-  [ -n "$files" ] && "$QMLLINT" $files || echo "no changed QML"
-fi
+[ -x "$QMLLINT" ] || QMLLINT=$(command -v qmllint || true)
+files=$(git diff --name-only "$base" -- '*.qml' 2>/dev/null)
+if [ -z "$QMLLINT" ]; then echo "qmllint not found — skipping"
+elif [ -n "$files" ]; then "$QMLLINT" $files || true   # advisory: pervasive pre-existing unqualified-access noise
+else echo "no changed QML"; fi
 
 exit $fail

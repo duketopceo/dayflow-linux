@@ -14,6 +14,9 @@ import qs.Commons
     color: Color.background
 
     QtObject { id: summarizeProc; property bool running: false }
+    QtObject { id: toggleProc; property bool running: false }
+    QtObject { id: persistExpandedProc; property bool running: false }
+    QtObject { id: ignoreProc; property bool running: false }
 
     QtObject {
         id: dayflow
@@ -169,6 +172,12 @@ import qs.Commons
         property bool onboardingSkipped: true
         property bool paused: false
         property string pluginVersion: "dev"
+    property string currentTab: "today"
+    readonly property bool noticeIsError: noticeTone === "error"
+    property bool agentsLoading: false
+    property bool agentRecapsEnabled: false
+    property var agentSources: []
+
         property var skewDismissedFor: ({})
         property string summarizePhase: ""
     function versionNewer(a, b) { return false }
@@ -177,6 +186,7 @@ import qs.Commons
     Loader {
         id: body
         anchors.fill: parent
+        transform: Scale { origin.x: 0; origin.y: 0; xScale: win.uiScale / 2; yScale: win.uiScale / 2 }
         source: {
             switch (win.surface) {
             case "popup":           return "PopupBody.qml";

@@ -20,6 +20,8 @@ func devSeedDay(date string) error {
 	def := defaultDataDir()
 	abs, _ := filepath.Abs(dir)
 	absDef, _ := filepath.Abs(def)
+	if r, err := filepath.EvalSymlinks(abs); err == nil { abs = r }
+	if r, err := filepath.EvalSymlinks(absDef); err == nil { absDef = r }
 	if abs == absDef {
 		return fmt.Errorf("DAYFLOW_DATA_DIR resolves to the default data dir (%s) — refusing", def)
 	}
