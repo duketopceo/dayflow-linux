@@ -36,21 +36,21 @@ func devSeedDay(date string) error {
 	at := func(h, m int) int64 { return base.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute).Unix() }
 	type b struct {
 		s, e                       int64
-		title, summary, cat, app   string
+		title, summary, cat        string
 		frames                     int
 		status, err                string
 		prod                       *int
 	}
 	p1, p0 := 1, 0
 	blocks := []b{
-		{at(9, 0), at(9, 30), "Dayflow popup polish", "tightening the classic popup chrome", "coding", "Ghostty", 60, "done", "", &p1},
-		{at(9, 30), at(10, 15), "Weekly review standup", "team sync and planning", "communication", "Slack", 90, "done", "", &p1},
+		{at(9, 0), at(9, 30), "Dayflow popup polish", "tightening the classic popup chrome", "coding", 60, "done", "", &p1},
+		{at(9, 30), at(10, 15), "Weekly review standup", "team sync and planning", "communication", 90, "done", "", &p1},
 		// gap 10:15-10:45 (no block) — the "one gap" fixture
-		{at(10, 45), at(11, 30), "Hacker News rabbit hole", "distraction", "browsing", "Firefox", 90, "done", "", &p0},
-		{at(11, 30), at(12, 0), "vision summarizer failure", "summarize failed: provider unreachable", "idle", "", 10, "failed", "provider error", nil},
-		{at(13, 0), at(14, 30), "engine capture backend work", "capture seam + x11 adapter", "coding", "Ghostty", 180, "done", "", &p1},
-		{at(14, 30), at(15, 0), "email triage", "inbox zero run", "communication", "Thunderbird", 45, "done", "", &p1},
-		{at(15, 0), at(16, 30), "docs and roadmap writing", "program roadmap doc", "writing", "Obsidian", 100, "done", "", &p1},
+		{at(10, 45), at(11, 30), "Hacker News rabbit hole", "distraction", "browsing", 90, "done", "", &p0},
+		{at(11, 30), at(12, 0), "vision summarizer failure", "summarize failed: provider unreachable", "idle", 10, "failed", "provider error", nil},
+		{at(13, 0), at(14, 30), "engine capture backend work", "capture seam + x11 adapter", "coding", 180, "done", "", &p1},
+		{at(14, 30), at(15, 0), "email triage", "inbox zero run", "communication", 45, "done", "", &p1},
+		{at(15, 0), at(16, 30), "docs and roadmap writing", "program roadmap doc", "writing", 100, "done", "", &p1},
 	}
 	for _, blk := range blocks {
 		if _, err := db.Exec(`INSERT OR REPLACE INTO blocks
