@@ -6,3 +6,10 @@ AGENTS.md
 .codebase-memory/
 app/portal-capture/dayflow-portal
 __pycache__/
+shots/
+engine/dayflow-dev
+# preview sandbox artifacts
+scripts/preview/*.qml
+!scripts/preview/shell.qml
+scripts/preview/shots/
+scripts/preview/qs/

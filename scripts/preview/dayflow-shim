@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# dayflow shim for the preview sandbox. Sits first on PATH.
+# `status --json` returns a canned payload matching the real key set for
+# the requested DAYFLOW_STATE; `missing` exits 127 like a real spawn
+# failure; every other subcommand passes through to the real binary.
+set -u
+
+REAL_BIN="${DAYFLOW_REAL_BIN:-dayflow}"
+state="${DAYFLOW_STATE:-recording}"
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--state" ]; then state="$a"; fi
+  prev="$a"
+done
+
+if [ "${1:-}" = "status" ]; then
+  case "$state" in
+    missing) exit 127 ;;
+    paused)    paused=true;  cap=paused ;;
+    locked)    paused=false; cap=locked ;;
+    down|stalled) paused=false; cap=down ;;
+    *)         paused=false; cap=recording ;;
+  esac
+  printf '{"capture_state":"%s","recording":%s,"paused":%s,"configured":true,"installed":true,"version":"dev","model":"gemma3:4b","active_app":"Ghostty","ignored_apps":[],"frames_today":42,"blocks_pending":0,"storage_text":"32 MB","today_minutes":312,"panel_expanded":false,"last_block_end_ts":%s}\n' \
+    "$cap" "$([ "$cap" = recording ] && echo true || echo false)" "$paused" "$(date +%s)"
+  exit 0
+fi
+
+# Only read-only subcommands pass through — install/daemon/chat/sync/
+# provider writes/config patches must never leave the sandbox.
+case "${1:-}" in
+  today|timeline|day|week|weekly|insights|standup|goal|conversations|briefing|agents|forecast|blocks|frames|detect|models|completions|key|dev|log)
+    exec "$REAL_BIN" "$@" ;;
+  provider)
+    [ "${2:-}" = "list" ] && exec "$REAL_BIN" "$@" || { echo "shim: provider $2 blocked" >&2; exit 1; } ;;
+  config)
+    case "${2:-}" in --json|"") exec "$REAL_BIN" "$@" ;; *) echo "shim: config writes blocked" >&2; exit 1 ;; esac ;;
+  *) echo "shim: '$1' blocked in preview sandbox" >&2; exit 1 ;;
+esac
