@@ -155,11 +155,13 @@ Item {
     onWidthChanged: cal.scrollToDay(cal.selectedIndex >= 0 ? cal.selectedIndex : cal.todayIndex)
     WheelHandler {
       target: colFlick
+      enabled: cal.visibleDays < 7
       onWheel: function(e) {
         var dx = e.pixelDelta.x !== 0 ? -e.pixelDelta.x : -e.angleDelta.y / 2
-        colFlick.contentX = Math.max(0, Math.min(cal.daysContentW - colFlick.width,
-                                                 colFlick.contentX + dx))
-        e.accepted = true
+        var nx = Math.max(0, Math.min(cal.daysContentW - colFlick.width,
+                                      colFlick.contentX + dx))
+        e.accepted = nx !== colFlick.contentX
+        colFlick.contentX = nx
       }
     }
     Repeater {

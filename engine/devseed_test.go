@@ -13,6 +13,9 @@ func TestSeedDayRefusesUnset(t *testing.T) {
 }
 
 func TestSeedDayRefusesDefault(t *testing.T) {
+	// Relocate HOME so a regressed guard writes into the temp dir, never
+	// the real store.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("DAYFLOW_DATA_DIR", defaultDataDir())
 	if err := devSeedDay("2026-10-19"); err == nil {
 		t.Fatal("expected refusal on default data dir")

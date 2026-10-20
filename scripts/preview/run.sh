@@ -7,8 +7,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT="$PWD"
-SURFACE="${1:?surface name (bar|popup|fullview-today)}"
+SURFACE="${1:?surface name (popup|week|fullview-today)}"
 THEME="${2:?theme name}"
+case "$SURFACE" in popup|week|fullview-today) ;; *) echo "unknown surface: $SURFACE (popup|week|fullview-today)" >&2; exit 1 ;; esac
 SCALE=2; STATE="recording"
 shift 2
 while [ $# -gt 0 ]; do
@@ -67,7 +68,7 @@ for mod in Commons Ui; do
   [ -d "$src" ] && ln -sfn "$src" "$SCRATCH/qs/$mod"
   [ -d "$src" ] && ln -sfn "$src" "$ROOT/scripts/preview/qs/$mod"
 done
-trap 'rm -rf "$SCRATCH" "$ROOT/scripts/preview/qs"' EXIT
+trap 'rm -rf "$SCRATCH" "$ROOT/scripts/preview/qs"; find "$ROOT/scripts/preview" -maxdepth 1 -name "*.qml" -type l -delete' EXIT
 
 HOME="$SCRATCH" QT_QPA_PLATFORM=offscreen QML_IMPORT_PATH="$SCRATCH" quickshell -p "$ROOT/scripts/preview" 2>&1 | tee "$SCRATCH/qs.log" || {
   tail -20 "$SCRATCH/qs.log" >&2; exit 1; }

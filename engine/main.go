@@ -218,7 +218,7 @@ func main() {
 			fatal(fmt.Errorf("dev requires a subcommand (seed-day)"))
 		}
 		date := flagValue(args, "--date")
-		if len(args) > 1 && args[1] != "--date" {
+		if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
 			date = args[1] // positional date also accepted
 		}
 		if date == "" {

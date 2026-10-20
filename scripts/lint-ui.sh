@@ -6,11 +6,12 @@
 set -u
 cd "$(dirname "$0")/.."
 fail=0
-PAT_COLOR='Qt\.rgba\([0-9.]+|"#[0-9a-fA-F]{3,8}"'
+PAT_COLOR='Qt\.rgba\([0-9.]+|"#[0-9a-fA-F]{3,8}"|'"'"'#[0-9a-fA-F]{3,8}'"'"''
 PAT_GLYPH='[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}\x{FE0F}]'
 PAT_DASH='[–—]'
 
-base=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD master 2>/dev/null || echo HEAD)
+base=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD master 2>/dev/null)
+if [ -z "$base" ]; then echo "no merge base with master — cannot ratchet" >&2; exit 1; fi
 
 if [ "${1:-}" = "--all" ]; then
   # whole-tree report (the U2 purge checklist) — every literal counts
@@ -20,9 +21,10 @@ if [ "${1:-}" = "--all" ]; then
 else
   diff=$(git diff "$base" -- '*.qml'; git status --porcelain | awk '$1=="??" && $2 ~ /\.qml$/ {print $2}' | while read -r f; do cat "$f" | sed "s|^|+$f: |"; done)
   plus=$(echo "$diff" | grep '^+' | grep -v '^+++' || true)
-  minus=$(echo "$diff" | grep '^-' | grep -v '^---' | sed 's/^-//' | sort -u || true)
-  # net-added = + lines whose content isn't also a - line (moved code nets out)
-  net=$(echo "$plus" | sed 's/^+//' | sort -u | comm -23 - <(echo "$minus") || true)
+  minus=$(echo "$diff" | grep '^-' | grep -v '^---' | sed 's/^-//' | sort || true)
+  # net-added = + lines whose content isn't also a - line (moved code nets
+  # out); counts preserved so one removal cancels only one addition.
+  net=$(echo "$plus" | sed 's/^+//' | sort | comm -23 - <(echo "$minus") || true)
   added=$(echo "$net" | grep -nE "$PAT_COLOR" | grep -v '/Tokens.qml' || true)
   added_g=$(echo "$net" | grep -nP "$PAT_GLYPH" || true)
   added_d=$(echo "$net" | grep -nP "$PAT_DASH" || true)
@@ -38,7 +40,7 @@ echo "== em/en dashes in UI strings =="
 echo "== qmllint =="
 QMLLINT=/usr/lib/qt6/bin/qmllint
 [ -x "$QMLLINT" ] || QMLLINT=$(command -v qmllint || true)
-files=$(git diff --name-only "$base" -- '*.qml' 2>/dev/null)
+files=$(git diff --name-only "$base" -- '*.qml' 2>/dev/null; git status --porcelain | awk '$1=="??" && $2 ~ /\.qml$/ {print $2}')
 if [ -z "$QMLLINT" ]; then echo "qmllint not found — skipping"
 elif [ -n "$files" ]; then "$QMLLINT" $files || true   # advisory: pervasive pre-existing unqualified-access noise
 else echo "no changed QML"; fi

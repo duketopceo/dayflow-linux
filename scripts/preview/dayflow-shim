@@ -26,4 +26,14 @@ if [ "${1:-}" = "status" ]; then
   exit 0
 fi
 
-exec "$REAL_BIN" "$@"
+# Only read-only subcommands pass through — install/daemon/chat/sync/
+# provider writes/config patches must never leave the sandbox.
+case "${1:-}" in
+  today|timeline|day|week|weekly|insights|standup|goal|conversations|briefing|agents|forecast|blocks|frames|detect|models|completions|key|dev|log)
+    exec "$REAL_BIN" "$@" ;;
+  provider)
+    [ "${2:-}" = "list" ] && exec "$REAL_BIN" "$@" || { echo "shim: provider $2 blocked" >&2; exit 1; } ;;
+  config)
+    case "${2:-}" in --json|"") exec "$REAL_BIN" "$@" ;; *) echo "shim: config writes blocked" >&2; exit 1 ;; esac ;;
+  *) echo "shim: '$1' blocked in preview sandbox" >&2; exit 1 ;;
+esac
