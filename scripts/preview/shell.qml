@@ -3,7 +3,7 @@
 // $DAYFLOW_SHOT, then quits. Surface comes from $DAYFLOW_SURFACE.
 import QtQuick
 import Quickshell
-import qs.Commons
+import qs.Commons as Commons
 
   FloatingWindow {
     id: win
@@ -11,7 +11,7 @@ import qs.Commons
     property string shotPath: Quickshell.env("DAYFLOW_SHOT")
     property real uiScale: parseFloat(Quickshell.env("DAYFLOW_SCALE")) || 2
     implicitWidth: 860; implicitHeight: 720
-    color: Color.background
+    color: Commons.Color.background
 
     QtObject { id: summarizeProc; property bool running: false }
     QtObject { id: toggleProc; property bool running: false }
@@ -20,9 +20,9 @@ import qs.Commons
 
     QtObject {
         id: dayflow
-        property color foreground: Color.foreground
-        property color dim: Color.muted
-        property color accent: Color.accent
+        property color foreground: Commons.Color.foreground
+        property color dim: Commons.Color.muted
+        property color accent: Commons.Color.accent
         property string fontFamily: "monospace"
         property bool configLoaded: true
         property bool configured: true
@@ -183,6 +183,11 @@ import qs.Commons
     function versionNewer(a, b) { return false }
     }
 
+    Rectangle {
+        id: stage
+        anchors.fill: parent
+        color: Commons.Color.background
+
     Loader {
         id: body
         anchors.fill: parent
@@ -196,11 +201,12 @@ import qs.Commons
             }
         }
     }
+    }
 
-    Component.onCompleted: { win.visible = true }
+    Component.onCompleted: { win.visible = true; }
     Timer {
         interval: 2500; running: true; repeat: false
-        onTriggered: body.grabToImage(function(res) {
+        onTriggered: stage.grabToImage(function(res) {
             res.saveToFile(win.shotPath);
             Qt.quit();
         })

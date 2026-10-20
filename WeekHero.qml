@@ -16,6 +16,8 @@ Column {
   // Forwarded to WeekCalendar (same defaults as WeekCalendar's own).
   property real hourH: Style.space(16)
   property real todayScale: 1.7
+  // Day columns visible at once; the rest scroll (default 3).
+  property int visibleDays: 3
   // Log prefix so the uilog trail still tells popup from FullView.
   property string logPrefix: "week cal jump "
   // Which surface's DayPanes may consume the jump (popup | fullview).
@@ -48,6 +50,7 @@ Column {
     pal: hero.dayflow
     hourH: hero.hourH
     todayScale: hero.todayScale
+    visibleDays: hero.visibleDays
     todayIndex: hero.dayflow ? hero.dayflow.todayIndex() : -1
     selectedIndex: hero.dayflow ? hero.dayflow.todayIndex() + hero.dayflow.dayOffset : -1
     spansFor: function(d) { return hero.dayflow ? hero.dayflow.weekDaySpans(d) : [] }

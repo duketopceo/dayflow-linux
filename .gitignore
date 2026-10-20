@@ -12,3 +12,4 @@ engine/dayflow-dev
 scripts/preview/*.qml
 !scripts/preview/shell.qml
 scripts/preview/shots/
+scripts/preview/qs/

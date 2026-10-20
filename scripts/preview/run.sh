@@ -61,11 +61,13 @@ dayflow dev seed-day --date "$(date +%F)" >/dev/null
 
 # --- link repo QML into the preview package ------------------------------
 ln -sfn "$ROOT"/*.qml "$ROOT/scripts/preview/" 2>/dev/null || true
-mkdir -p "$SCRATCH/qs"
+mkdir -p "$SCRATCH/qs" "$ROOT/scripts/preview/qs"
 for mod in Commons Ui; do
   src="/usr/share/omarchy/shell/$mod"
   [ -d "$src" ] && ln -sfn "$src" "$SCRATCH/qs/$mod"
+  [ -d "$src" ] && ln -sfn "$src" "$ROOT/scripts/preview/qs/$mod"
 done
+trap 'rm -rf "$SCRATCH" "$ROOT/scripts/preview/qs"' EXIT
 
 HOME="$SCRATCH" QT_QPA_PLATFORM=offscreen QML_IMPORT_PATH="$SCRATCH" quickshell -p "$ROOT/scripts/preview" 2>&1 | tee "$SCRATCH/qs.log" || {
   tail -20 "$SCRATCH/qs.log" >&2; exit 1; }
