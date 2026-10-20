@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Failing omaseal stub — the sandbox must never resolve a real credential.
+echo "omaseal: sandbox stub (secrets unavailable)" >&2
+exit 1

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# dayflow shim for the preview sandbox. Sits first on PATH.
+# `status --json` returns a canned payload for the requested --state;
+# every other subcommand passes through to the real binary (seeded with
+# the fixture day via DAYFLOW_DATA_DIR).
+set -u
+
+REAL_BIN="${DAYFLOW_REAL_BIN:-$(command -v -a dayflow | sed -n 2p)}"
+[ -z "$REAL_BIN" ] && REAL_BIN=/usr/local/bin/dayflow
+
+state="${DAYFLOW_STATE:-recording}"
+for a in "$@"; do
+  if [ "$a" = "--state" ] && [ -n "${2:-}" ]; then :; fi
+done
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--state" ]; then state="$a"; fi
+  prev="$a"
+done
+
+if [ "$1" = "status" ]; then
+  case "$state" in
+    paused)    paused=true;  rec=false;  down=false ;;
+    locked)    paused=false; rec=false;  down=false ;;
+    down|stalled) paused=false; rec=false; down=true  ;;
+    missing)   paused=false; rec=false;  down=false ;;
+    *)         paused=false; rec=true;   down=false ;;
+  esac
+  if [ "$state" = "missing" ]; then
+    printf '{"capture_state":"down","recording":false,"paused":false,"installed":false,"today_minutes":0}\n'
+  else
+    printf '{"capture_state":"%s","recording":%s,"paused":%s,"installed":true,"today_minutes":312,"last_block_end_ts":%s}\n' \
+      "$state" "$rec" "$paused" "$(date +%s)"
+  fi
+  exit 0
+fi
+
+exec "$REAL_BIN" "$@"
