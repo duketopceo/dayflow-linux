@@ -20,8 +20,12 @@ func devSeedDay(date string) error {
 	def := defaultDataDir()
 	abs, _ := filepath.Abs(dir)
 	absDef, _ := filepath.Abs(def)
-	if r, err := filepath.EvalSymlinks(abs); err == nil { abs = r }
-	if r, err := filepath.EvalSymlinks(absDef); err == nil { absDef = r }
+	if r, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = r
+	}
+	if r, err := filepath.EvalSymlinks(absDef); err == nil {
+		absDef = r
+	}
 	if abs == absDef {
 		return fmt.Errorf("DAYFLOW_DATA_DIR resolves to the default data dir (%s) — refusing", def)
 	}
@@ -35,13 +39,15 @@ func devSeedDay(date string) error {
 	}
 	defer db.Close()
 	base := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.Local)
-	at := func(h, m int) int64 { return base.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute).Unix() }
+	at := func(h, m int) int64 {
+		return base.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute).Unix()
+	}
 	type b struct {
-		s, e                       int64
-		title, summary, cat        string
-		frames                     int
-		status, err                string
-		prod                       *int
+		s, e                int64
+		title, summary, cat string
+		frames              int
+		status, err         string
+		prod                *int
 	}
 	p1, p0 := 1, 0
 	blocks := []b{
