@@ -213,6 +213,15 @@ func main() {
 	}
 
 	switch cmd {
+	case "dev":
+		if len(args) < 1 || args[0] != "seed-day" {
+			fatal(fmt.Errorf("dev requires a subcommand (seed-day)"))
+		}
+		date := flagValue(args, "--date")
+		if date == "" {
+			date = time.Now().Format("2006-01-02")
+		}
+		fatal(devSeedDay(date))
 	case "complete":
 		c, err := decodeCompletion(os.Stdin, flagValue(args, "--source"), time.Now())
 		fatal(err)
