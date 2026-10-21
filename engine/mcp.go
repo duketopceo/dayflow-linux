@@ -186,7 +186,8 @@ func mcpCall(db *sql.DB, cfg Config, readOnly bool, name string, args map[string
 		if err != nil {
 			return nil, err
 		}
-		res := timelineJSON(blocks)
+		cfg, _ := loadConfig()
+		res := timelineJSON(blocks, cfg)
 		res["start"] = start.Format("2006-01-02")
 		res["end"] = end.Format("2006-01-02")
 		return res, nil

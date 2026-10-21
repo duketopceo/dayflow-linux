@@ -15,6 +15,7 @@ type DonutItem struct {
 	Display    string  `json:"display"`
 	Minutes    float64 `json:"minutes"`
 	Color      string  `json:"color"`
+	ColorRole  string  `json:"color_role"`
 	Percentage float64 `json:"percentage"`
 }
 
@@ -43,10 +44,11 @@ type ContextShift = SankeyLink
 // configured category color (falls back to the default palette) so the
 // panel doesn't re-derive colors from a hardcoded list.
 type HourHeatmap struct {
-	Hour     int     `json:"hour"`
-	Category string  `json:"category"`
-	Minutes  float64 `json:"minutes"`
-	Color    string  `json:"color"`
+	Hour      int     `json:"hour"`
+	Category  string  `json:"category"`
+	Minutes   float64 `json:"minutes"`
+	Color     string  `json:"color"`
+	ColorRole string  `json:"color_role"`
 }
 
 // DayHeatmap is one day bucket in the week heatmap.

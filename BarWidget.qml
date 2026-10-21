@@ -40,6 +40,7 @@ BarWidget {
     panelLoader.item.bar = root.bar
     panelLoader.item.anchorItem = button
     panelLoader.item.hostWidget = root
+    panelLoader.item.df = tokens
   }
 
   function refresh() {
@@ -63,6 +64,10 @@ BarWidget {
   visible: true
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
+
+  // Single Tokens instance for the whole plugin (KTD3) — panes reach it
+  // as dayflow.df after injectPanel hands it down.
+  Tokens { id: tokens }
 
   onBarChanged: injectPanel()
 
