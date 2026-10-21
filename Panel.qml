@@ -14,6 +14,8 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
   property var blocks: []
+  // Token layer — set by BarWidget.injectPanel; null before injection.
+  property var df: null
   property string dateLabel: ""
   property bool paused: false
   property bool configured: true
