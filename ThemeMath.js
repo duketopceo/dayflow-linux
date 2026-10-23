@@ -6,10 +6,15 @@
 .pragma library
 
 function hexToRgb(hex) {
-    var h = String(hex || "").replace("#", "")
-    if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2]
+    var h = String(hex || "").replace("#", "").toLowerCase()
+    if (h.length === 3) {
+        if (!/^[0-9a-f]{3}$/.test(h)) return null
+        h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2]
+    } else if (!/^[0-9a-f]{6}$/.test(h)) {
+        return null
+    }
     var n = parseInt(h, 16)
-    if (isNaN(n) || h.length !== 6) return null
+    if (isNaN(n)) return null
     return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
 }
 

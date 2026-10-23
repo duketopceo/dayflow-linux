@@ -119,9 +119,10 @@ Item {
     var m = {}
     var lines = String(raw || "").split("\n")
     for (var i = 0; i < lines.length; i++) {
-      // Hex boundary after six digits so #aabbccddee does not match as #aabbcc.
-      var match = lines[i].match(/^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})(?![0-9A-Fa-f])/)
-      if (match) m[match[1]] = match[2].toLowerCase()
+      // Complete six-digit value only; quoted forms need a matching closer.
+      // Trailing whitespace or a TOML comment is allowed; junk after the hex is not.
+      var match = lines[i].match(/^\s*([A-Za-z0-9_-]+)\s*=\s*(?:(["'])(#[0-9A-Fa-f]{6})\2|(#[0-9A-Fa-f]{6}))\s*(?:#.*)?$/)
+      if (match) m[match[1]] = (match[3] || match[4]).toLowerCase()
     }
     hues = m
   }

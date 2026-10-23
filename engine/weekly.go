@@ -217,7 +217,7 @@ func buildCategoryDonut(cats []insightDist, total float64, cfg Config) []DonutIt
 				Name:       "other",
 				Display:    "Other",
 				Minutes:    round1(other),
-				Color:      "#808080",
+				Color:      categoryColorHex("other", cfg),
 				ColorRole:  categoryRole("other", cfg),
 				Percentage: pct,
 			})

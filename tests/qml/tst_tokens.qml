@@ -49,13 +49,23 @@ TestCase {
         verify(out !== tk.categories.coding)
     }
 
-    // AE3: swap the staged colors.toml content and recompute — the
-    // category hues must reflect the new palette, not the old.
+    // AE3: stage colors.toml text on the FileView stub, reload, then
+    // fire onFileChanged so the reload path updates categories.
     function test_reloadRecomputes() {
-        tk.parseColors('background = "#000000"\nforeground = "#ffffff"\nblue = "#0000ff"\n')
+        // colorsFile is the second FileView child after themeNameFile.
+        var files = []
+        for (var j = 0; j < tk.children.length; j++) {
+            if (tk.children[j].reload && tk.children[j].stagedText !== undefined)
+                files.push(tk.children[j])
+        }
+        verify(files.length >= 2, "expected theme + colors FileView stubs")
+        var colors = files[1]
+        colors.stagedText = 'background = "#000000"\nforeground = "#ffffff"\nblue = "#0000ff"\n'
+        colors.reload()
         var before = tk.categories.coding
-        tk.parseColors('background = "#000000"\nforeground = "#ffffff"\nblue = "#ff0000"\n')
+        colors.stagedText = 'background = "#000000"\nforeground = "#ffffff"\nblue = "#ff0000"\n'
+        colors.fileChanged()
         var after = tk.categories.coding
-        verify(before !== after, "coding hue did not update after colors.toml swap")
+        verify(before !== after, "coding hue did not update after colors.toml reload")
     }
 }
