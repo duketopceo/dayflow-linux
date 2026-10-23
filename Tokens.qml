@@ -102,9 +102,11 @@ Item {
   FileView {
     id: colorsFile
     path: (Quickshell.env("HOME") || "") + "/.local/state/omarchy/current/theme/colors.toml"
+    watchChanges: true
     printErrors: false
     onLoaded: tk.parseColors(text())
     onLoadFailed: tk.hues = {}
+    onFileChanged: reload()
   }
 
   function reloadHues() {
@@ -117,19 +119,25 @@ Item {
     var m = {}
     var lines = String(raw || "").split("\n")
     for (var i = 0; i < lines.length; i++) {
-      var match = lines[i].match(/^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
+      // Hex boundary after six digits so #aabbccddee does not match as #aabbcc.
+      var match = lines[i].match(/^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})(?![0-9A-Fa-f])/)
       if (match) m[match[1]] = match[2].toLowerCase()
     }
     hues = m
   }
 
-  // Same-name rewrites and direct palette edits still trigger a
-  // recompute even when theme.name is unchanged.
-  onHuesChanged: {}
+  // Burst Color updates (theme apply) collapse to one colors.toml reload.
+  Timer {
+    id: colorReloadDebounce
+    interval: 50
+    repeat: false
+    onTriggered: colorsFile.reload()
+  }
+
   Connections {
     target: Color
-    function onBackgroundChanged() { colorsFile.reload() }
-    function onForegroundChanged() { colorsFile.reload() }
-    function onAccentChanged()     { colorsFile.reload() }
+    function onBackgroundChanged() { colorReloadDebounce.restart() }
+    function onForegroundChanged() { colorReloadDebounce.restart() }
+    function onAccentChanged()     { colorReloadDebounce.restart() }
   }
 }

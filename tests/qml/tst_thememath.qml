@@ -37,13 +37,14 @@ TestCase {
         verify(dh < 12, "hue angle drift " + dh)
     }
 
-    // A hue that can't reach the target within the step budget returns a
-    // fg-blended hex — never throws, never returns garbage.
+    // Near-bg hue with an unreachable 21:1 target exhausts the step budget
+    // and falls through to the fg-blend path (≥4.5 on dark bg).
     function test_budgetExhaustionBlendsTowardFg() {
         var bg = "#101315", fg = "#eceff1"
-        var out = TM.correctContrast("#101315", bg, fg, 4.5, 1.0)
+        var out = TM.correctContrast("#101315", bg, fg, 21.0, 1.0)
         verify(/^#[0-9a-f]{6}$/i.test(out), "output is a hex: " + out)
-        verify(TM.contrast(out, bg) > TM.contrast("#101315", bg) - 0.01)
+        verify(TM.contrast(out, bg) >= 4.5,
+               "fg-blend fallback contrast " + TM.contrast(out, bg))
     }
 
     // composite() sanity: alpha 1 = the hue itself.

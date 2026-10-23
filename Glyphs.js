@@ -9,16 +9,16 @@
 //   play_box_outline U+F0D7A
 .pragma library
 
-var recording      = "\uf0ca2"
-var paused         = "\uf03e6"
-var stalled        = "\uf05d6"
-var missing        = "\uf0b8f"
-var productive     = "\uf1426"
-var lowConfidence  = "\uf0626"
-var edit           = "\uf0cb6"
-var copy           = "\uf018f"
-var chevronLeft    = "\uf0141"
-var chevronRight   = "\uf0142"
-var magnify        = "\uf0349"
-var agentSession   = "\uf167e"
-var timelapse      = "\uf0d7a"
+var recording      = String.fromCodePoint(0xF0CA2)
+var paused         = String.fromCodePoint(0xF03E6)
+var stalled        = String.fromCodePoint(0xF05D6)
+var missing        = String.fromCodePoint(0xF0B8F)
+var productive     = String.fromCodePoint(0xF1426)
+var lowConfidence  = String.fromCodePoint(0xF0626)
+var edit           = String.fromCodePoint(0xF0CB6)
+var copy           = String.fromCodePoint(0xF018F)
+var chevronLeft    = String.fromCodePoint(0xF0141)
+var chevronRight   = String.fromCodePoint(0xF0142)
+var magnify        = String.fromCodePoint(0xF0349)
+var agentSession   = String.fromCodePoint(0xF167E)
+var timelapse      = String.fromCodePoint(0xF0D7A)

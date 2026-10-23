@@ -88,7 +88,9 @@ function correctContrast(hue, bg, fg, target, alpha) {
         return comp ? contrast(comp, bg) : 0
     }
     if (check(cur) >= target) return cur
-    var okl = toOklch(cur), oklFg = toOklch(fg) || { l: 0.9, c: 0, h: 0 }
+    var okl = toOklch(cur)
+    if (!okl) return cur
+    var oklFg = toOklch(fg) || { l: 0.9, c: 0, h: 0 }
     var dir = oklFg.l > okl.l ? 1 : -1
     var steps = 40, step = 0.012 * dir
     for (var i = 0; i < steps; i++) {

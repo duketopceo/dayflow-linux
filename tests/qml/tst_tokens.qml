@@ -4,6 +4,7 @@
 import QtQuick
 import QtTest
 import "../.."
+import "../../ThemeMath.js" as TM
 
 TestCase {
     name: "Tokens"
@@ -29,14 +30,16 @@ TestCase {
     function test_categoryHueChain() {
         tk.parseColors('background = "#000000"\nforeground = "#ffffff"\nblue = "#0000ff"\n')
         verify(tk.hues.blue === "#0000ff")
-        verify(tk.categories.coding !== undefined)
+        var expected = TM.correctContrast("#0000ff", tk.bg, tk.fg, 3.0, 0.85)
+        compare(tk.categories.coding, expected)
     }
 
     // Missing named key falls through to the ANSI slot.
     function test_ansiFallback() {
         tk.parseColors('background = "#000000"\nforeground = "#ffffff"\ncolor4 = "#00aa00"\n')
         verify(tk.hues.color4 === "#00aa00")
-        verify(tk.categories.coding !== undefined)
+        var expected = TM.correctContrast("#00aa00", tk.bg, tk.fg, 3.0, 0.85)
+        compare(tk.categories.coding, expected)
     }
 
     // R3 precedence: a user hex overrides the theme role entirely.

@@ -603,7 +603,9 @@ func main() {
 		blocks, err := blocksBetween(db, start, end)
 		fatal(err)
 		if jsonOut {
-			cfg, _ := loadConfig()
+			if reloaded, err := loadConfig(); err == nil {
+				cfg = reloaded
+			}
 			payload := timelineJSON(blocks, cfg)
 			payload["start"] = start.Format("2006-01-02")
 			payload["end"] = end.Format("2006-01-02")
@@ -1324,7 +1326,9 @@ func printTimeline(cfg Config, day time.Time, asJSON bool) {
 	replies, err := completionsForDay(db, day)
 	fatal(err)
 	if asJSON {
-		cfg, _ := loadConfig()
+		if reloaded, err := loadConfig(); err == nil {
+			cfg = reloaded
+		}
 		payload := timelineJSON(blocks, cfg)
 		payload["completions"] = replies
 		payload["date"] = day.Format("2006-01-02")
