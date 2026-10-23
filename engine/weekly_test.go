@@ -90,6 +90,12 @@ func TestCategoryDonutPercentages(t *testing.T) {
 	if donut[0].Percentage != 66.7 {
 		t.Fatalf("coding percentage=%.1f", donut[0].Percentage)
 	}
+	if donut[0].ColorRole != "blue" {
+		t.Fatalf("coding color_role=%q, want blue", donut[0].ColorRole)
+	}
+	if donut[1].ColorRole != "magenta" {
+		t.Fatalf("browsing color_role=%q, want magenta", donut[1].ColorRole)
+	}
 }
 
 func TestContextShifts(t *testing.T) {

@@ -111,6 +111,10 @@ func generateInsightsFromBlocks(blocks []Block, cfg Config, start, end time.Time
 	// Cards merge the unfiltered block list — idle/excluded rows still shape
 	// the timeline even though they drop out of the analytics below.
 	in.Cards = mergeCards(blocks)
+	for i := range in.Cards {
+		in.Cards[i].Color = categoryColorHex(in.Cards[i].Category, cfg)
+		in.Cards[i].ColorRole = categoryRole(in.Cards[i].Category, cfg)
+	}
 	catMins := map[string]float64{}
 	catCount := map[string]int{}
 	appMins := map[string]float64{}
