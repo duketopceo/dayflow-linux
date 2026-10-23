@@ -213,12 +213,19 @@ func buildCategoryDonut(cats []insightDist, total float64, cfg Config) []DonutIt
 			if sum+pct > 100.0 {
 				pct = round1(100.0 - sum)
 			}
+			// Aggregated "other" bucket: user-configured color wins (empty
+			// role); otherwise keep the neutral #808080 default.
+			otherRole := categoryRole("other", cfg)
+			otherColor := "#808080"
+			if otherRole == "" {
+				otherColor = categoryColorHex("other", cfg)
+			}
 			out = append(out, DonutItem{
 				Name:       "other",
 				Display:    "Other",
 				Minutes:    round1(other),
-				Color:      categoryColorHex("other", cfg),
-				ColorRole:  categoryRole("other", cfg),
+				Color:      otherColor,
+				ColorRole:  otherRole,
 				Percentage: pct,
 			})
 		}
