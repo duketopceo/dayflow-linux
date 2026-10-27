@@ -38,12 +38,14 @@ TestCase {
     }
 
     // A hue that can't reach the target within the step budget returns a
-    // fg-blended hex — never throws, never returns garbage.
+    // fg-blended hex — never throws, never returns garbage. Target 7.0 on a
+    // mid-gray bg is unreachable from either extreme (max ~4.7), so the
+    // budget provably exhausts and the deterministic 0.35/0.65 blend lands.
     function test_budgetExhaustionBlendsTowardFg() {
-        var bg = "#101315", fg = "#eceff1"
-        var out = TM.correctContrast("#101315", bg, fg, 4.5, 1.0)
-        verify(/^#[0-9a-f]{6}$/i.test(out), "output is a hex: " + out)
-        verify(TM.contrast(out, bg) > TM.contrast("#101315", bg) - 0.01)
+        var bg = "#808080", fg = "#eceff1"
+        var out = TM.correctContrast("#808080", bg, fg, 7.0, 1.0)
+        verify(TM.contrast(out, bg) < 7.0, "unreachable target stays unmet: " + out)
+        verify(out === "#c6c8c9", "fg blend is deterministic, got " + out)
     }
 
     // composite() sanity: alpha 1 = the hue itself.

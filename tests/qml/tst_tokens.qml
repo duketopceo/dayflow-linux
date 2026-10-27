@@ -30,6 +30,8 @@ TestCase {
         tk.parseColors('background = "#000000"\nforeground = "#ffffff"\nblue = "#0000ff"\n')
         verify(tk.hues.blue === "#0000ff")
         verify(tk.categories.coding !== undefined)
+        // Theme chain ran — the resolved hue is not the engine default.
+        verify(tk.categories.coding !== tk.engineDefaults.coding)
     }
 
     // Missing named key falls through to the ANSI slot.
@@ -37,6 +39,8 @@ TestCase {
         tk.parseColors('background = "#000000"\nforeground = "#ffffff"\ncolor4 = "#00aa00"\n')
         verify(tk.hues.color4 === "#00aa00")
         verify(tk.categories.coding !== undefined)
+        // ANSI slot (green) resolved, not the blue engine default.
+        verify(tk.categories.coding !== tk.engineDefaults.coding)
     }
 
     // R3 precedence: a user hex overrides the theme role entirely.
