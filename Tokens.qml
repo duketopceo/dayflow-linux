@@ -15,20 +15,26 @@ import "ThemeMath.js" as TM
 Item {
   id: tk
 
+  // `Color` can resolve to Qt's color value type in some load contexts —
+  // it has no popups/bar/foreground members, so every read degrades to a
+  // fallback instead of throwing (`.popups` alone yields undefined).
+  readonly property var _popups: Color.popups || ({})
+  readonly property var _bar:    Color.bar || ({})
+
   // ---- df.* surface + text roles (DESIGN.md 6.1) ----
-  readonly property color bg:      Color.popups.background || Color.background || "#101315"
-  readonly property color fg:      Color.foreground
+  readonly property color bg:      _popups.background || Color.background || "#101315"
+  readonly property color fg:      Color.foreground || "#cacccc"
   readonly property color fgDim:   Color.muted || Qt.rgba(fg.r, fg.g, fg.b, 0.6)
   readonly property color fgFaint: hues["dark_foreground"] || Qt.rgba(fg.r, fg.g, fg.b, 0.35)
   readonly property color raised:  hues["lighter_background"] || Qt.rgba(fg.r, fg.g, fg.b, 0.04)
   readonly property color sunken:  hues["dark_background"] || Qt.darker(bg, 1.1)
-  readonly property color accent:  Color.accent
+  readonly property color accent:  Color.accent || "#cacccc"
   readonly property color selection: hues["selection"] ||
                                      Qt.rgba(accent.r, accent.g, accent.b, 0.25)
-  readonly property color recording: Color.bar.active || Color.urgent
-  readonly property color danger:  Color.urgent
+  readonly property color recording: _bar.active || Color.urgent || "#a55555"
+  readonly property color danger:  Color.urgent || "#a55555"
   readonly property color hair:    Qt.rgba(fg.r, fg.g, fg.b, 0.08)
-  readonly property color border:  Color.popups.border || Qt.rgba(fg.r, fg.g, fg.b, 0.12)
+  readonly property color border:  _popups.border || Qt.rgba(fg.r, fg.g, fg.b, 0.12)
   readonly property real  fillNormal:   0.04
   readonly property real  fillHover:    0.08
   readonly property real  fillSelected: 0.18
@@ -103,6 +109,8 @@ Item {
     id: colorsFile
     path: (Quickshell.env("HOME") || "") + "/.local/state/omarchy/current/theme/colors.toml"
     printErrors: false
+    watchChanges: true
+    onFileChanged: reload()
     onLoaded: tk.parseColors(text())
     onLoadFailed: tk.hues = {}
   }
@@ -117,15 +125,12 @@ Item {
     var m = {}
     var lines = String(raw || "").split("\n")
     for (var i = 0; i < lines.length; i++) {
-      var match = lines[i].match(/^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
+      var match = lines[i].match(/^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})(?![0-9A-Fa-f])/)
       if (match) m[match[1]] = match[2].toLowerCase()
     }
     hues = m
   }
 
-  // Same-name rewrites and direct palette edits still trigger a
-  // recompute even when theme.name is unchanged.
-  onHuesChanged: {}
   Connections {
     target: Color
     function onBackgroundChanged() { colorsFile.reload() }
