@@ -87,8 +87,8 @@ Item {
 
   // Content width of the scrollable column band: full week when
   // visibleDays >= 7, otherwise stretched so visibleDays fit the viewport.
-  readonly property real daysViewW: width - gutterW
-  readonly property real daysContentW: visibleDays >= 7 ? daysViewW : daysViewW * 7 / visibleDays
+  readonly property real daysViewW: Math.max(0, width - gutterW)
+  readonly property real daysContentW: Math.max(0, visibleDays >= 7 ? daysViewW : daysViewW * 7 / visibleDays)
   // Column x/width for dayIndex inside the scroll band — today's column
   // stretches by todayScale.
   function colX(d) {
@@ -146,7 +146,7 @@ Item {
     id: colFlick
     x: cal.gutterW
     y: 0
-    width: cal.daysViewW
+    width: Math.max(0, cal.daysViewW)
     height: cal.height
     contentWidth: cal.daysContentW
     contentHeight: cal.height
