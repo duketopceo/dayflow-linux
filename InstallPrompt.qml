@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Engine-missing surface. Shown by Panel.qml instead of the tabs (and ahead
@@ -25,7 +26,7 @@ Item {
     Text {
       width: parent.width
       text: "Dayflow engine not installed"
-      color: root.dayflow ? root.dayflow.foreground : Color.foreground
+      color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.title
       font.bold: true
@@ -36,7 +37,7 @@ Item {
       text: "The widget is installed but the dayflow engine binary isn't on PATH yet. " +
             "Install downloads the verified release for this device, places it in ~/.local/bin, " +
             "and enables + starts the capture units. Provider setup stays yours to choose afterwards."
-      color: root.dayflow ? root.dayflow.dim : Color.muted
+      color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.body
       wrapMode: Text.WordWrap
@@ -55,7 +56,7 @@ Item {
         id: installText
         anchors.centerIn: parent
         text: (root.dayflow && root.dayflow.engineInstalling) ? "Installing…" : "Install engine"
-        color: root.dayflow ? root.dayflow.foreground : Color.foreground
+        color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         font.bold: true
@@ -77,7 +78,7 @@ Item {
       width: parent.width
       text: root.dayflow ? root.dayflow.installLog : ""
       textFormat: Text.PlainText
-      color: root.dayflow ? root.dayflow.dim : Color.muted
+      color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption
       wrapMode: Text.WordWrap
@@ -88,7 +89,7 @@ Item {
       width: parent.width
       text: root.dayflow ? root.dayflow.installErr : ""
       textFormat: Text.PlainText
-      color: Color.urgent !== undefined ? Color.urgent : (root.dayflow ? root.dayflow.foreground : Color.foreground)
+      color: Commons.Color.urgent !== undefined ? Commons.Color.urgent : (root.dayflow ? root.dayflow.foreground : Commons.Color.foreground)
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption
       wrapMode: Text.WordWrap
@@ -97,7 +98,7 @@ Item {
     Text {
       width: parent.width
       text: "Or run it yourself:  bash " + (root.dayflow ? root.dayflow.installScriptPath : "scripts/install.sh")
-      color: root.dayflow ? root.dayflow.dim : Color.muted
+      color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
       font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption
       wrapMode: Text.WrapAnywhere

@@ -4,6 +4,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
       Column {
         id: content
@@ -31,7 +32,7 @@ import qs.Ui
                 height: Style.space(7)
                 radius: width / 2
                 anchors.verticalCenter: parent.verticalCenter
-                color: dayflow.paused ? Color.urgent : Color.accent
+                color: dayflow.paused ? Commons.Color.urgent : Commons.Color.accent
               }
 
               Text {
@@ -164,7 +165,7 @@ import qs.Ui
             width: parent.width
             text: "! " + dayflow.errorText
             textFormat: Text.PlainText
-            color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+            color: Commons.Color.urgent !== undefined ? Commons.Color.urgent : dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
             wrapMode: Text.WordWrap
@@ -311,7 +312,7 @@ import qs.Ui
               : "engine v" + dayflow.engineVersion + " ≠ panel v" + dayflow.pluginVersion +
                 " — update the engine to match the plugin"
             textFormat: Text.PlainText
-            color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+            color: Commons.Color.urgent !== undefined ? Commons.Color.urgent : dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
@@ -381,7 +382,7 @@ import qs.Ui
             width: parent.width
             text: dayflow.installErr
             textFormat: Text.PlainText
-            color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+            color: Commons.Color.urgent !== undefined ? Commons.Color.urgent : dayflow.foreground
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
@@ -393,9 +394,9 @@ import qs.Ui
           width: parent.width - content.leftPadding - content.rightPadding
           text: dayflow.notice
           textFormat: Text.PlainText
-          color: dayflow.noticeIsError && Color.urgent !== undefined
-            ? Color.urgent
-            : (Color.accent !== undefined ? Color.accent : dayflow.foreground)
+          color: dayflow.noticeIsError && Commons.Color.urgent !== undefined
+            ? Commons.Color.urgent
+            : (Commons.Color.accent !== undefined ? Commons.Color.accent : dayflow.foreground)
           font.family: dayflow.fontFamily
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap

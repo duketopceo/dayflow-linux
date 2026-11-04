@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // macOS-style daily workflow grid: rows are categories, columns are
@@ -44,7 +45,7 @@ PanelCard {
         id: gridLabel
         anchors.left: parent.left
         text: "Daily workflow"
-        color: dayflow ? dayflow.foreground : Color.foreground
+        color: dayflow ? dayflow.foreground : Commons.Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         font.bold: true
@@ -54,7 +55,7 @@ PanelCard {
         anchors.right: parent.right
         anchors.verticalCenter: gridLabel.verticalCenter
         text: dayflow ? dayflow.fmtDur(root.workflow.total_minutes) + " tracked" : ""
-        color: dayflow ? dayflow.dim : Color.dim
+        color: dayflow ? dayflow.dim : Commons.Color.dim
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
       }
@@ -64,7 +65,7 @@ PanelCard {
       text: "1 cell = " + (root.workflow.slot_minutes || 15) + " min" +
             (root.slotCount > 0 && root.workflow.slots[0].time
               ? " · from " + root.workflow.slots[0].time : "")
-      color: dayflow ? dayflow.dim : Color.dim
+      color: dayflow ? dayflow.dim : Commons.Color.dim
       font.family: dayflow ? dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption
     }
@@ -82,8 +83,8 @@ PanelCard {
           text: (catRowDelegate.catRow.display || catRowDelegate.catRow.name) + "\n" +
                 (dayflow ? dayflow.fmtDur(catRowDelegate.catRow.minutes) : "")
           color: catRowDelegate.catRow.productive
-            ? (dayflow ? dayflow.foreground : Color.foreground)
-            : (dayflow ? dayflow.dim : Color.dim)
+            ? (dayflow ? dayflow.foreground : Commons.Color.foreground)
+            : (dayflow ? dayflow.dim : Commons.Color.dim)
           font.family: dayflow ? dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
@@ -135,7 +136,7 @@ PanelCard {
             : "")
         : ""
       textFormat: Text.PlainText
-      color: dayflow ? dayflow.foreground : Color.foreground
+      color: dayflow ? dayflow.foreground : Commons.Color.foreground
       font.family: dayflow ? dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption
       elide: Text.ElideRight

@@ -10,6 +10,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import "ThemeMath.js" as TM
 
 Item {
@@ -18,21 +19,21 @@ Item {
   // `Color` can resolve to Qt's color value type in some load contexts —
   // it has no popups/bar/foreground members, so every read degrades to a
   // fallback instead of throwing (`.popups` alone yields undefined).
-  readonly property var _popups: Color.popups || ({})
-  readonly property var _bar:    Color.bar || ({})
+  readonly property var _popups: Commons.Color.popups || ({})
+  readonly property var _bar:    Commons.Color.bar || ({})
 
   // ---- df.* surface + text roles (DESIGN.md 6.1) ----
-  readonly property color bg:      _popups.background || Color.background || "#101315"
-  readonly property color fg:      Color.foreground || "#cacccc"
-  readonly property color fgDim:   Color.muted || Qt.rgba(fg.r, fg.g, fg.b, 0.6)
+  readonly property color bg:      _popups.background || Commons.Color.background || "#101315"
+  readonly property color fg:      Commons.Color.foreground || "#cacccc"
+  readonly property color fgDim:   Commons.Color.muted || Qt.rgba(fg.r, fg.g, fg.b, 0.6)
   readonly property color fgFaint: hues["dark_foreground"] || Qt.rgba(fg.r, fg.g, fg.b, 0.35)
   readonly property color raised:  hues["lighter_background"] || Qt.rgba(fg.r, fg.g, fg.b, 0.04)
   readonly property color sunken:  hues["dark_background"] || Qt.darker(bg, 1.1)
-  readonly property color accent:  Color.accent || "#cacccc"
+  readonly property color accent:  Commons.Color.accent || "#cacccc"
   readonly property color selection: hues["selection"] ||
                                      Qt.rgba(accent.r, accent.g, accent.b, 0.25)
-  readonly property color recording: _bar.active || Color.urgent || "#a55555"
-  readonly property color danger:  Color.urgent || "#a55555"
+  readonly property color recording: _bar.active || Commons.Color.urgent || "#a55555"
+  readonly property color danger:  Commons.Color.urgent || "#a55555"
   readonly property color hair:    Qt.rgba(fg.r, fg.g, fg.b, 0.08)
   readonly property color border:  _popups.border || Qt.rgba(fg.r, fg.g, fg.b, 0.12)
   readonly property real  fillNormal:   0.04
@@ -132,7 +133,7 @@ Item {
   }
 
   Connections {
-    target: Color
+    target: Commons.Color
     function onBackgroundChanged() { colorsFile.reload() }
     function onForegroundChanged() { colorsFile.reload() }
     function onAccentChanged()     { colorsFile.reload() }

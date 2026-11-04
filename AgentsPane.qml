@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // FullView "Agents" pane — the day's agent briefing: sessions grouped into
@@ -168,7 +169,7 @@ Column {
     wrapMode: Text.WordWrap
     text: "! " + (host ? host.agentsError : "")
     textFormat: Text.PlainText
-    color: Color.urgent !== undefined ? Color.urgent : "red"
+    color: Commons.Color.urgent !== undefined ? Commons.Color.urgent : "red"
     font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
     font.pixelSize: Style.font.caption
   }

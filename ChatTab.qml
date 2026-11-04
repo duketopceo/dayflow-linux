@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Flickable {
@@ -176,7 +177,7 @@ Flickable {
         textFormat: Text.PlainText
         width: parent.width - (histBtn.visible ? histBtn.width + Style.space(8) : 0)
                - newBtn.width - Style.space(8)
-        color: dayflow ? dayflow.foreground : Color.foreground
+        color: dayflow ? dayflow.foreground : Commons.Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         font.bold: true
@@ -189,8 +190,8 @@ Flickable {
         visible: root.conversations.length > 0
         text: root.historyOpen ? "hide" : "history"
         textFormat: Text.PlainText
-        color: histMa.containsMouse ? (dayflow ? dayflow.foreground : Color.foreground)
-                                    : (dayflow ? dayflow.dim : Color.dim)
+        color: histMa.containsMouse ? (dayflow ? dayflow.foreground : Commons.Color.foreground)
+                                    : (dayflow ? dayflow.dim : Commons.Color.dim)
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
         font.underline: histMa.containsMouse
@@ -208,8 +209,8 @@ Flickable {
         id: newBtn
         text: "+ new"
         textFormat: Text.PlainText
-        color: newMa.containsMouse ? (dayflow ? dayflow.foreground : Color.foreground)
-                                   : (dayflow ? dayflow.dim : Color.dim)
+        color: newMa.containsMouse ? (dayflow ? dayflow.foreground : Commons.Color.foreground)
+                                   : (dayflow ? dayflow.dim : Commons.Color.dim)
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
         font.underline: newMa.containsMouse
@@ -249,8 +250,8 @@ Flickable {
                   + (modelData.title || "conversation")
             textFormat: Text.PlainText
             color: root.chatConversation === Number(modelData.id)
-              ? (dayflow ? dayflow.foreground : Color.foreground)
-              : (dayflow ? dayflow.dim : Color.dim)
+              ? (dayflow ? dayflow.foreground : Commons.Color.foreground)
+              : (dayflow ? dayflow.dim : Commons.Color.dim)
             font.family: dayflow ? dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
@@ -297,7 +298,7 @@ Flickable {
             anchors.margins: Style.space(7)
             textFormat: Text.RichText
             text: showThis ? root.fmtMsg(modelData.content) : ""
-            color: dayflow ? dayflow.foreground : Color.foreground
+            color: dayflow ? dayflow.foreground : Commons.Color.foreground
             font.family: dayflow ? dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
@@ -310,7 +311,7 @@ Flickable {
       visible: root.chatAttribution !== ""
       width: parent.width
       text: "via " + root.chatAttribution
-      color: dayflow ? dayflow.dim : Color.dim
+      color: dayflow ? dayflow.dim : Commons.Color.dim
       font.family: dayflow ? dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.caption
     }
@@ -331,7 +332,7 @@ Flickable {
         anchors.margins: Style.space(7)
         text: root.recap
         textFormat: Text.PlainText
-        color: dayflow ? dayflow.foreground : Color.foreground
+        color: dayflow ? dayflow.foreground : Commons.Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
@@ -362,7 +363,7 @@ Flickable {
             id: chipText
             anchors.centerIn: parent
             text: modelData
-            color: dayflow ? dayflow.dim : Color.dim
+            color: dayflow ? dayflow.dim : Commons.Color.dim
             font.family: dayflow ? dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
           }
@@ -399,7 +400,7 @@ Flickable {
           id: inputEdit
           width: parent.width - sendLbl.width - Style.space(6)
           text: root.chatInput
-          color: dayflow ? dayflow.foreground : Color.foreground
+          color: dayflow ? dayflow.foreground : Commons.Color.foreground
           font.family: dayflow ? dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.body
           wrapMode: TextEdit.Wrap
@@ -423,8 +424,8 @@ Flickable {
           text: "➤"
           textFormat: Text.PlainText
           color: (sendMa.containsMouse && !root.chatLoading)
-            ? (dayflow ? dayflow.foreground : Color.foreground)
-            : (dayflow ? dayflow.dim : Color.dim)
+            ? (dayflow ? dayflow.foreground : Commons.Color.foreground)
+            : (dayflow ? dayflow.dim : Commons.Color.dim)
           font.family: dayflow ? dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.body
           MouseArea {
@@ -465,7 +466,7 @@ Flickable {
         // doesn't present yesterday's recap as "Today".
         text: dayflow && dayflow.dateLabel ? dayflow.dateLabel : "Today"
         textFormat: Text.PlainText
-        color: dayflow ? dayflow.foreground : Color.foreground
+        color: dayflow ? dayflow.foreground : Commons.Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         font.bold: true
@@ -485,7 +486,7 @@ Flickable {
           anchors.margins: Style.space(7)
           text: root.recap
           textFormat: Text.PlainText
-          color: dayflow ? dayflow.foreground : Color.foreground
+          color: dayflow ? dayflow.foreground : Commons.Color.foreground
           font.family: dayflow ? dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
@@ -496,7 +497,7 @@ Flickable {
         visible: root.conversations.length > 0
         text: "Conversations"
         textFormat: Text.PlainText
-        color: dayflow ? dayflow.foreground : Color.foreground
+        color: dayflow ? dayflow.foreground : Commons.Color.foreground
         font.family: dayflow ? dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         font.bold: true
@@ -525,8 +526,8 @@ Flickable {
                     + (modelData.title || "conversation")
               textFormat: Text.PlainText
               color: root.chatConversation === Number(modelData.id)
-                ? (dayflow ? dayflow.foreground : Color.foreground)
-                : (dayflow ? dayflow.dim : Color.dim)
+                ? (dayflow ? dayflow.foreground : Commons.Color.foreground)
+                : (dayflow ? dayflow.dim : Commons.Color.dim)
               font.family: dayflow ? dayflow.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
