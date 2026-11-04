@@ -476,6 +476,7 @@ FloatingWindow {
           Item { width: 1; height: Style.space(8) }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             visible: root.dayflow !== null
             text: root.dayflow
@@ -501,6 +502,7 @@ FloatingWindow {
           height: root.headerHeight
 
           Text {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             anchors.leftMargin: Style.space(16)
@@ -516,6 +518,7 @@ FloatingWindow {
           }
 
           Text {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: parent.right
             anchors.rightMargin: Style.space(16)

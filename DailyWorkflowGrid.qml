@@ -52,6 +52,7 @@ PanelCard {
       }
 
       Text {
+        textFormat: Text.PlainText
         anchors.right: parent.right
         anchors.verticalCenter: gridLabel.verticalCenter
         text: dayflow ? dayflow.fmtDur(root.workflow.total_minutes) + " tracked" : ""
@@ -62,6 +63,7 @@ PanelCard {
     }
 
     Text {
+      textFormat: Text.PlainText
       text: "1 cell = " + (root.workflow.slot_minutes || 15) + " min" +
             (root.slotCount > 0 && root.workflow.slots[0].time
               ? " · from " + root.workflow.slots[0].time : "")
@@ -79,6 +81,7 @@ PanelCard {
         spacing: Style.space(6)
 
         Text {
+          textFormat: Text.PlainText
           width: Style.space(72)
           text: (catRowDelegate.catRow.display || catRowDelegate.catRow.name) + "\n" +
                 (dayflow ? dayflow.fmtDur(catRowDelegate.catRow.minutes) : "")

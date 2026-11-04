@@ -320,7 +320,7 @@ Flickable {
             border.color: root.mode === modelData.id
               ? (root.dayflow ? root.dayflow.accentFill(0.5) : "transparent")
               : (root.dayflow ? root.dayflow.fgFill(0.12) : "transparent")
-            Text { id: modeLabel; anchors.centerIn: parent; text: modelData.label
+            Text { id: modeLabel; textFormat: Text.PlainText; anchors.centerIn: parent; text: modelData.label
               color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
               font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption }
@@ -439,7 +439,7 @@ Flickable {
             border.color: root.modelSlug === modelData.slug
               ? (root.dayflow ? root.dayflow.accentFill(0.5) : "transparent")
               : (root.dayflow ? root.dayflow.fgFill(0.12) : "transparent")
-            Text { id: presetLabel; anchors.centerIn: parent; text: modelData.name
+            Text { id: presetLabel; textFormat: Text.PlainText; anchors.centerIn: parent; text: modelData.name
               color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
               font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption }
@@ -472,7 +472,7 @@ Flickable {
             border.color: root.catPicks[modelData]
               ? (root.dayflow ? root.dayflow.accentFill(0.5) : "transparent")
               : (root.dayflow ? root.dayflow.fgFill(0.12) : "transparent")
-            Text { id: catLabel; anchors.centerIn: parent; text: modelData
+            Text { id: catLabel; textFormat: Text.PlainText; anchors.centerIn: parent; text: modelData
               color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
               font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption }
@@ -605,6 +605,7 @@ Flickable {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: root.testing ? "Checking..." : root.testResult
         color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground

@@ -570,6 +570,7 @@ Column {
             Repeater {
               model: [0, 6, 12, 18]
               delegate: Text {
+                textFormat: Text.PlainText
                 x: (parent.width / 24) * modelData
                 text: modelData + "h"
                 color: dayflow.dim
@@ -633,6 +634,7 @@ Column {
         Repeater {
           model: dayflow.insights.focus_blocks
           delegate: Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: "• " + (modelData.start_str || modelData.start) + "–" + (modelData.end_str || modelData.end) + " " + modelData.title
             color: dayflow.foreground

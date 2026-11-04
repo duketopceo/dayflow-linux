@@ -142,6 +142,7 @@ Flickable {
             spacing: Style.space(2)
 
             Text {
+              textFormat: Text.PlainText
               anchors.horizontalCenter: parent.horizontalCenter
               text: modelData.val
               color: pane.dayflow ? pane.dayflow.foreground : "white"
@@ -186,6 +187,7 @@ Flickable {
         spacing: Style.space(4)
 
         Text {
+          textFormat: Text.PlainText
           text: "vs last week" +
             (trendCard.trends ? "  ·  prev " +
               (pane.dayflow ? pane.dayflow.fmtDur(trendCard.trends.prev_total_minutes) : "") : "")
@@ -303,6 +305,7 @@ Flickable {
             spacing: Style.space(2)
 
             Text {
+              textFormat: Text.PlainText
               width: Style.space(30)
               text: pane.dayflow ? pane.dayflow.dayName(index) : ""
               color: index === (pane.dayflow ? pane.dayflow.todayIndex() : -1)
@@ -389,6 +392,7 @@ Flickable {
               }
 
               Text {
+                textFormat: Text.PlainText
                 width: Style.space(72) - parent.spacing
                 horizontalAlignment: Text.AlignRight
                 text: pane.dayflow ? pane.dayflow.fmtDur(modelData.minutes) : ""
@@ -442,6 +446,7 @@ Flickable {
               }
 
               Text {
+                textFormat: Text.PlainText
                 width: Style.space(62) - parent.spacing
                 horizontalAlignment: Text.AlignRight
                 text: pane.dayflow ? pane.dayflow.fmtDur(modelData.minutes) : ""

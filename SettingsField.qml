@@ -20,6 +20,7 @@ Column {
   spacing: Style.space(2)
 
   Text {
+    textFormat: Text.PlainText
     visible: root.label !== ""
     width: parent.width
     text: root.label
@@ -40,6 +41,7 @@ Column {
       : Qt.rgba(Commons.Color.foreground.r, Commons.Color.foreground.g, Commons.Color.foreground.b, 0.12)
 
     Text {
+      textFormat: Text.PlainText
       id: placeholder
       anchors.fill: parent
       anchors.margins: Style.space(5)
