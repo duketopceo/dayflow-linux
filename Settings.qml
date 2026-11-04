@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Flickable {
@@ -215,7 +216,7 @@ Flickable {
       visible: !dayflow || !dayflow.configLoaded
       width: parent.width
       text: "Loading settings..."
-      color: dayflow ? dayflow.dim : Color.dim
+      color: dayflow ? dayflow.dim : Commons.Color.dim
       font.family: dayflow ? dayflow.fontFamily : Style.font.family
       font.pixelSize: Style.font.body
     }
@@ -641,13 +642,13 @@ Flickable {
                 height: catName.height
                 radius: Style.cornerRadius
                 color: dayflow.btnBg(maDel.containsMouse)
-                border.color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+                border.color: Commons.Color.urgent !== undefined ? Commons.Color.urgent : dayflow.foreground
 
                 Text {
                   id: delText
                   anchors.centerIn: parent
                   text: "×"
-                  color: Color.urgent !== undefined ? Color.urgent : dayflow.foreground
+                  color: Commons.Color.urgent !== undefined ? Commons.Color.urgent : dayflow.foreground
                   font.family: dayflow.fontFamily
                   font.pixelSize: Style.font.body
                 }

@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Panel {
@@ -122,7 +123,7 @@ Panel {
     return false
   }
 
-  readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Color.foreground
+  readonly property color foreground: dayflow.bar ? dayflow.bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(dayflow.foreground, 1.5)
   readonly property string fontFamily: dayflow.bar ? dayflow.bar.fontFamily : Style.font.family
 
@@ -777,8 +778,8 @@ Panel {
       case "media":         return Qt.rgba(0.95, 0.25, 0.25, 1.0)
       case "system":        return Qt.rgba(0.50, 0.50, 0.55, 1.0)
       case "idle":          return dayflow.dim
-      case "personal":      return Color.urgent !== undefined ? Color.urgent : Qt.rgba(0.95, 0.25, 0.35, 1.0)
-      case "failed":        return Color.urgent !== undefined ? Color.urgent : Qt.rgba(0.95, 0.25, 0.35, 1.0)
+      case "personal":      return Commons.Color.urgent !== undefined ? Commons.Color.urgent : Qt.rgba(0.95, 0.25, 0.35, 1.0)
+      case "failed":        return Commons.Color.urgent !== undefined ? Commons.Color.urgent : Qt.rgba(0.95, 0.25, 0.35, 1.0)
       case "other":         return Qt.darker(dayflow.foreground, 1.4)
       default:              return dayflow.foreground
     }
@@ -829,8 +830,8 @@ Panel {
   }
 
   function accentFill(alpha) {
-    var c = (Color.accent === undefined || Color.accent === null)
-      ? dayflow.foreground : Color.accent
+    var c = (Commons.Color.accent === undefined || Commons.Color.accent === null)
+      ? dayflow.foreground : Commons.Color.accent
     var rgb = dayflow._rgb(c)
     return Qt.rgba(rgb[0], rgb[1], rgb[2], alpha)
   }

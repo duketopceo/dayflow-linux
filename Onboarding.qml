@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // First-run wizard. Shown instead of the tab content when `status --json`
@@ -240,7 +241,7 @@ Flickable {
       Text {
         width: parent.width
         text: "Welcome to Dayflow"
-        color: root.dayflow ? root.dayflow.foreground : Color.foreground
+        color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.title
         font.bold: true
@@ -248,7 +249,7 @@ Flickable {
       Text {
         width: parent.width
         text: "Dayflow journals your screen activity locally and summarizes it with an AI model. To get started, pick where the model runs."
-        color: root.dayflow ? root.dayflow.dim : Color.muted
+        color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         wrapMode: Text.WordWrap
@@ -262,7 +263,7 @@ Flickable {
           color: root.dayflow ? root.dayflow.accentFill(0.16) : "transparent"
           border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
           Text { id: goText; anchors.centerIn: parent; text: "Get started"
-            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
           MouseArea { anchors.fill: parent; onClicked: root.step = 1 }
@@ -274,7 +275,7 @@ Flickable {
           color: root.dayflow ? root.dayflow.btnBg(skipMa.containsMouse) : "transparent"
           border.color: root.dayflow ? root.dayflow.fgFill(0.12) : "transparent"
           Text { id: skipText; anchors.centerIn: parent; text: "Skip for now"
-            color: root.dayflow ? root.dayflow.dim : Color.muted
+            color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body }
           MouseArea { id: skipMa; anchors.fill: parent; hoverEnabled: true; onClicked: root.dismissed() }
@@ -291,7 +292,7 @@ Flickable {
       Text {
         width: parent.width
         text: "Where should the model run?"
-        color: root.dayflow ? root.dayflow.foreground : Color.foreground
+        color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body; font.bold: true
       }
@@ -320,7 +321,7 @@ Flickable {
               ? (root.dayflow ? root.dayflow.accentFill(0.5) : "transparent")
               : (root.dayflow ? root.dayflow.fgFill(0.12) : "transparent")
             Text { id: modeLabel; anchors.centerIn: parent; text: modelData.label
-              color: root.dayflow ? root.dayflow.foreground : Color.foreground
+              color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
               font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption }
             MouseArea { id: modeMa; anchors.fill: parent; hoverEnabled: true
@@ -333,7 +334,7 @@ Flickable {
         visible: root.mode === "openrouter"
         width: parent.width
         text: "Paste an OpenRouter key (sk-or-...). Get one at openrouter.ai/keys."
-        color: root.dayflow ? root.dayflow.dim : Color.muted
+        color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
@@ -347,7 +348,7 @@ Flickable {
         border.color: root.dayflow ? root.dayflow.fgFill(0.14) : "transparent"
         TextInput { id: keyIn; anchors.fill: parent; anchors.margins: Style.space(5)
           text: root.apiKey; echoMode: TextInput.Password
-          color: root.dayflow ? root.dayflow.foreground : Color.foreground
+          color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
           font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.body
           onTextChanged: root.apiKey = text }
@@ -362,14 +363,14 @@ Flickable {
         border.color: root.dayflow ? root.dayflow.fgFill(0.14) : "transparent"
         TextInput { id: urlIn; anchors.fill: parent; anchors.margins: Style.space(5)
           text: root.baseUrl
-          color: root.dayflow ? root.dayflow.foreground : Color.foreground
+          color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
           font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.body
           onTextChanged: root.baseUrl = text }
         Text { anchors.fill: parent; anchors.margins: Style.space(5)
           visible: urlIn.text === "" && !urlIn.activeFocus
           text: "http://localhost:11434/v1"
-          color: root.dayflow ? root.dayflow.dim : Color.muted
+          color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
           font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.body }
       }
@@ -385,7 +386,7 @@ Flickable {
           opacity: (root.mode === "openrouter" && root.apiKey === "")
             || (root.mode === "custom" && root.baseUrl === "") ? 0.45 : 1
           Text { id: nextText; anchors.centerIn: parent; text: "Continue"
-            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
           MouseArea { anchors.fill: parent
@@ -399,7 +400,7 @@ Flickable {
         Text {
           anchors.verticalCenter: parent.verticalCenter
           text: "Skip setup"
-          color: root.dayflow ? root.dayflow.dim : Color.muted
+          color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
           font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
           font.underline: true
@@ -417,7 +418,7 @@ Flickable {
       Text {
         width: parent.width
         text: "Pick a vision model"
-        color: root.dayflow ? root.dayflow.foreground : Color.foreground
+        color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body; font.bold: true
       }
@@ -439,7 +440,7 @@ Flickable {
               ? (root.dayflow ? root.dayflow.accentFill(0.5) : "transparent")
               : (root.dayflow ? root.dayflow.fgFill(0.12) : "transparent")
             Text { id: presetLabel; anchors.centerIn: parent; text: modelData.name
-              color: root.dayflow ? root.dayflow.foreground : Color.foreground
+              color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
               font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption }
             MouseArea { anchors.fill: parent; onClicked: root.modelSlug = modelData.slug }
@@ -450,7 +451,7 @@ Flickable {
       Text {
         width: parent.width
         text: "Categories to track (optional — defaults work fine)"
-        color: root.dayflow ? root.dayflow.dim : Color.muted
+        color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
@@ -472,7 +473,7 @@ Flickable {
               ? (root.dayflow ? root.dayflow.accentFill(0.5) : "transparent")
               : (root.dayflow ? root.dayflow.fgFill(0.12) : "transparent")
             Text { id: catLabel; anchors.centerIn: parent; text: modelData
-              color: root.dayflow ? root.dayflow.foreground : Color.foreground
+              color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
               font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption }
             MouseArea { anchors.fill: parent
@@ -494,7 +495,7 @@ Flickable {
           color: root.dayflow ? root.dayflow.accentFill(0.16) : "transparent"
           border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
           Text { id: finText; anchors.centerIn: parent; text: "Continue"
-            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
           // Continue writes the config now — dismissing on the consent
@@ -514,7 +515,7 @@ Flickable {
         Text {
           anchors.verticalCenter: parent.verticalCenter
           text: "Back"
-          color: root.dayflow ? root.dayflow.dim : Color.muted
+          color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
           font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
           font.underline: true
@@ -538,14 +539,14 @@ Flickable {
       Text {
         width: parent.width
         text: "Agent-session recaps (optional)"
-        color: root.dayflow ? root.dayflow.foreground : Color.foreground
+        color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body; font.bold: true
       }
       Text {
         width: parent.width
         text: "Dayflow can write a one-line recap of each coding-agent session it finds in Claude Code, Codex, OpenCode, Devin, and Cursor. Transcripts are always read locally to build the session list — that happens either way, on or off."
-        color: root.dayflow ? root.dayflow.dim : Color.muted
+        color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         wrapMode: Text.WordWrap
@@ -553,7 +554,7 @@ Flickable {
       Text {
         width: parent.width
         text: "When recaps are on, a bounded, scrubbed transcript excerpt leaves your machine — to your configured chat provider, which writes the recap, and to OpenRouter's decisions endpoint, which judges which sessions are worth summarizing. Recaps are off by default; nothing extra is sent unless you enable them here or later in Settings."
-        color: root.dayflow ? root.dayflow.dim : Color.muted
+        color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         wrapMode: Text.WordWrap
@@ -568,7 +569,7 @@ Flickable {
           color: root.dayflow ? root.dayflow.accentFill(0.16) : "transparent"
           border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
           Text { id: enText; anchors.centerIn: parent; text: "Enable recaps"
-            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
           MouseArea { anchors.fill: parent; onClicked: { root.recapsOptIn = true; root.apply(true); root.step = 4 } }
@@ -580,7 +581,7 @@ Flickable {
           color: root.dayflow ? root.dayflow.btnBg(offMa.containsMouse) : "transparent"
           border.color: root.dayflow ? root.dayflow.fgFill(0.12) : "transparent"
           Text { id: offText; anchors.centerIn: parent; text: "Not now"
-            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body }
           MouseArea { id: offMa; anchors.fill: parent; hoverEnabled: true; onClicked: { root.recapsOptIn = false; root.apply(false); root.step = 4 } }
@@ -588,7 +589,7 @@ Flickable {
         Text {
           anchors.verticalCenter: parent.verticalCenter
           text: "Back"
-          color: root.dayflow ? root.dayflow.dim : Color.muted
+          color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
           font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
           font.underline: true
@@ -606,7 +607,7 @@ Flickable {
       Text {
         width: parent.width
         text: root.testing ? "Checking..." : root.testResult
-        color: root.dayflow ? root.dayflow.foreground : Color.foreground
+        color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         wrapMode: Text.WordWrap
@@ -615,7 +616,7 @@ Flickable {
         visible: !root.busy
         width: parent.width
         text: "Install services to start capturing in the background, or open the panel and finish setup in Settings."
-        color: root.dayflow ? root.dayflow.dim : Color.muted
+        color: root.dayflow ? root.dayflow.dim : Commons.Color.muted
         font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
@@ -630,7 +631,7 @@ Flickable {
           color: root.dayflow ? root.dayflow.accentFill(0.16) : "transparent"
           border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
           Text { id: instText; anchors.centerIn: parent; text: "Install services"
-            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body; font.bold: true }
           MouseArea { anchors.fill: parent; onClicked: installProc.running = true }
@@ -643,7 +644,7 @@ Flickable {
           color: root.dayflow ? root.dayflow.btnBg(doneMa.containsMouse) : "transparent"
           border.color: root.dayflow ? root.dayflow.fgFill(0.12) : "transparent"
           Text { id: doneText; anchors.centerIn: parent; text: "Done"
-            color: root.dayflow ? root.dayflow.foreground : Color.foreground
+            color: root.dayflow ? root.dayflow.foreground : Commons.Color.foreground
             font.family: root.dayflow ? root.dayflow.fontFamily : Style.font.family
             font.pixelSize: Style.font.body }
           MouseArea { id: doneMa; anchors.fill: parent; hoverEnabled: true

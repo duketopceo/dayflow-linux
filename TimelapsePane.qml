@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // FullView "Timelapse" pane — frame playback for the viewed day.
@@ -177,7 +178,7 @@ Column {
     width: parent.width
     visible: host !== null && host.tlError !== ""
     text: "! " + (host ? host.tlError : "")
-    color: Color.urgent !== undefined ? Color.urgent : "red"
+    color: Commons.Color.urgent !== undefined ? Commons.Color.urgent : "red"
     font.family: pane.dayflow ? pane.dayflow.fontFamily : ""
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap

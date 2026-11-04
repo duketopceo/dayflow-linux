@@ -1,8 +1,9 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 Rectangle {
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property real strength: 0.12
   width: parent ? parent.width : implicitWidth
   implicitWidth: 100
