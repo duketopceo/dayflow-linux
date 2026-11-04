@@ -15,6 +15,7 @@ type DonutItem struct {
 	Display    string  `json:"display"`
 	Minutes    float64 `json:"minutes"`
 	Color      string  `json:"color"`
+	ColorRole  string  `json:"color_role"`
 	Percentage float64 `json:"percentage"`
 }
 
@@ -43,10 +44,11 @@ type ContextShift = SankeyLink
 // configured category color (falls back to the default palette) so the
 // panel doesn't re-derive colors from a hardcoded list.
 type HourHeatmap struct {
-	Hour     int     `json:"hour"`
-	Category string  `json:"category"`
-	Minutes  float64 `json:"minutes"`
-	Color    string  `json:"color"`
+	Hour      int     `json:"hour"`
+	Category  string  `json:"category"`
+	Minutes   float64 `json:"minutes"`
+	Color     string  `json:"color"`
+	ColorRole string  `json:"color_role"`
 }
 
 // DayHeatmap is one day bucket in the week heatmap.
@@ -195,6 +197,7 @@ func buildCategoryDonut(cats []insightDist, total float64, cfg Config) []DonutIt
 				Display:    catDisplay(c.Name),
 				Minutes:    round1(c.Mins),
 				Color:      categoryColorHex(c.Name, cfg),
+				ColorRole:  categoryRole(c.Name, cfg),
 				Percentage: pct,
 			})
 			sum += pct
@@ -214,7 +217,8 @@ func buildCategoryDonut(cats []insightDist, total float64, cfg Config) []DonutIt
 				Name:       "other",
 				Display:    "Other",
 				Minutes:    round1(other),
-				Color:      "#808080",
+				Color:      categoryColorHex("other", cfg),
+				ColorRole:  categoryRole("other", cfg),
 				Percentage: pct,
 			})
 		}
@@ -324,10 +328,12 @@ func buildHeatmap(blocks []Block, start time.Time, cfg Config) []DayHeatmap {
 				}
 			}
 			col := ""
+			role := ""
 			if best != "" {
 				col = categoryColorHex(best, cfg)
+				role = categoryRole(best, cfg)
 			}
-			hours = append(hours, HourHeatmap{Hour: h, Category: best, Minutes: round1(total), Color: col})
+			hours = append(hours, HourHeatmap{Hour: h, Category: best, Minutes: round1(total), Color: col, ColorRole: role})
 		}
 		days = append(days, DayHeatmap{Day: d, Hours: hours})
 	}

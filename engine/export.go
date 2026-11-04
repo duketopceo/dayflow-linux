@@ -105,7 +105,11 @@ type Card struct {
 	Blocks        int       `json:"blocks"`
 	Minutes       int       `json:"minutes"`
 	LowConfidence bool      `json:"low_confidence,omitempty"`
-	Children      []Block   `json:"children"`
+	Color         string    `json:"color"`
+	// color_role is the theme hue key (blue/green/…) the UI resolves —
+	// empty when a user-configured custom color overrides it.
+	ColorRole string  `json:"color_role"`
+	Children  []Block `json:"children"`
 }
 
 // mergeCards folds adjacent blocks into one span when Jev judged continuity
@@ -160,8 +164,31 @@ func mergeCards(blocks []Block) []Card {
 // `get_timeline`. Callers add their own range keys (date or start/end).
 // Keeping the pair in one place means no JSON surface can forget the merged
 // cards array the QML panel renders from.
-func timelineJSON(blocks []Block) map[string]any {
-	return map[string]any{"blocks": blocks, "cards": mergeCards(blocks)}
+// categoryRole maps a category to the theme hue key from DESIGN.md §6.2.
+// The UI resolves the key against the active theme's colors.toml; a
+// user-configured hex suppresses the role (empty) so custom wins.
+func categoryRole(name string, cfg Config) string {
+	for _, c := range cfg.Categories {
+		if strings.EqualFold(c.Name, name) && c.Color != "" {
+			return ""
+		}
+	}
+	roles := map[string]string{
+		"coding": "blue", "writing": "green", "communication": "orange",
+		"meetings": "yellow", "browsing": "magenta", "design": "bright_magenta",
+		"media": "red", "personal": "brown", "system": "cyan",
+		"other": "muted", "idle": "fgFaint",
+	}
+	return roles[strings.ToLower(name)]
+}
+
+func timelineJSON(blocks []Block, cfg Config) map[string]any {
+	cards := mergeCards(blocks)
+	for i := range cards {
+		cards[i].Color = categoryColorHex(cards[i].Category, cfg)
+		cards[i].ColorRole = categoryRole(cards[i].Category, cfg)
+	}
+	return map[string]any{"blocks": blocks, "cards": cards}
 }
 
 // weekGridJSON builds the per-day grid the merged Today view renders:

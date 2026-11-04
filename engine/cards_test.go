@@ -19,7 +19,13 @@ func timelineCards(t *testing.T, day time.Time) []Card {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return mergeCards(blocks)
+	cfg, _ := loadConfig()
+	cards := mergeCards(blocks)
+	for i := range cards {
+		cards[i].Color = categoryColorHex(cards[i].Category, cfg)
+		cards[i].ColorRole = categoryRole(cards[i].Category, cfg)
+	}
+	return cards
 }
 
 // TestInsightsCardsMatchTimeline is the U6 contract: `insights --json` emits
@@ -189,7 +195,7 @@ func TestCardEmitsUnixTimestamps(t *testing.T) {
 // "engine too old to emit cards" by key presence, so an empty day still
 // marshals the key (as null/[]), never omits it.
 func TestTimelineJSONContract(t *testing.T) {
-	p := timelineJSON(nil)
+	p := timelineJSON(nil, Config{})
 	for _, k := range []string{"blocks", "cards"} {
 		if _, ok := p[k]; !ok {
 			t.Fatalf("timelineJSON(nil) missing key %q", k)
@@ -214,10 +220,23 @@ func TestTimelineJSONContract(t *testing.T) {
 			StartTs: s, EndTs: s + 900, Title: "Coding", Category: "coding",
 			App: "neovim", Status: "done"},
 	}
-	p = timelineJSON(blocks)
+	p = timelineJSON(blocks, Config{})
 	cards, ok := p["cards"].([]Card)
 	if !ok || len(cards) != 1 {
 		t.Fatalf("timelineJSON cards = %v, want 1 card", p["cards"])
+	}
+	// color_role emits the theme hue key; a user-configured color wins and
+	// suppresses the role.
+	if cards[0].ColorRole != "blue" || cards[0].Color != "#388bee" {
+		t.Fatalf("coding card color_role=%q color=%q, want blue/#388bee",
+			cards[0].ColorRole, cards[0].Color)
+	}
+	p = timelineJSON(blocks, Config{Categories: []Category{
+		{Name: "coding", Color: "#ff00aa"}}})
+	cards = p["cards"].([]Card)
+	if cards[0].ColorRole != "" || cards[0].Color != "#ff00aa" {
+		t.Fatalf("custom card color_role=%q color=%q, want \"\"/#ff00aa",
+			cards[0].ColorRole, cards[0].Color)
 	}
 }
 
