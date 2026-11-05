@@ -89,6 +89,7 @@ Column {
     Repeater {
       model: ["M", "T", "W", "T", "F", "S", "S"]
       delegate: Text {
+        textFormat: Text.PlainText
         width: parent.width / 7
         horizontalAlignment: Text.AlignHCenter
         text: modelData

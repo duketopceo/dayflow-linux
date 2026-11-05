@@ -33,6 +33,7 @@ Item {
     }
 
     Text {
+      textFormat: Text.PlainText
       width: parent.width
       text: "The widget is installed but the dayflow engine binary isn't on PATH yet. " +
             "Install downloads the verified release for this device, places it in ~/.local/bin, " +
@@ -53,6 +54,7 @@ Item {
       border.color: root.dayflow ? root.dayflow.accentFill(0.5) : "transparent"
       opacity: (root.dayflow && root.dayflow.engineInstalling) ? 0.5 : 1
       Text {
+        textFormat: Text.PlainText
         id: installText
         anchors.centerIn: parent
         text: (root.dayflow && root.dayflow.engineInstalling) ? "Installing…" : "Install engine"
@@ -96,6 +98,7 @@ Item {
     }
 
     Text {
+      textFormat: Text.PlainText
       width: parent.width
       text: "Or run it yourself:  bash " + (root.dayflow ? root.dayflow.installScriptPath : "scripts/install.sh")
       color: root.dayflow ? root.dayflow.dim : Commons.Color.muted

@@ -308,6 +308,7 @@ Flickable {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: root.chatAttribution !== ""
       width: parent.width
       text: "via " + root.chatAttribution
@@ -360,6 +361,7 @@ Flickable {
           border.color: dayflow ? dayflow.fgFill(0.12) : "transparent"
 
           Text {
+            textFormat: Text.PlainText
             id: chipText
             anchors.centerIn: parent
             text: modelData

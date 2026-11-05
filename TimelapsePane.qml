@@ -39,6 +39,7 @@ Column {
       opacity: host && host.tlFrames.length > 1 ? 1 : 0.45
 
       Text {
+        textFormat: Text.PlainText
         id: playText
         anchors.centerIn: parent
         text: host && host.tlPlaying ? "Pause" : "Play"
@@ -61,6 +62,7 @@ Column {
     }
 
     Text {
+      textFormat: Text.PlainText
       anchors.verticalCenter: parent.verticalCenter
       text: host !== null && host.tlFrames.length > 0
         ? "frame " + (host.tlIndex + 1) + " / " + host.tlFrames.length +
@@ -99,6 +101,7 @@ Column {
     }
 
     Text {
+      textFormat: Text.PlainText
       anchors.centerIn: parent
       visible: host !== null && host.tlFrames.length === 0 && !host.tlLoading
       width: parent.width - Style.space(40)
@@ -175,6 +178,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     visible: host !== null && host.tlError !== ""
     text: "! " + (host ? host.tlError : "")
