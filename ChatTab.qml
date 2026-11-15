@@ -10,8 +10,12 @@ Flickable {
   property var dayflow: parent && parent.panel ? parent.panel : null
 
   width: parent ? parent.width : 0
+  // Height cap: the popup's 420 (560 expanded) unless a full-size host
+  // (EmbeddedTab) sets maxHeight.
+  property real maxHeight: -1
   implicitHeight: Math.min(col.implicitHeight + Style.space(12),
-    dayflow && dayflow.expanded ? Style.space(560) : Style.space(420))
+    maxHeight > 0 ? maxHeight
+      : (dayflow && dayflow.expanded ? Style.space(560) : Style.space(420)))
   height: implicitHeight
   contentHeight: col.implicitHeight + Style.space(12)
   clip: true

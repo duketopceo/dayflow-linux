@@ -28,7 +28,7 @@ root QML:
 |---|---|
 | `AppShell.qml` | Rail (Today, Week, Standup, Ask, Agents, Replay, Context, Settings), Ctrl+1..8 and Alt+Left/Right navigation, owns the hidden `Panel` state controller |
 | `FullViewBody.qml` | Rail rendering and lazy pane host, shared with the plugin's `FullView.qml` window |
-| `EmbeddedTab.qml` | Temporary page for Standup, Ask and Settings: hosts the popup tab components until each gets its own page |
+| `EmbeddedTab.qml` | Page for Standup, Ask and Settings: hosts the popup tab components at page height (they expose `maxHeight`; the popup keeps its 420/460 caps) |
 | `ServiceStatus.qml`, `ServiceStrip.qml` | Bottom strip: capture state, last frame age, summarizer, systemd unit health, pause/restart/start actions ([contract](../../docs/service-contract.md)) |
 
 Keyboard: Ctrl+1..8 jump to a page, Alt+Left/Right previous/next page, Ctrl+R

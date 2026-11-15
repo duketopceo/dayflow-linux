@@ -2,9 +2,9 @@ import QtQuick
 import qs.Commons
 
 // Hosts one of the popup's tab components (StandupTab, ChatTab, Settings) as
-// a page of the full-size shell. Temporary bridge: those tabs size themselves
-// for the 540px popup (their own height caps), so this page centers them in
-// a readable column and scrolls. Later app PRs replace each with a full page.
+// a page of the full-size shell. The tabs cap their own height for the 540px
+// popup; this page lifts the cap (maxHeight) to the page height, so each tab
+// fills the window and scrolls inside itself, in a readable centered column.
 Item {
   id: page
 
@@ -41,6 +41,10 @@ Item {
         property var panel: page.dayflow
         active: page.dayflow !== null && page.tabSource !== ""
         source: page.tabSource
+        onLoaded: {
+          if (item && item.maxHeight !== undefined)
+            item.maxHeight = Qt.binding(function() { return flick.height - Style.space(32) })
+        }
       }
     }
   }
