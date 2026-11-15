@@ -29,6 +29,8 @@ root QML:
 | `AppShell.qml` | Rail (Today, Week, Standup, Ask, Agents, Replay, Context, Settings), Ctrl+1..8 and Alt+Left/Right navigation, owns the hidden `Panel` state controller |
 | `FullViewBody.qml` | Rail rendering and lazy pane host, shared with the plugin's `FullView.qml` window |
 | `EmbeddedTab.qml` | Page for Standup, Ask and Settings: hosts the popup tab components at page height (they expose `maxHeight`; the popup keeps its 420/460 caps) |
+| `OnboardingOverlay.qml` | First run: the existing Onboarding wizard in a centered card while the engine reports the install unconfigured; "Skip for now" dismisses it |
+| `AppPrefs.qml` | App-only preferences outside the engine config. Today: "Start in the tray at login", an XDG autostart entry written to `~/.config/autostart/dayflow.desktop` |
 | `ServiceStatus.qml`, `ServiceStrip.qml` | Bottom strip: capture state, last frame age, summarizer, systemd unit health, pause/restart/start actions ([contract](../../docs/service-contract.md)) |
 
 Keyboard: Ctrl+1..8 jump to a page, Alt+Left/Right previous/next page, Ctrl+R

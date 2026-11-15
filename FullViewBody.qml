@@ -13,6 +13,8 @@ Item {
   id: root
 
   property var dayflow: null
+  // App-only preferences (AppPrefs); null in the plugin's Full view.
+  property var appPrefs: null
   property string section: "today"
 
   // Rail model - later feature units append their pane entries here.
