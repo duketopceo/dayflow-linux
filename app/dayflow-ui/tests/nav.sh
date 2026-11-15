@@ -10,6 +10,8 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export DAYFLOW_DATA_DIR=$TMP/data DAYFLOW_CONFIG=$TMP/config.json DAYFLOW_ENGINE=$ENGINE
 export XDG_CONFIG_HOME=$TMP/xdg XDG_DATA_HOME=$TMP/xdgdata XDG_RUNTIME_DIR=$TMP
+# Scratch HOME: the agents page scans ~/.claude, ~/.codex and friends; tests must not read the real ones.
+export HOME=$TMP
 export QT_FORCE_STDERR_LOGGING=1 QT_STYLE_OVERRIDE= QT_QPA_PLATFORM=offscreen DAYFLOW_UI_ALLOW_MULTI=1
 mkdir -p "$DAYFLOW_DATA_DIR"
 "$ENGINE" dev seed-day >/dev/null 2>&1 || { echo "FAIL: seed-day"; exit 1; }
