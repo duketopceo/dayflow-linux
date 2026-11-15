@@ -152,5 +152,9 @@ if(DAYFLOW_BUILD_ENGINE AND GO_EXECUTABLE)
   add_test(NAME prefs
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/prefs.sh $<TARGET_FILE:dayflow-ui>)
 endif()
+if(DAYFLOW_BUILD_ENGINE AND GO_EXECUTABLE)
+  add_test(NAME search
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/search.sh $<TARGET_FILE:dayflow-ui>)
+endif()
 add_test(NAME install-layout
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/install-layout.sh ${CMAKE_BINARY_DIR})
