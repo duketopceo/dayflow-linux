@@ -18,6 +18,7 @@ for sec in $SECTIONS; do
 export HOME=$TMP
   export QT_FORCE_STDERR_LOGGING=1 QT_STYLE_OVERRIDE= QT_QPA_PLATFORM=offscreen DAYFLOW_UI_ALLOW_MULTI=1
   mkdir -p "$DAYFLOW_DATA_DIR"
+  echo '{"openrouter_api_key":"test-key"}' > "$DAYFLOW_CONFIG"
   "$ENGINE" dev seed-day >/dev/null 2>&1 || { echo "FAIL[$sec]: seed-day failed"; fail=1; rm -rf "$TMP"; continue; }
   shot=$TMP/$sec.png
   DAYFLOW_UI_TAB=$sec DAYFLOW_UI_SCREENSHOT=$shot timeout 20 "$BIN" >"$TMP/log" 2>&1

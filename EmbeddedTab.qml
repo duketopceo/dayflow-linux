@@ -32,10 +32,55 @@ Item {
       y: Style.space(16)
       width: Math.min(flick.width - Style.space(32), Style.space(760))
       x: Math.round((flick.width - width) / 2)
-      height: loader.item ? loader.item.height : Style.space(120)
+      height: (prefsCard.visible ? prefsCard.height + Style.space(10) : 0)
+        + (loader.item ? loader.item.height : Style.space(120))
+
+      // App-only preferences, shown above the engine settings on the Settings page.
+      Rectangle {
+        id: prefsCard
+        visible: page.panelTab === "settings" && page.host && page.host.appPrefs !== null
+        width: parent.width
+        height: prefsCol.implicitHeight + Style.space(16)
+        radius: Style.cornerRadius
+        color: page.dayflow ? page.dayflow.fgFill(0.04) : "transparent"
+        border.color: page.dayflow ? page.dayflow.fgFill(0.08) : "transparent"
+
+        Column {
+          id: prefsCol
+          width: parent.width - Style.space(16)
+          anchors.centerIn: parent
+          spacing: Style.space(6)
+
+          Text {
+            text: "This app"
+            textFormat: Text.PlainText
+            color: page.dayflow ? page.dayflow.foreground : "white"
+            font.family: page.dayflow ? page.dayflow.fontFamily : ""
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+          SettingsToggle {
+            pal: page.dayflow
+            label: "Start in the tray at login"
+            on: page.host && page.host.appPrefs ? page.host.appPrefs.autostart : false
+            enabled: page.host && page.host.appPrefs ? !page.host.appPrefs.busy : false
+            onToggled: page.host.appPrefs.setAutostart(!page.host.appPrefs.autostart)
+          }
+          Text {
+            width: parent.width
+            text: "Recording runs in the background service whether or not this window is open."
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            color: page.dayflow ? page.dayflow.dim : "gray"
+            font.family: page.dayflow ? page.dayflow.fontFamily : ""
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
 
       Loader {
         id: loader
+        y: prefsCard.visible ? prefsCard.height + Style.space(10) : 0
         width: parent.width
         // The tabs read their panel as parent.panel (PopupBody's Loader contract).
         property var panel: page.dayflow
@@ -43,7 +88,9 @@ Item {
         source: page.tabSource
         onLoaded: {
           if (item && item.maxHeight !== undefined)
-            item.maxHeight = Qt.binding(function() { return flick.height - Style.space(32) })
+            item.maxHeight = Qt.binding(function() {
+              return flick.height - Style.space(32) - (prefsCard.visible ? prefsCard.height + Style.space(10) : 0)
+            })
         }
       }
     }
