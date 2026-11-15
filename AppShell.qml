@@ -57,6 +57,7 @@ Item {
     width: 0
     height: 0
     visible: false
+    popupActive: false
     Component.onCompleted: {
       // The window is the expanded layout. Marking it loaded first keeps the
       // status reply (panel_expanded) from flipping it back to the popup size.
@@ -204,6 +205,8 @@ Item {
     var out = "section=" + body.section + " dayOffset=" + panel.dayOffset + " onboarding=" + onboardingVisible + " autostart=" + prefs.autostart
     if (p[0] === "search" || p[0] === "pick" || p[0] === "close")
       out += " searchOpen=" + searchOpen + " results=" + search.resultCount
+    if (p[0] === "tab")
+      out += " tab=" + body.paneTab + " panelTab=" + panel.currentTab + " popupActive=" + panel.popupActive
     return out
   }
 

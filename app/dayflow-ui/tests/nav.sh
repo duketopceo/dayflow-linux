@@ -17,8 +17,8 @@ mkdir -p "$DAYFLOW_DATA_DIR"
 echo '{"openrouter_api_key":"test-key"}' > "$DAYFLOW_CONFIG"
 "$ENGINE" dev seed-day >/dev/null 2>&1 || { echo "FAIL: seed-day"; exit 1; }
 
-STEPS="goto:week;day:-1;day:-1;day:1;today;key:3;day:-1;goto:settings;day:-1;rel:1;rel:-2;key:8;refresh"
-DAYFLOW_UI_SCRIPT=$STEPS timeout 12 "$BIN" >"$TMP/log" 2>&1
+STEPS="goto:week;day:-1;day:-1;day:1;today;key:3;day:-1;goto:settings;day:-1;rel:1;rel:-2;key:8;refresh;goto:standup;tab;goto:ask;tab;goto:settings;tab;goto:ask;tab;goto:week;tab"
+DAYFLOW_UI_SCRIPT=$STEPS timeout 20 "$BIN" >"$TMP/log" 2>&1
 
 got=$(grep -o 'SHELL-STATE.*' "$TMP/log")
 want='SHELL-STATE step=goto:week section=week dayOffset=0 onboarding=false autostart=false
@@ -33,7 +33,17 @@ SHELL-STATE step=day:-1 section=settings dayOffset=0 onboarding=false autostart=
 SHELL-STATE step=rel:1 section=today dayOffset=0 onboarding=false autostart=false
 SHELL-STATE step=rel:-2 section=context dayOffset=0 onboarding=false autostart=false
 SHELL-STATE step=key:8 section=settings dayOffset=0 onboarding=false autostart=false
-SHELL-STATE step=refresh section=settings dayOffset=0 onboarding=false autostart=false'
+SHELL-STATE step=refresh section=settings dayOffset=0 onboarding=false autostart=false
+SHELL-STATE step=goto:standup section=standup dayOffset=0 onboarding=false autostart=false
+SHELL-STATE step=tab section=standup dayOffset=0 onboarding=false autostart=false tab=StandupTab.qml panelTab=standup popupActive=false
+SHELL-STATE step=goto:ask section=ask dayOffset=0 onboarding=false autostart=false
+SHELL-STATE step=tab section=ask dayOffset=0 onboarding=false autostart=false tab=ChatTab.qml panelTab=chat popupActive=false
+SHELL-STATE step=goto:settings section=settings dayOffset=0 onboarding=false autostart=false
+SHELL-STATE step=tab section=settings dayOffset=0 onboarding=false autostart=false tab=Settings.qml panelTab=settings popupActive=false
+SHELL-STATE step=goto:ask section=ask dayOffset=0 onboarding=false autostart=false
+SHELL-STATE step=tab section=ask dayOffset=0 onboarding=false autostart=false tab=ChatTab.qml panelTab=chat popupActive=false
+SHELL-STATE step=goto:week section=week dayOffset=0 onboarding=false autostart=false
+SHELL-STATE step=tab section=week dayOffset=0 onboarding=false autostart=false tab= panelTab=chat popupActive=false'
 if [ "$got" != "$want" ]; then
   echo "FAIL: shell state sequence differs"; diff <(echo "$want") <(echo "$got"); exit 1
 fi
