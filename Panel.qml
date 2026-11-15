@@ -70,6 +70,11 @@ Panel {
   property bool expanded: false
   property bool expandedLoaded: false
   property bool fullViewOpen: false
+  // The popup's tab Loader instantiates the current tab. A host that never
+  // shows the popup (the desktop app) turns this off so the hidden popup does
+  // not run a second copy of the tab the page already shows (Ask has a timer
+  // that can call the provider).
+  property bool popupActive: true
   // Bump with manifest.json version — compared against the engine's
   // reported version to warn when the plugin and binary drift apart.
   readonly property string pluginVersion: "1.6.0"

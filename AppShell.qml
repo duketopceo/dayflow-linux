@@ -56,6 +56,7 @@ Item {
     width: 0
     height: 0
     visible: false
+    popupActive: false
     Component.onCompleted: {
       // The window is the expanded layout. Marking it loaded first keeps the
       // status reply (panel_expanded) from flipping it back to the popup size.
