@@ -186,6 +186,7 @@ import qs.Ui
         // ---- content ----
         Loader {
           id: tabLoader
+          active: dayflow.popupActive
           width: parent.width - content.leftPadding - content.rightPadding
           height: item ? item.implicitHeight : Style.space(120)
           property var panel: dayflow

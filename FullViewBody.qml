@@ -28,6 +28,10 @@ Item {
     { key: "agents",    label: "Agents" }
   ]
 
+  // Which popup tab component the pane host currently shows ("" for panes).
+  readonly property string paneTab: paneLoader.item && paneLoader.item.tabSource !== undefined
+    ? paneLoader.item.tabSource : ""
+
   function sectionEntry(key) {
     for (var i = 0; i < root.sections.length; i++)
       if (root.sections[i].key === key) return root.sections[i]
@@ -545,6 +549,7 @@ Item {
           width: parent.width
           height: parent.height - root.headerHeight
           active: root.dayflow !== null
+          id: paneLoader
           readonly property var entry: root.sectionEntry(root.section)
           source: entry && entry.tab ? "EmbeddedTab.qml"
             : root.section === "week" ? "WeekPane.qml"
@@ -552,13 +557,23 @@ Item {
             : root.section === "context" ? "ContextPane.qml"
             : root.section === "agents" ? "AgentsPane.qml"
             : "TodayPane.qml"
-          onLoaded: {
-            if (item.tabSource !== undefined && entry) {
-              item.tabSource = entry.tab
-              item.panelTab = entry.panelTab || ""
-            }
-            item.host = root
-          }
+          onLoaded: item.host = root
+        }
+
+        // Standup, Ask and Settings all load EmbeddedTab.qml, so the Loader's
+        // source does not change between them: keep the tab and panel tab
+        // bound to the current entry instead of setting them once on load.
+        Binding {
+          target: paneLoader.item
+          property: "tabSource"
+          value: paneLoader.entry && paneLoader.entry.tab ? paneLoader.entry.tab : ""
+          when: paneLoader.item !== null && paneLoader.item.tabSource !== undefined
+        }
+        Binding {
+          target: paneLoader.item
+          property: "panelTab"
+          value: paneLoader.entry && paneLoader.entry.panelTab ? paneLoader.entry.panelTab : ""
+          when: paneLoader.item !== null && paneLoader.item.panelTab !== undefined
         }
       }
     }
