@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Dayflow
+Comment=Start Dayflow in the tray at login
+Exec=@DAYFLOW_UI_EXEC@ --background
+Icon=dayflow
+Terminal=false
+X-GNOME-Autostart-enabled=true

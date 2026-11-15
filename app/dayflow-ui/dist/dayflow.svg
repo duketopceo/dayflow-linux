@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Dayflow</title>
+  <!-- Same ring-and-dot mark the tray icon draws (tray.cpp iconFor). -->
+  <rect width="128" height="128" rx="28" fill="#101315"/>
+  <circle cx="64" cy="64" r="40" fill="none" stroke="#cacccc" stroke-width="9"/>
+  <circle cx="64" cy="64" r="19" fill="#4caf6e"/>
+</svg>
