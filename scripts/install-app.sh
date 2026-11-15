@@ -21,7 +21,8 @@ PREFIX="${HOME}/.local"
 AUTOSTART=0
 DRY=0
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD="${DAYFLOW_BUILD_DIR:-${TMPDIR:-/tmp}/dayflow-ui-build-$(id -u)}"
+# Per-user cache dir, not a predictable path under /tmp that another user could pre-create.
+BUILD="${DAYFLOW_BUILD_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dayflow-ui-build}"
 
 fail() { echo "install-app.sh: $*" >&2; exit 1; }
 
