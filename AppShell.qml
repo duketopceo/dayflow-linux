@@ -149,7 +149,10 @@ Item {
     else if (p[0] === "day") stepDay(parseInt(arg))             // Left/Right
     else if (p[0] === "today") jumpToday()                      // T
     else if (p[0] === "refresh") refreshData()                  // Ctrl+R
-    return "section=" + body.section + " dayOffset=" + panel.dayOffset
+    var out = "section=" + body.section + " dayOffset=" + panel.dayOffset
+    if (p[0] === "tab")
+      out += " tab=" + body.paneTab + " panelTab=" + panel.currentTab + " popupActive=" + panel.popupActive
+    return out
   }
 
   Shortcut { sequence: "Ctrl+R"; onActivated: shell.refreshData() }
