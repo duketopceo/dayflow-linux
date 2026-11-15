@@ -1,5 +1,6 @@
 import QtQuick
 import QtQml
+import QtQuick.Window
 import qs.Commons
 import qs.Commons as Commons
 
@@ -100,6 +101,60 @@ Item {
       shell.raiseRequested()
     }
   }
+
+  // ---- live data ----
+  // The window stays open all day (unlike the popup, which refetches on every
+  // open), so pages would go stale. Refetch every minute while the window is
+  // shown, when it regains focus, and on Ctrl+R. Hidden to the tray: no polling.
+  readonly property bool windowShown: Window.window ? Window.window.visible : false
+  readonly property bool windowActive: Window.window ? Window.window.active : false
+  property double lastRefreshMs: 0
+
+  function refreshData() {
+    shell.lastRefreshMs = Date.now()
+    panel.refreshAll()
+  }
+
+  Timer {
+    interval: 60000
+    repeat: true
+    running: shell.windowShown
+    onTriggered: shell.refreshData()
+  }
+
+  // Focus-in refresh is throttled so alt-tabbing back and forth stays quiet.
+  onWindowActiveChanged: {
+    if (windowActive && Date.now() - lastRefreshMs > 15000) refreshData()
+  }
+
+  // Day navigation for the day-scoped pages (Today, Week): the pages' own
+  // buttons stay; these are the keyboard equivalents.
+  readonly property bool daySection: body.section === "today" || body.section === "week"
+  function stepDay(delta) { if (daySection) panel.goDay(delta) }
+  function jumpToday() {
+    if (!daySection || panel.dayOffset === 0) return
+    panel.dayOffset = 0
+    panel.loadTimeline()
+  }
+
+  // Test hook (DAYFLOW_UI_SCRIPT, see app/dayflow-ui/tests/nav.sh): runs the
+  // same functions the shortcuts call and returns the resulting state.
+  function runStep(step) {
+    var p = step.split(":")
+    var arg = p.length > 1 ? p[1] : ""
+    if (p[0] === "goto") goTo(arg)
+    else if (p[0] === "key") goTo(keyAt(parseInt(arg) - 1))     // Ctrl+<arg>
+    else if (p[0] === "rel") goRelative(parseInt(arg))          // Alt+Left/Right
+    else if (p[0] === "day") stepDay(parseInt(arg))             // Left/Right
+    else if (p[0] === "today") jumpToday()                      // T
+    else if (p[0] === "refresh") refreshData()                  // Ctrl+R
+    return "section=" + body.section + " dayOffset=" + panel.dayOffset
+  }
+
+  Shortcut { sequence: "Ctrl+R"; onActivated: shell.refreshData() }
+  Shortcut { sequence: "Left";  enabled: shell.daySection; onActivated: shell.stepDay(-1) }
+  Shortcut { sequence: "Right"; enabled: shell.daySection; onActivated: shell.stepDay(1) }
+  Shortcut { sequence: "T";     enabled: shell.daySection; onActivated: shell.jumpToday() }
 
   Instantiator {
     model: shell.sections.length
