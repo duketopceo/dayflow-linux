@@ -70,6 +70,9 @@ Panel {
   property bool expanded: false
   property bool expandedLoaded: false
   property bool fullViewOpen: false
+  // True when the Dayflow desktop app is installed (BarWidget binds it from
+  // AppLauncher): the popup's "Full view" action then opens the app instead.
+  property bool appInstalled: false
   // The popup's tab Loader instantiates the current tab. A host that never
   // shows the popup (the desktop app) turns this off so the hidden popup does
   // not run a second copy of the tab the page already shows (Ask has a timer

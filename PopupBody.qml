@@ -271,7 +271,7 @@ import qs.Ui
             PanelButton {
               pal: dayflow
               compact: true
-              text: "Full view"
+              text: dayflow.appInstalled ? "Open app" : "Full view"
               onClicked: {
                 dayflow.actionsOpen = false
                 dayflow.uilog("full view open")

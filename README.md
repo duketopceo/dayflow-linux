@@ -41,6 +41,8 @@ scripts/install-app.sh --autostart   # also start in the tray at login
 
 Needs Qt6 (base, declarative, wayland) dev packages, cmake, a C++20 compiler and Go. Standalone packaging (deb, snap, rpm) is planned in [the desktop app plan](docs/plans/2026-10-06-001-feat-standalone-desktop-app-plan.md). Details: [app/dayflow-ui/README.md](app/dayflow-ui/README.md).
 
+With the app installed, the bar plugin assists: click opens (or raises) the app, middle-click opens the quick panel, right-click pauses or resumes, and the popup's "Full view" becomes "Open app". Without the app, the plugin behaves as before.
+
 ### Any Linux (engine only)
 
 The engine needs no Omarchy — it's a standalone CLI + TUI + MCP server. Works on any wlroots compositor (Hyprland, sway, river, …) via `grim`; on KDE/GNOME/X11 set `capture_command` to any tool that writes an image to stdout.
