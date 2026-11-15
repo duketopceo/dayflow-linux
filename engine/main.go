@@ -1402,6 +1402,7 @@ func printStatus(cfg Config, asJSON bool) {
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"paused":         paused(),
 			"capture_state":  captureState(db, cfg),
+			"last_frame_ts":  lastTS,
 			"frames_today":   frames,
 			"blocks_done":    blocksDone,
 			"blocks_pending": len(pending),

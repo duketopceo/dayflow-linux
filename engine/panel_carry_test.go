@@ -38,11 +38,13 @@ func TestClassicUICarryForwards(t *testing.T) {
 		t.Errorf("Settings.qml missing spec.key read — prompt-override display/write would misroute")
 	}
 
-	full, err := os.ReadFile(filepath.Join(root, "FullView.qml"))
+	// The pane host moved from FullView.qml into FullViewBody.qml (shared with
+	// the desktop app shell); the watchdog travels with it.
+	full, err := os.ReadFile(filepath.Join(root, "FullViewBody.qml"))
 	if err != nil {
-		t.Fatalf("FullView.qml: %v", err)
+		t.Fatalf("FullViewBody.qml: %v", err)
 	}
 	if !strings.Contains(string(full), "interval: 300000") {
-		t.Errorf("FullView.qml missing #43 carry (300s agents watchdog)")
+		t.Errorf("FullViewBody.qml missing #43 carry (300s agents watchdog)")
 	}
 }
