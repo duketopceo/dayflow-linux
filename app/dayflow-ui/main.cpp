@@ -29,6 +29,8 @@ int main(int argc, char *argv[]) {
   QGuiApplication::setDesktopFileName(QStringLiteral("dayflow"));
   QApplication app(argc, argv);
   app.setApplicationName(QStringLiteral("dayflow"));
+  // QSettings home for window state: ~/.config/dayflow-ui/dayflow.conf.
+  app.setOrganizationName(QStringLiteral("dayflow-ui"));
   app.setApplicationDisplayName(QStringLiteral("Dayflow"));
   app.setApplicationVersion(QStringLiteral(DAYFLOW_UI_VERSION));
   app.setQuitOnLastWindowClosed(false);
