@@ -27,7 +27,7 @@ Column {
   // bipartite flow canvas: sources left, targets right, ribbon width ∝ minutes
   Canvas {
     id: ctxCanvas
-    width: parent.width
+    width: pane.width - pane.leftPadding - pane.rightPadding
     height: parent.height - topList.height - Style.space(90)
 
     function layoutNodes() {
@@ -145,7 +145,7 @@ Column {
   // top shifts list
   Column {
     id: topList
-    width: parent.width
+    width: pane.width - pane.leftPadding - pane.rightPadding
     spacing: Style.space(3)
 
     Repeater {
