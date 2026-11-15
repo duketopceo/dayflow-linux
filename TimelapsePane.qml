@@ -20,7 +20,7 @@ Column {
 
   // controls
   Row {
-    width: parent.width
+    width: pane.width - pane.leftPadding - pane.rightPadding
     spacing: Style.space(6)
 
     DayNavRow {
@@ -75,7 +75,7 @@ Column {
   }
 
   LoadingBar {
-    width: parent.width
+    width: pane.width - pane.leftPadding - pane.rightPadding
     pal: pane.dayflow
     active: host !== null && host.tlLoading
     estimate: 10
@@ -83,7 +83,7 @@ Column {
 
   // image area
   Rectangle {
-    width: parent.width
+    width: pane.width - pane.leftPadding - pane.rightPadding
     height: parent.height - Style.space(150)
     radius: Style.cornerRadius
     color: "black"
@@ -151,7 +151,7 @@ Column {
 
   // scrub strip
   Rectangle {
-    width: parent.width
+    width: pane.width - pane.leftPadding - pane.rightPadding
     height: Style.space(18)
     radius: Style.cornerRadius
     color: pane.dayflow ? pane.dayflow.fgFill(0.06) : "transparent"
@@ -179,7 +179,7 @@ Column {
 
   Text {
     textFormat: Text.PlainText
-    width: parent.width
+    width: pane.width - pane.leftPadding - pane.rightPadding
     visible: host !== null && host.tlError !== ""
     text: "! " + (host ? host.tlError : "")
     color: Commons.Color.urgent !== undefined ? Commons.Color.urgent : "red"
