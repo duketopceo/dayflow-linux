@@ -64,6 +64,8 @@ int main(int argc, char *argv[]) {
   const bool trayOk = QSystemTrayIcon::isSystemTrayAvailable();
   engine.rootContext()->setContextProperty(QStringLiteral("trayAvailable"), trayOk);
   engine.rootContext()->setContextProperty(QStringLiteral("initialTab"), qEnvironmentVariable("DAYFLOW_UI_TAB"));
+  // Test hook: semicolon-separated shell steps (see tests/nav.sh).
+  engine.rootContext()->setContextProperty(QStringLiteral("uiScript"), qEnvironmentVariable("DAYFLOW_UI_SCRIPT"));
   engine.loadFromModule("Dayflow.Host", "Main");
   if (engine.rootObjects().isEmpty()) return 70;
   QObject *win = engine.rootObjects().first();

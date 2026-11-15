@@ -31,6 +31,11 @@ root QML:
 | `EmbeddedTab.qml` | Temporary page for Standup, Ask and Settings: hosts the popup tab components until each gets its own page |
 | `ServiceStatus.qml`, `ServiceStrip.qml` | Bottom strip: capture state, last frame age, summarizer, systemd unit health, pause/restart/start actions ([contract](../../docs/service-contract.md)) |
 
+Keyboard: Ctrl+1..8 jump to a page, Alt+Left/Right previous/next page, Ctrl+R
+refresh, and on Today and Week: Left/Right step a day, T jumps to today. Pages
+refetch every minute while the window is shown and when it regains focus; a
+window hidden to the tray does not poll.
+
 `Panel.fullViewOpen` set to true (the popup's "Full view" action) raises the
 window on Today.
 

@@ -26,6 +26,10 @@ Item {
     { key: "agents",    label: "Agents" }
   ]
 
+  // Which popup tab component the pane host currently shows ("" for panes).
+  readonly property string paneTab: paneLoader.item && paneLoader.item.tabSource !== undefined
+    ? paneLoader.item.tabSource : ""
+
   function sectionEntry(key) {
     for (var i = 0; i < root.sections.length; i++)
       if (root.sections[i].key === key) return root.sections[i]

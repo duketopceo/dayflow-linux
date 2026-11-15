@@ -41,6 +41,22 @@ Window {
     onRaiseRequested: win.showAndRaise()
   }
 
+  // Test hook: DAYFLOW_UI_SCRIPT="goto:week;day:-1;..." runs shell steps one
+  // per tick and logs "SHELL-STATE step=<s> section=<k> dayOffset=<n>".
+  Timer {
+    id: scriptTimer
+    property var steps: uiScript !== "" ? uiScript.split(";") : []
+    property int i: 0
+    interval: 400
+    repeat: true
+    running: steps.length > 0
+    onTriggered: {
+      if (i >= steps.length) { stop(); return }
+      var st = steps[i++]
+      console.log("SHELL-STATE step=" + st + " " + shell.runStep(st))
+    }
+  }
+
   // Persist the size only after the user stops resizing.
   Timer {
     id: sizeDebounce
