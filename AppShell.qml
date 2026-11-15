@@ -101,6 +101,38 @@ Item {
     }
   }
 
+  // ---- Ctrl+K search ----
+  property bool searchOpen: false
+  function openSearch() {
+    if (onboardingVisible) return
+    shell.searchOpen = true
+    search.open()
+  }
+  function closeSearch() { shell.searchOpen = false }
+  // A picked result jumps to its day on Today.
+  function showDay(offset) {
+    shell.closeSearch()
+    panel.pendingSpanTs = 0
+    panel.pendingSpanFor = ""
+    panel.dayOffset = offset
+    panel.blocks = []
+    panel.spans = []
+    panel.loadTimeline()
+    shell.goTo("today")
+  }
+
+  SearchOverlay {
+    id: search
+    anchors.fill: parent
+    anchors.bottomMargin: strip.height
+    visible: shell.searchOpen
+    panel: panel
+    onPickedDay: function(offset) { shell.showDay(offset) }
+    onCloseRequested: shell.closeSearch()
+  }
+
+  Shortcut { sequence: "Ctrl+K"; onActivated: shell.searchOpen ? shell.closeSearch() : shell.openSearch() }
+
   OnboardingOverlay {
     anchors.fill: parent
     anchors.bottomMargin: strip.height
@@ -167,7 +199,12 @@ Item {
     else if (p[0] === "today") jumpToday()                      // T
     else if (p[0] === "refresh") refreshData()                  // Ctrl+R
     else if (p[0] === "autostart") prefs.setAutostart(arg === "on")
+    else if (p[0] === "search") { openSearch(); search.setQuery(step.substring(7)) }   // Ctrl+K, then typing
+    else if (p[0] === "pick") search.pick(parseInt(arg))                              // Enter on result N
+    else if (p[0] === "close") closeSearch()                                          // Esc
     var out = "section=" + body.section + " dayOffset=" + panel.dayOffset + " onboarding=" + onboardingVisible + " autostart=" + prefs.autostart
+    if (p[0] === "search" || p[0] === "pick" || p[0] === "close")
+      out += " searchOpen=" + searchOpen + " results=" + search.resultCount
     if (p[0] === "tab")
       out += " tab=" + body.paneTab + " panelTab=" + panel.currentTab + " popupActive=" + panel.popupActive
     return out

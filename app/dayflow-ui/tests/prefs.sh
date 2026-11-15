@@ -22,7 +22,8 @@ run() { # run <script> <tmp>  -> log at $2/log
 last_state() { grep -o 'SHELL-STATE.*' "$1/log" | tail -1; }
 
 # 1. unconfigured
-T1=$(mktemp -d); run "goto:today" "$T1"
+T1=$(mktemp -d); # The status reply that flips `configured` arrives asynchronously; later steps see it.
+run "goto:today;goto:today;goto:today;goto:today" "$T1"
 case "$(last_state "$T1")" in *onboarding=true*) echo "ok   unconfigured shows onboarding" ;;
   *) echo "FAIL: unconfigured did not show onboarding: $(last_state "$T1")"; fail=1 ;; esac
 [ -s "$T1/shot.png" ] || { echo "FAIL: no onboarding screenshot"; fail=1; }
@@ -34,7 +35,7 @@ rm -rf "$T1"
 # 2. configured, then 3. autostart on/off
 T2=$(mktemp -d)
 mkdir -p "$T2"; echo '{"openrouter_api_key":"test-key"}' > "$T2/config.json"
-run "goto:today;autostart:on;refresh" "$T2"
+run "goto:today;autostart:on;goto:today;goto:today;goto:today" "$T2"
 case "$(last_state "$T2")" in *onboarding=false*) echo "ok   configured hides onboarding" ;;
   *) echo "FAIL: configured still shows onboarding: $(last_state "$T2")"; fail=1 ;; esac
 f=$T2/xdg/autostart/dayflow.desktop
