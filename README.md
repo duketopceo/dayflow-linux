@@ -29,6 +29,18 @@ omarchy plugin add https://github.com/duketopceo/dayflow-linux.git --enable
 
 Open the panel and click **Install engine** — the widget downloads the checksum-verified release binary matching the plugin version and enables the capture units for you. Then the onboarding wizard walks provider setup. Bar widget + full-window panel (timeline, timelapse, context shifts, agent recaps, forecast).
 
+### Desktop app (Qt6, any desktop)
+
+Dayflow has its own window: a section rail (Today, Week, Standup, Ask, Agents, Replay, Context, Settings), a status strip showing the capture service, and a tray icon. The bar plugin and the app are two clients of the same background service ([docs/service-contract.md](docs/service-contract.md)).
+
+```sh
+dayflow install                      # once: the capture and timer units (background service)
+scripts/install-app.sh               # build + install dayflow-ui, launcher entry, icon into ~/.local
+scripts/install-app.sh --autostart   # also start in the tray at login
+```
+
+Needs Qt6 (base, declarative, wayland) dev packages, cmake, a C++20 compiler and Go. Standalone packaging (deb, snap, rpm) is planned in [the desktop app plan](docs/plans/2026-10-06-001-feat-standalone-desktop-app-plan.md). Details: [app/dayflow-ui/README.md](app/dayflow-ui/README.md).
+
 ### Any Linux (engine only)
 
 The engine needs no Omarchy — it's a standalone CLI + TUI + MCP server. Works on any wlroots compositor (Hyprland, sway, river, …) via `grim`; on KDE/GNOME/X11 set `capture_command` to any tool that writes an image to stdout.
@@ -240,9 +252,11 @@ claude mcp add dayflow-remote -- ssh <host>.<tailnet>.ts.net ~/.local/bin/dayflo
 ```
 manifest.json      # Omarchy plugin manifest (repo root, per marketplace rules)
 BarWidget.qml      # bar indicator: recording state, click for panel
+AppShell.qml       # desktop app: rail + pages + service strip (shared QML, loaded by app/dayflow-ui)
 Panel.qml          # timeline panel + settings footer
 *.qml              # full view: panes, tabs, onboarding, settings
-engine/            # Go CLI/daemon/TUI/MCP — the tracking engine
+engine/            # Go CLI/daemon/TUI/MCP — the tracking engine (the background service)
+app/dayflow-ui/    # Qt6/QML desktop app host + tray; embeds the root QML
 scripts/           # install.sh/uninstall.sh (engine lifecycle), test-install.sh (offline battery),
                    # stress.sh (live stress), smoke-install.sh (sandboxed install smoke)
 docs/              # plans, research, maintenance runbook, agent contract, publish docs

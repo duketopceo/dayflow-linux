@@ -651,7 +651,8 @@ Column {
     id: sectionList
     PanelCard {
       pal: dayflow
-      visible: items.length > 0
+      // Engine emits null lists on an empty journal.
+      visible: items !== null && items !== undefined && items.length > 0
       width: parent ? parent.width : 0
       implicitHeight: sCol.implicitHeight + Style.space(16)
       height: implicitHeight

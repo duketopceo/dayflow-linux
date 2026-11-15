@@ -18,12 +18,43 @@ Note: Qt 6.12 ships a built-in `QtQuick.Color` singleton that shadows a
 QML-file `Color` under the tab files' unversioned `import QtQuick`; the shim
 `Color` is therefore a C++ singleton.
 
+## Shell
+
+`qml/host/Main.qml` is only the native window (size and last-page persistence
+in `~/.config/dayflow-ui/`, tray hooks, close-to-tray). The UI is the shared
+root QML:
+
+| File | Role |
+|---|---|
+| `AppShell.qml` | Rail (Today, Week, Standup, Ask, Agents, Replay, Context, Settings), Ctrl+1..8 and Alt+Left/Right navigation, owns the hidden `Panel` state controller |
+| `FullViewBody.qml` | Rail rendering and lazy pane host, shared with the plugin's `FullView.qml` window |
+| `EmbeddedTab.qml` | Temporary page for Standup, Ask and Settings: hosts the popup tab components until each gets its own page |
+| `ServiceStatus.qml`, `ServiceStrip.qml` | Bottom strip: capture state, last frame age, summarizer, systemd unit health, pause/restart/start actions ([contract](../../docs/service-contract.md)) |
+
+`Panel.fullViewOpen` set to true (the popup's "Full view" action) raises the
+window on Today.
+
 ## Build and run
 
     cmake -S app/dayflow-ui -B build -G Ninja
     cmake --build build          # also builds the Go engine to build/dayflow
     build/dayflow-ui             # --background starts hidden in the tray
-    ctest --test-dir build       # offscreen smoke
+    ctest --test-dir build       # smoke, every section, install layout
+
+On some Arch/Asahi installs CMake cannot find OpenGL although libOpenGL and
+libGLX are installed; configure with
+`-DOPENGL_opengl_LIBRARY=/usr/lib/libOpenGL.so -DOPENGL_glx_LIBRARY=/usr/lib/libGLX.so`
+(`scripts/install-app.sh` does this automatically).
 
 Engine resolution: `DAYFLOW_ENGINE`, then `dayflow` beside `dayflow-ui`, then
-PATH. Dev hooks: `DAYFLOW_UI_TAB=settings`, `DAYFLOW_UI_SCREENSHOT=out.png`.
+PATH. Dev hooks: `DAYFLOW_UI_TAB=<section>` (`today`, `week`, `standup`, `ask`,
+`agents`, `timelapse`, `context`, `settings`), `DAYFLOW_UI_SCREENSHOT=out.png`.
+
+## Install
+
+    scripts/install-app.sh [--prefix DIR] [--autostart] [--dry-run]
+
+Installs `dayflow-ui`, the bundled `dayflow` engine, `dayflow.desktop` (with
+Pause/Resume actions), the icon, and an autostart template under
+`share/dayflow/autostart/`; `--autostart` copies it to
+`~/.config/autostart/`. The capture units are separate: `dayflow install`.

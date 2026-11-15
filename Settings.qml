@@ -685,7 +685,8 @@ Flickable {
             font.family: dayflow.fontFamily
             font.pixelSize: Style.font.body
             wrapMode: TextEdit.Wrap
-            onTextChanged: root.setDraft("classification_prompt", text)
+            // Guarded: setDraft rewrites configDraft, which this text binds to.
+            onTextChanged: if (text !== (dayflow.configDraft.classification_prompt || "")) root.setDraft("classification_prompt", text)
           }
         }
       }

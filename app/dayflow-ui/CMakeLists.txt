@@ -116,7 +116,33 @@ if(DAYFLOW_BUILD_ENGINE AND GO_EXECUTABLE)
   add_dependencies(dayflow-ui dayflow-engine)
 endif()
 
+# ---- install: binaries, desktop entry, icon, autostart template ----------------
+# Default prefix is the install-app.sh one; packages pass their own. The desktop
+# entries carry absolute Exec paths under the configure-time prefix so a launcher
+# that does not have ~/.local/bin on PATH still finds the app.
+include(GNUInstallDirs)
+set(DAYFLOW_UI_EXEC "${CMAKE_INSTALL_FULL_BINDIR}/dayflow-ui")
+set(DAYFLOW_ENGINE_EXEC "${CMAKE_INSTALL_FULL_BINDIR}/dayflow")
+configure_file(dist/dayflow.desktop.in ${CMAKE_CURRENT_BINARY_DIR}/dayflow.desktop @ONLY)
+configure_file(dist/dayflow-autostart.desktop.in ${CMAKE_CURRENT_BINARY_DIR}/dayflow-autostart.desktop @ONLY)
+install(TARGETS dayflow-ui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# The engine beside dayflow-ui (KTD5). Skipped when Go was not found at build time.
+install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/dayflow DESTINATION ${CMAKE_INSTALL_BINDIR} OPTIONAL)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/dayflow.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES dist/dayflow.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+# XDG autostart lives outside the prefix (~/.config/autostart), so the template is
+# installed under share/dayflow and install-app.sh --autostart copies it.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/dayflow-autostart.desktop
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/dayflow/autostart RENAME dayflow.desktop)
+
 # ---- tests --------------------------------------------------------------------
 enable_testing()
 add_test(NAME offscreen-smoke
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.sh $<TARGET_FILE:dayflow-ui>)
+# Every rail section loads with seeded data and no QML errors (needs the engine).
+if(DAYFLOW_BUILD_ENGINE AND GO_EXECUTABLE)
+  add_test(NAME sections
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/sections.sh $<TARGET_FILE:dayflow-ui>)
+endif()
+add_test(NAME install-layout
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/install-layout.sh ${CMAKE_BINARY_DIR})

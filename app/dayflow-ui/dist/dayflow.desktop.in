@@ -1,0 +1,22 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Dayflow
+GenericName=Work journal
+Comment=Private, automatic work journal: timeline, standup and agent briefing
+Exec=@DAYFLOW_UI_EXEC@
+Icon=dayflow
+Terminal=false
+Categories=Office;Utility;
+Keywords=journal;timeline;standup;screen;productivity;
+StartupWMClass=dayflow
+StartupNotify=false
+Actions=Pause;Resume;
+
+[Desktop Action Pause]
+Name=Pause recording
+Exec=@DAYFLOW_ENGINE_EXEC@ pause
+
+[Desktop Action Resume]
+Name=Resume recording
+Exec=@DAYFLOW_ENGINE_EXEC@ resume

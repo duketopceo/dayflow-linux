@@ -1,19 +1,20 @@
 import QtQuick
 import QtQuick.Window
+import QtCore as Core
 import Dayflow.App
-import qs.Ui as Ui
 
-// Window host. Panel.qml (unmodified) is the controller + Today/Settings tab
-// UI; its KeyboardPanel shim reports the content size the window follows.
+// Window host. AppShell (repo root, shared QML) is the section rail, the lazy
+// page host and the service strip; this file owns only the native window:
+// size and last-section persistence, tray hooks, close-to-tray.
 Window {
   id: win
   title: "Dayflow"
   visible: false
   color: "#101315"
-  width: 560
-  height: 640
-  minimumWidth: 420
-  minimumHeight: 360
+  width: persist.width
+  height: persist.height
+  minimumWidth: 840
+  minimumHeight: 560
 
   signal quitRequested()
 
@@ -21,17 +22,33 @@ Window {
   function toggleVisible() { if (visible) hide(); else showAndRaise() }
   function showAndRaise() { show(); raise(); requestActivate() }
 
-  Panel {
-    id: panel
-    anchors.fill: parent
-    Component.onCompleted: { panel.open(); if (initialTab !== "") panel.currentTab = initialTab }
+  // Stored under ~/.config/dayflow-ui/ (organization name set in main.cpp),
+  // never in the engine's config.json, whose mtime drives daemon hot-reload.
+  Core.Settings {
+    id: persist
+    category: "window"
+    property int width: 1100
+    property int height: 760
+    property string section: "today"
   }
 
-  // Follow the panel's fitted size (Expand/Shrink changes it).
-  property int wantW: Ui.HostSizing.width
-  property int wantH: Ui.HostSizing.height
-  onWantWChanged: if (wantW > 0) width = wantW
-  onWantHChanged: if (wantH > 0) height = wantH
+  AppShell {
+    id: shell
+    anchors.fill: parent
+    // initialTab is the dev hook (DAYFLOW_UI_TAB); it wins over the restored section.
+    initialSection: initialTab !== "" ? (initialTab === "chat" ? "ask" : initialTab) : persist.section
+    onSectionChanged: persist.section = section
+    onRaiseRequested: win.showAndRaise()
+  }
+
+  // Persist the size only after the user stops resizing.
+  Timer {
+    id: sizeDebounce
+    interval: 500
+    onTriggered: { persist.width = win.width; persist.height = win.height }
+  }
+  onWidthChanged: if (visible) sizeDebounce.restart()
+  onHeightChanged: if (visible) sizeDebounce.restart()
 
   onClosing: function(close) {
     if (!trayAvailable) { close.accepted = true; quitRequested() }
