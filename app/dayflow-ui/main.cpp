@@ -1,6 +1,8 @@
 #include "tray.h"
 #include <QApplication>
 #include <QIcon>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QLockFile>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -35,12 +37,28 @@ int main(int argc, char *argv[]) {
   app.setApplicationVersion(QStringLiteral(DAYFLOW_UI_VERSION));
   app.setQuitOnLastWindowClosed(false);
 
-  // Single instance (plan KTD12): a second launch just exits; the user raises
-  // the window from the tray. (Raise-over-IPC lands with the D-Bus work.)
+  // Single instance (plan KTD12). A second launch hands the running one a
+  // "raise" over a local socket and exits, so "open Dayflow" from the bar or a
+  // launcher brings the existing window up. A launch with --background (the
+  // autostart entry) asks for nothing and just exits.
   const QString runDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-  QLockFile lock((runDir.isEmpty() ? QDir::tempPath() : runDir) + QStringLiteral("/dayflow-ui.lock"));
+  const QString base = runDir.isEmpty() ? QDir::tempPath() : runDir;
+  const QString sockName = base + QStringLiteral("/dayflow-ui.sock");
+  QLockFile lock(base + QStringLiteral("/dayflow-ui.lock"));
   lock.setStaleLockTime(0);
-  if (qEnvironmentVariableIsEmpty("DAYFLOW_UI_ALLOW_MULTI") && !lock.tryLock(100)) {
+  const bool multi = !qEnvironmentVariableIsEmpty("DAYFLOW_UI_ALLOW_MULTI");
+  const bool background = app.arguments().contains(QStringLiteral("--background"));
+  if (!multi && !lock.tryLock(100)) {
+    if (!background) {
+      QLocalSocket sock;
+      sock.connectToServer(sockName);
+      if (sock.waitForConnected(500)) {
+        sock.write("raise\n");
+        sock.waitForBytesWritten(500);
+        sock.disconnectFromServer();
+        return 0;
+      }
+    }
     qWarning("dayflow-ui: already running");
     return 0;
   }
@@ -67,6 +85,12 @@ int main(int argc, char *argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("appExecPath"), QCoreApplication::applicationFilePath());
   // Test hook: semicolon-separated shell steps (see tests/nav.sh).
   engine.rootContext()->setContextProperty(QStringLiteral("uiScript"), qEnvironmentVariable("DAYFLOW_UI_SCRIPT"));
+  // Test hook: DAYFLOW_UI_TESTQML=/path/Test.qml loads that file (component tests
+  // that need the Process shim and the Dayflow.App module) instead of the window.
+  if (const QString tq = qEnvironmentVariable("DAYFLOW_UI_TESTQML"); !tq.isEmpty()) {
+    engine.load(QUrl::fromLocalFile(tq));
+    return engine.rootObjects().isEmpty() ? 70 : app.exec();
+  }
   engine.loadFromModule("Dayflow.Host", "Main");
   if (engine.rootObjects().isEmpty()) return 70;
   QObject *win = engine.rootObjects().first();
@@ -75,7 +99,28 @@ int main(int argc, char *argv[]) {
   QObject::connect(&tray, &Tray::quitRequested, &app, &QCoreApplication::quit);
   QObject::connect(win, SIGNAL(quitRequested()), &app, SLOT(quit()));
 
-  const bool background = app.arguments().contains(QStringLiteral("--background"));
+  // The running instance answers a second launch's "raise".
+  QLocalServer raiseServer;
+  if (!multi) {
+    QLocalServer::removeServer(sockName);
+    raiseServer.setSocketOptions(QLocalServer::UserAccessOption);
+    if (raiseServer.listen(sockName)) {
+      QObject::connect(&raiseServer, &QLocalServer::newConnection, &app, [&raiseServer, win] {
+        while (QLocalSocket *c = raiseServer.nextPendingConnection()) {
+          QObject::connect(c, &QLocalSocket::readyRead, c, [c, win] {
+            if (c->readAll().contains("raise")) {
+              qInfo("dayflow-ui: raise requested");
+              QMetaObject::invokeMethod(win, "showAndRaise");
+            }
+          });
+          QObject::connect(c, &QLocalSocket::disconnected, c, &QObject::deleteLater);
+        }
+      });
+    } else {
+      qWarning("dayflow-ui: raise socket unavailable: %s", qPrintable(raiseServer.errorString()));
+    }
+  }
+
   // With no tray host, a hidden window would be unreachable: always show.
   if (!background || !trayOk) QMetaObject::invokeMethod(win, "showAndRaise");
   qInfo("dayflow-ui %s ready (tray=%s)", DAYFLOW_UI_VERSION, trayOk ? "yes" : "no");

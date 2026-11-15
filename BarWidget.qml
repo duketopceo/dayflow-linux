@@ -41,6 +41,7 @@ BarWidget {
     panelLoader.item.anchorItem = button
     panelLoader.item.hostWidget = root
     panelLoader.item.df = tokens
+    panelLoader.item.appInstalled = Qt.binding(function() { return appLauncher.installed })
   }
 
   function refresh() {
@@ -64,6 +65,10 @@ BarWidget {
   visible: true
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
+
+  // The desktop app is the main surface; the bar assists. With the app
+  // installed, left-click opens it and the popup stays one middle-click away.
+  AppLauncher { id: appLauncher }
 
   // Single Tokens instance for the whole plugin (KTD3) — panes reach it
   // as dayflow.df after injectPanel hands it down.
@@ -116,7 +121,7 @@ BarWidget {
   // unmapped the moment the popup auto-dismisses.
   Loader {
     id: fullViewLoader
-    active: panelLoader.item && panelLoader.item.fullViewOpen === true
+    active: panelLoader.item && panelLoader.item.fullViewOpen === true && !appLauncher.installed
     source: Qt.resolvedUrl("FullView.qml")
     onLoaded: item.dayflow = panelLoader.item
   }
@@ -129,11 +134,19 @@ BarWidget {
     opacity: root.available ? 1 : 0.45
     tooltipText: !root.available
       ? "Dayflow engine not installed — click to set it up"
-      : (root.paused
-        ? "Dayflow paused — click for timeline, right-click to resume"
-        : "Dayflow recording — click for timeline, right-click to pause")
+      : (appLauncher.installed
+        ? (root.paused
+          ? "Dayflow paused: click to open the app, middle-click for the quick panel, right-click to resume"
+          : "Dayflow recording: click to open the app, middle-click for the quick panel, right-click to pause")
+        : (root.paused
+          ? "Dayflow paused: click for timeline, right-click to resume"
+          : "Dayflow recording: click for timeline, right-click to pause"))
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.LeftButton) {
+        // Engine missing: the popup holds the install surface, so it stays the target.
+        if (appLauncher.installed && root.available) appLauncher.launch()
+        else root.toggle()
+      } else if (buttonCode === Qt.MiddleButton) {
         root.toggle()
       } else if (buttonCode === Qt.RightButton) {
         // No engine → nothing to toggle; the click-through stays left-only.
@@ -152,5 +165,12 @@ BarWidget {
     target: panelLoader.item
     ignoreUnknownSignals: true
     function onStatusChanged() { root.refresh() }
+    // "Full view" in the popup means "open the app" when it is installed.
+    function onFullViewOpenChanged() {
+      if (panelLoader.item.fullViewOpen === true && appLauncher.installed) {
+        appLauncher.launch()
+        panelLoader.item.fullViewOpen = false
+      }
+    }
   }
 }

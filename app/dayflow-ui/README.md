@@ -42,6 +42,15 @@ window hidden to the tray does not poll.
 `Panel.fullViewOpen` set to true (the popup's "Full view" action) raises the
 window on Today.
 
+## Bar assist
+
+A second `dayflow-ui` launch hands the running one a "raise" over a local socket
+(`$XDG_RUNTIME_DIR/dayflow-ui.sock`) and exits 0, so "open Dayflow" from the bar
+or a launcher brings the existing window up. `--background` (the autostart
+entry) never raises. The plugin side is `AppLauncher.qml` (detects `dayflow-ui`
+on PATH, starts it detached) wired into `BarWidget.qml`; `tests/ui/verify-bar.sh`
+runs the real widget under quickshell against stubs.
+
 ## Build and run
 
     cmake -S app/dayflow-ui -B build -G Ninja

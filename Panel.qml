@@ -70,6 +70,9 @@ Panel {
   property bool expanded: false
   property bool expandedLoaded: false
   property bool fullViewOpen: false
+  // True when the Dayflow desktop app is installed (BarWidget binds it from
+  // AppLauncher): the popup's "Full view" action then opens the app instead.
+  property bool appInstalled: false
   // Bump with manifest.json version — compared against the engine's
   // reported version to warn when the plugin and binary drift apart.
   readonly property string pluginVersion: "1.6.0"
